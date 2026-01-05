@@ -189,9 +189,24 @@
     (runner-class py-client)))
 
 ;;; Managed Client
-;; Wraps a Python client with its session runner.
 
-(defrecord ManagedClient [py-client session-runner])
+(defrecord
+ ^{:doc "Wraps a Python ClaudeSDKClient with its ClientSessionRunner.
+
+   ManagedClient maintains async task context across connect/query/disconnect
+   operations. The session-runner executes all async operations in a single
+   background thread, avoiding event loop issues that occur with separate
+   asyncio.run() calls.
+
+   Use create-client to construct a ManagedClient (the default).
+
+   Fields:
+   - py-client: The raw Python ClaudeSDKClient instance
+   - session-runner: A ClientSessionRunner managing the async execution context
+
+   See also: TrackedClient for session ID tracking across queries."}
+ ManagedClient
+ [py-client session-runner])
 
 (defn managed-client?
   "Returns true if x is a ManagedClient."
@@ -599,11 +614,29 @@
 ;;; Session Management
 
 (defrecord
- ^{:doc "A client wrapper that tracks session ID across queries.
+ ^{:doc "Wraps a client with session ID tracking for multi-query sessions.
+
+   TrackedClient captures and maintains the session-id from query responses,
+   enabling session persistence and resumption. Typically wraps a ManagedClient
+   created via create-client.
+
+   Client wrapper hierarchy (innermost to outermost):
+   1. Python ClaudeSDKClient - raw SDK client
+   2. ManagedClient - adds async session runner
+   3. TrackedClient - adds session-id tracking
+
+   Use with-session macro for automatic lifecycle management, or manually:
+     (let [managed (create-client opts)
+           tracked (->TrackedClient managed (atom nil))]
+       (connect managed)
+       (session-query tracked \"Hello\")
+       (get-session-id tracked))
 
    Fields:
-   - client: The underlying ClaudeSDKClient Python object
-   - session-id-atom: An atom holding the current session ID (string or nil)"}
+   - client: The underlying client (typically a ManagedClient)
+   - session-id-atom: An atom holding the current session ID (string or nil)
+
+   See also: ManagedClient, with-session, session-query."}
  TrackedClient
  [client session-id-atom])
 

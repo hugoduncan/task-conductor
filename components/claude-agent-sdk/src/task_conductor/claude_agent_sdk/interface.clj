@@ -67,7 +67,11 @@
 ;;; Client Lifecycle
 
 (defn create-client
-  "Create a ClaudeSDKClient instance.
+  "Create a ManagedClient wrapping a ClaudeSDKClient.
+
+   Returns a ManagedClient that maintains async task context across
+   connect/query/disconnect operations. This is the primary entry point
+   for creating Claude SDK clients.
 
    Options map is passed to make-options to create ClaudeAgentOptions.
    Key options include:
@@ -89,7 +93,8 @@
 
    See make-options for the complete list of supported options.
 
-   Returns the Python ClaudeSDKClient instance."
+   Returns a ManagedClient. Use make-tracked-client to add session-id
+   tracking, or with-session for automatic lifecycle management."
   ([]
    (core/create-client))
   ([opts]
@@ -196,7 +201,13 @@
   (core/get-raw-client tracked-client))
 
 (defn managed-client?
-  "Returns true if x is a ManagedClient."
+  "Returns true if x is a ManagedClient.
+
+   ManagedClient wraps a Python ClaudeSDKClient with a session-runner for
+   executing async operations in a consistent task context. This is the
+   default return type from create-client.
+
+   See make-tracked-client to wrap a ManagedClient with session-id tracking."
   [x]
   (core/managed-client? x))
 
@@ -206,13 +217,27 @@
   (core/get-py-client client))
 
 (defn make-tracked-client
-  "Create a TrackedClient wrapping a raw Python client.
+  "Create a TrackedClient wrapping a client for session-id tracking.
 
    A TrackedClient maintains session-id state across queries when used
-   with session-query.
+   with session-query, enabling session persistence and resumption.
+
+   Client wrapper hierarchy (innermost to outermost):
+   1. Python ClaudeSDKClient - raw SDK client
+   2. ManagedClient - adds async session runner (from create-client)
+   3. TrackedClient - adds session-id tracking (from this function)
+
+   Typical usage:
+     (let [managed (create-client opts)
+           tracked (make-tracked-client managed)]
+       (connect managed)
+       (session-query tracked \"Hello\")
+       (get-session-id tracked))
+
+   For automatic lifecycle, prefer with-session macro.
 
    Arguments:
-   - client - a Python ClaudeSDKClient instance (from create-client)
+   - client - a ManagedClient from create-client (or raw Python client)
    - session-id-atom - (optional) an atom to track the session-id;
                        defaults to (atom nil)"
   ([client]
