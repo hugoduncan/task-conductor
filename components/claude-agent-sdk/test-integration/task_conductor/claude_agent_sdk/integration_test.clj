@@ -137,3 +137,62 @@
                       "result message should have duration-ms")))))
           (finally
             (sdk/disconnect client)))))))
+
+(deftest live-session-resumption-test
+  ;; Tests that resume-client can continue a previous session.
+  ;; Establishes a session, captures its ID, then resumes it.
+  (with-auth-skip
+    (testing "session resumption"
+      (let [session-result (sdk/with-session [client {:max-turns 1
+                                                      :permission-mode "bypassPermissions"}]
+                             (sdk/session-query client "Remember: CODE=42"))
+            session-id (:session-id session-result)]
+
+        (testing "captures session-id from initial session"
+          (is (string? session-id)
+              "should have session-id"))
+
+        (testing "resumed client can query"
+          (let [resumed-client (sdk/resume-client session-id
+                                                  {:max-turns 1
+                                                   :permission-mode "bypassPermissions"})]
+            (try
+              (sdk/connect resumed-client)
+              (let [result (sdk/query resumed-client "What was CODE?")
+                    messages (:messages result)]
+                (is (vector? messages)
+                    "should return messages")
+                (is (seq messages)
+                    "should have at least one message"))
+              (finally
+                (sdk/disconnect resumed-client)))))))))
+
+(deftest live-session-fork-test
+  ;; Tests that fork-client creates a new session branching from an existing one.
+  (with-auth-skip
+    (testing "session forking"
+      (let [session-result (sdk/with-session [client {:max-turns 1
+                                                      :permission-mode "bypassPermissions"}]
+                             (sdk/session-query client "Remember: SECRET=xyz"))
+            original-session-id (:session-id session-result)]
+
+        (testing "captures session-id from original session"
+          (is (string? original-session-id)
+              "should have session-id"))
+
+        (testing "forked client can query"
+          (let [forked-client (sdk/fork-client original-session-id
+                                               {:max-turns 1
+                                                :permission-mode "bypassPermissions"})]
+            (try
+              (sdk/connect forked-client)
+              (let [result (sdk/query forked-client "What was SECRET?")
+                    new-session-id (:session-id result)]
+                (is (vector? (:messages result))
+                    "should return messages")
+                (is (string? new-session-id)
+                    "forked session should have its own session-id")
+                (is (not= original-session-id new-session-id)
+                    "forked session-id should differ from original"))
+              (finally
+                (sdk/disconnect forked-client)))))))))
