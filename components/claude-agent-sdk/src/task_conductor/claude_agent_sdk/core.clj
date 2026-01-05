@@ -5,6 +5,7 @@
    send queries, and handle responses."
   (:require
    [clojure.java.io :as io]
+   [clojure.set :as set]
    [clojure.string :as str]
    [libpython-clj2.python :as py :refer [py. py.-]]
    [libpython-clj2.require :refer [require-python]]))
@@ -270,6 +271,18 @@
   (-> (name k)
       (str/replace "-" "_")))
 
+(defn- validate-option-keys
+  "Validate that all keys in opts are recognized option keys.
+   Throws ex-info if unknown keys are found."
+  [opts]
+  (let [provided-keys (set (keys opts))
+        unknown-keys (set/difference provided-keys option-keys)]
+    (when (seq unknown-keys)
+      (throw (ex-info (str "Unknown option keys: " (pr-str unknown-keys))
+                      {:type :invalid-options
+                       :unknown-keys unknown-keys
+                       :valid-keys option-keys})))))
+
 (defn make-options
   "Create a ClaudeAgentOptions instance from a Clojure map.
 
@@ -303,15 +316,17 @@
 
    See ClaudeAgentOptions Python class for complete documentation.
 
+   Throws ex-info if unknown keys are provided.
+
    Returns a Python ClaudeAgentOptions instance."
   [opts]
   (ensure-initialized!)
+  (validate-option-keys opts)
   (let [sdk (:sdk @modules)
         options-class (py/get-attr sdk "ClaudeAgentOptions")
         ;; Convert Clojure map to keyword args (libpython-clj uses :kw val pairs)
         kw-args (mapcat (fn [[k v]]
-                          (when (contains? option-keys k)
-                            [(keyword (clj-key->py-key k)) (clj->py v)]))
+                          [(keyword (clj-key->py-key k)) (clj->py v)])
                         opts)]
     ;; libpython-clj recognizes keyword-value pairs as Python kwargs
     (apply options-class kw-args)))

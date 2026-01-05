@@ -115,7 +115,21 @@
                                     :cwd "/home/user/project"
                                     :max-turns 5})]
         (is (some? opts)
-            "should create options with full tool configuration")))))
+            "should create options with full tool configuration")))
+
+    (testing "throws on unknown option keys"
+      (let [ex (try
+                 (sdk/make-options {:allowed-tools ["Read"]
+                                    :unkown-key "typo"
+                                    :another-bad-key 123})
+                 nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+        (is (some? ex)
+            "should throw an exception")
+        (is (= :invalid-options (:type (ex-data ex)))
+            "should have :invalid-options type")
+        (is (= #{:unkown-key :another-bad-key} (:unknown-keys (ex-data ex)))
+            "should include unknown keys in ex-data")))))
 
 (deftest create-client-test
   ;; Verifies ClaudeSDKClient instantiation.
