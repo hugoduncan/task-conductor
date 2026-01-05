@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook: format with cljfmt, lint with clj-kondo
+
+# Get staged Clojure files into array
+mapfile -t staged_files < <(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(clj|cljs|cljc|edn)$' || true)
+
+if [ ${#staged_files[@]} -eq 0 ]; then
+  exit 0
+fi
+
+# Run cljfmt fix on staged files and restage
+for file in "${staged_files[@]}"; do
+  if [ -f "$file" ]; then
+    clj -M:dev -m cljfmt.main fix "$file"
+    git add "$file"
+  fi
+done
+
+# Run clj-kondo on staged files, block on any findings (info+)
+kondo_output=$(clj-kondo --lint "${staged_files[@]}" 2>&1) || true
+
+if [ -n "$kondo_output" ]; then
+  echo "$kondo_output"
+fi
+
+# Block on info+ findings
+if echo "$kondo_output" | grep -qE '(info|warning|error):'; then
+  echo "Pre-commit hook: clj-kondo found issues. Please fix before committing."
+  exit 1
+fi
+
+exit 0
