@@ -3,4 +3,4 @@
 
   kondo-config
   {:doc "Pull clj-kondo config from dependencies"
-   :task (shell "clj-kondo --copy-configs --dependencies --lint" (str (System/getProperty "user.dir")))}}}
+   :task (shell "clj-kondo --copy-configs --dependencies --lint .")}}}
