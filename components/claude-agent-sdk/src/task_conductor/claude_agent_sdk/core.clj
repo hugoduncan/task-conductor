@@ -252,3 +252,56 @@ async def _collect_async_iter(aiter):
   []
   (ensure-initialized!)
   (:asyncio @modules))
+
+;;; Client Lifecycle
+
+(defn create-client
+  "Create a ClaudeSDKClient instance.
+
+   Options map is passed to make-options to create ClaudeAgentOptions.
+   Returns the Python ClaudeSDKClient instance."
+  ([]
+   (create-client nil))
+  ([opts]
+   (ensure-initialized!)
+   (let [sdk (:sdk @modules)
+         client-class (py/get-attr sdk "ClaudeSDKClient")]
+     (if opts
+       (client-class :options (make-options opts))
+       (client-class)))))
+
+(defn connect
+  "Connect the client to establish a session.
+
+   Optionally accepts an initial prompt string. Blocks until connection
+   is established.
+
+   Returns the client for chaining."
+  ([client]
+   (connect client nil))
+  ([client prompt]
+   (ensure-initialized!)
+   (try
+     (run-async (if prompt
+                  (py. client connect prompt)
+                  (py. client connect)))
+     client
+     (catch Exception e
+       (throw (ex-info "Failed to connect client"
+                       {:type :connection-error
+                        :prompt prompt}
+                       e))))))
+
+(defn disconnect
+  "Disconnect the client and close the session.
+
+   Blocks until disconnection is complete. Returns nil."
+  [client]
+  (ensure-initialized!)
+  (try
+    (run-async (py. client disconnect))
+    nil
+    (catch Exception e
+      (throw (ex-info "Failed to disconnect client"
+                      {:type :disconnection-error}
+                      e)))))

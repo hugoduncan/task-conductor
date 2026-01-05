@@ -98,3 +98,42 @@
   "Get the asyncio Python module."
   []
   (core/get-asyncio-module))
+
+;;; Client Lifecycle
+
+(defn create-client
+  "Create a ClaudeSDKClient instance.
+
+   Options map is passed to make-options to create ClaudeAgentOptions.
+   Supported options include:
+   - :allowed-tools - vector of tool name strings
+   - :system-prompt - custom system prompt string
+   - :permission-mode - \"default\", \"acceptEdits\", \"plan\", \"bypassPermissions\"
+   - :cwd - working directory path
+   - :model - model name
+   - :resume - session ID string to resume a previous session
+
+   Returns the Python ClaudeSDKClient instance."
+  ([]
+   (core/create-client))
+  ([opts]
+   (core/create-client opts)))
+
+(defn connect
+  "Connect the client to establish a session.
+
+   Optionally accepts an initial prompt string. Blocks until connection
+   is established.
+
+   Returns the client for chaining."
+  ([client]
+   (core/connect client))
+  ([client prompt]
+   (core/connect client prompt)))
+
+(defn disconnect
+  "Disconnect the client and close the session.
+
+   Blocks until disconnection is complete. Returns nil."
+  [client]
+  (core/disconnect client))

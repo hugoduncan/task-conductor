@@ -98,3 +98,25 @@
                                     :max-turns 10})]
         (is (some? opts)
             "should create options with multiple settings")))))
+
+(deftest create-client-test
+  ;; Verifies ClaudeSDKClient instantiation.
+  ;; Note: connect/disconnect tests require network access and are in integration tests.
+  (testing "create-client"
+    (sdk/initialize! {:venv-path venv-path})
+
+    (testing "creates client without options"
+      (let [client (sdk/create-client)]
+        (is (some? client)
+            "should create a non-nil client")))
+
+    (testing "creates client with options map"
+      (let [client (sdk/create-client {:allowed-tools ["Read"]})]
+        (is (some? client)
+            "should create client with options")))
+
+    (testing "creates client with cwd option"
+      (let [client (sdk/create-client {:cwd "/tmp"
+                                       :permission-mode "default"})]
+        (is (some? client)
+            "should create client with cwd and permission-mode")))))
