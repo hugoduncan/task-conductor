@@ -64,6 +64,27 @@
                 :inspect (py/import-module "inspect")
                 :dataclasses (py/import-module "dataclasses")})
 
+       ;; Define Python helper coroutines once
+       (py/run-simple-string
+        "
+async def _collect_async_iter(aiter):
+    result = []
+    async for item in aiter:
+        result.append(item)
+    return result
+
+async def _query_and_receive(client, prompt):
+    await client.query(prompt)
+    result = []
+    async for msg in client.receive_response():
+        result.append(msg)
+    return result
+")
+       (let [main-module (py/import-module "__main__")]
+         (swap! modules assoc
+                :collect-async-iter (py/get-attr main-module "_collect_async_iter")
+                :query-and-receive (py/get-attr main-module "_query_and_receive")))
+
        (swap! state assoc
               :initialized? true
               :venv-path abs-venv)
@@ -171,17 +192,7 @@
 (defn- make-collector-coroutine
   "Create a Python coroutine that collects all items from an async iterator."
   [async-iter]
-  ;; We need to run Python code that collects the async iterator
-  ;; since we can't directly await in Clojure
-  (py/run-simple-string
-   "
-async def _collect_async_iter(aiter):
-    result = []
-    async for item in aiter:
-        result.append(item)
-    return result
-")
-  (let [collector (py/get-attr (py/import-module "__main__") "_collect_async_iter")]
+  (let [collector (:collect-async-iter @modules)]
     (collector async-iter)))
 
 (defn collect-async-iterator
@@ -476,16 +487,7 @@ async def _collect_async_iter(aiter):
 (defn- make-query-and-receive-coroutine
   "Create a Python coroutine that sends a query and collects all response messages."
   [client prompt]
-  (py/run-simple-string
-   "
-async def _query_and_receive(client, prompt):
-    await client.query(prompt)
-    result = []
-    async for msg in client.receive_response():
-        result.append(msg)
-    return result
-")
-  (let [query-fn (py/get-attr (py/import-module "__main__") "_query_and_receive")]
+  (let [query-fn (:query-and-receive @modules)]
     (query-fn client prompt)))
 
 (defn query
