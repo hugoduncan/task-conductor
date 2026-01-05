@@ -226,6 +226,16 @@
   (when (managed-client? client)
     (:session-runner client)))
 
+(defn close-runner
+  "Close the session runner without disconnecting the client session.
+
+   Call this to clean up resources if create-client succeeded but connect
+   failed. If connect succeeded, use disconnect instead."
+  [client]
+  (when-let [runner (get-session-runner client)]
+    (py. runner close))
+  nil)
+
 (defn- make-collector-coroutine
   "Create a Python coroutine that collects all items from an async iterator."
   [async-iter]
@@ -388,6 +398,9 @@
    Optionally accepts an initial prompt string. Blocks until connection
    is established.
 
+   On connection failure, the session runner is automatically closed to
+   prevent resource leaks.
+
    Returns the client for chaining."
   ([client]
    (connect client nil))
@@ -405,6 +418,8 @@
                         (py. py-client connect)))))
        client
        (catch Exception e
+         ;; Clean up session runner to prevent thread leak
+         (close-runner client)
          (throw (ex-info "Failed to connect client"
                          {:type :connection-error
                           :prompt prompt}

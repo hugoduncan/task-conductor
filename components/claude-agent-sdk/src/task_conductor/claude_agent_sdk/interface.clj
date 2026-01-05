@@ -119,6 +119,17 @@
   [client]
   (core/disconnect client))
 
+(defn close-client
+  "Close the session runner without disconnecting the client session.
+
+   Use this to clean up resources when:
+   - create-client succeeded but connect failed
+   - You created a client but decided not to use it
+
+   If connect succeeded, use disconnect instead (which also closes the runner)."
+  [client]
+  (core/close-runner client))
+
 ;;; Message and ContentBlock Parsing
 
 (defn parse-content-block

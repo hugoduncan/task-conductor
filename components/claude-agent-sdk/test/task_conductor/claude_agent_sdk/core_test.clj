@@ -237,7 +237,35 @@
             (is (= :connection-error (:type (ex-data ex)))
                 "should have :connection-error type")
             (is (= "hello" (:prompt (ex-data ex)))
-                "should include prompt in ex-data")))))))
+                "should include prompt in ex-data"))))
+
+      (testing "cleans up session runner on failure"
+        (let [close-called (atom false)]
+          (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                        (fn [_] nil)
+                        task-conductor.claude-agent-sdk.core/close-runner
+                        (fn [_client]
+                          (reset! close-called true)
+                          nil)
+                        task-conductor.claude-agent-sdk.core/run-async
+                        (fn [_coro]
+                          (throw (Exception. "Connection refused")))]
+            (let [client (sdk/create-client)]
+              (try
+                (sdk/connect client)
+                (catch Exception _))
+              (is @close-called
+                  "should call close-runner on connection failure"))))))))
+
+(deftest close-client-test
+  ;; Tests close-client function for cleaning up session runners.
+  (testing "close-client"
+    (testing "returns nil when client has no session runner"
+      (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                    (fn [_] nil)]
+        (let [client (sdk/create-client)]
+          (is (nil? (sdk/close-client client))
+              "should return nil"))))))
 
 (deftest disconnect-mocked-test
   ;; Tests disconnect error handling with mocked session runner.
