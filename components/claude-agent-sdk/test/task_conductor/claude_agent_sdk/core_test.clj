@@ -52,7 +52,6 @@
   ;; Verifies SDK module is accessible after initialization.
   (testing "get-sdk-module"
     (testing "returns the claude_agent_sdk module"
-      (sdk/initialize! {:venv-path venv-path})
       (let [sdk-mod (sdk/get-sdk-module)]
         (is (some? sdk-mod)
             "should return a non-nil module")))))
@@ -60,8 +59,6 @@
 (deftest py->clj-test
   ;; Verifies Python to Clojure type conversion.
   (testing "py->clj"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "converts nil to nil"
       (is (nil? (sdk/py->clj nil))))
 
@@ -73,16 +70,12 @@
 (deftest clj->py-test
   ;; Verifies Clojure to Python type conversion.
   (testing "clj->py"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "converts keywords to strings"
       (is (= "foo" (sdk/clj->py :foo))))))
 
 (deftest make-options-test
   ;; Verifies ClaudeAgentOptions construction from Clojure maps.
   (testing "make-options"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "creates options with allowed-tools"
       (let [opts (sdk/make-options {:allowed-tools ["Read" "Write"]})]
         (is (some? opts)
@@ -128,8 +121,6 @@
   ;; Verifies ClaudeSDKClient instantiation.
   ;; Note: connect/disconnect tests require network access and are in integration tests.
   (testing "create-client"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "creates client without options"
       (let [client (sdk/create-client)]
         (is (some? client)
@@ -150,8 +141,6 @@
   ;; Verifies ContentBlock parsing handles nil and unknown types.
   ;; Full parsing tests require live Python objects from SDK responses.
   (testing "parse-content-block"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "returns nil for nil input"
       (is (nil? (sdk/parse-content-block nil))))))
 
@@ -159,16 +148,12 @@
   ;; Verifies Message parsing handles nil.
   ;; Full parsing tests require live Python objects from SDK responses.
   (testing "parse-message"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "returns nil for nil input"
       (is (nil? (sdk/parse-message nil))))))
 
 (deftest resume-client-test
   ;; Verifies client creation with resume option.
   (testing "resume-client"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "creates client with session-id only"
       (let [client (sdk/resume-client "test-session-123")]
         (is (some? client)
@@ -183,8 +168,6 @@
 (deftest fork-client-test
   ;; Verifies client creation with fork-session option.
   (testing "fork-client"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "creates client with session-id only"
       (let [client (sdk/fork-client "test-session-123")]
         (is (some? client)
@@ -205,8 +188,6 @@
 (deftest connect-mocked-test
   ;; Tests connect error handling with mocked run-async.
   (testing "connect"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "when connection succeeds"
       (testing "returns the client"
         (let [client (sdk/create-client)
@@ -241,8 +222,6 @@
 (deftest disconnect-mocked-test
   ;; Tests disconnect error handling with mocked run-async.
   (testing "disconnect"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "when disconnection succeeds"
       (testing "returns nil"
         (let [client (sdk/create-client)]
@@ -269,8 +248,6 @@
 (deftest query-mocked-test
   ;; Tests query function with mocked async operations.
   (testing "query"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "when query fails"
       (testing "throws ex-info with :query-error type"
         (let [client (sdk/create-client)]
@@ -291,8 +268,6 @@
 (deftest with-session-mocked-test
   ;; Tests with-session macro flow with mocked operations.
   (testing "with-session"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "when session succeeds"
       (testing "returns result and session-id"
         (let [connect-called (atom false)
@@ -345,8 +320,6 @@
 (deftest session-query-mocked-test
   ;; Tests session-query updates session-id atom.
   (testing "session-query"
-    (sdk/initialize! {:venv-path venv-path})
-
     (testing "updates session-id atom from result"
       (let [raw-client (sdk/create-client)
             session-atom (atom nil)
@@ -380,7 +353,6 @@
 (deftest tracked-client-test
   ;; Verifies TrackedClient record and accessors.
   (testing "TrackedClient"
-    (sdk/initialize! {:venv-path venv-path})
     (let [raw-client (sdk/create-client)
           session-atom (atom nil)
           ;; Using resolved var since core is loaded after py/initialize!
