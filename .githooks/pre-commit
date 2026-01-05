@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook: format with cljfmt, lint with clj-kondo
+
+# Get staged Clojure files into array
+# grep exits 1 for no matches, 2+ for errors; only suppress exit 1
+grep_output=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(clj|cljs|cljc|edn)$') || {
+  grep_exit=$?
+  if [ $grep_exit -ne 1 ]; then
+    echo "Pre-commit hook: grep failed with exit $grep_exit"
+    exit $grep_exit
+  fi
+  grep_output=""
+}
+if [ -z "$grep_output" ]; then
+  exit 0
+fi
+mapfile -t staged_files <<< "$grep_output"
+
+# Run cljfmt fix on all staged files at once and restage
+cljfmt fix "${staged_files[@]}"
+git add "${staged_files[@]}"
+
+# Run clj-kondo on staged files, block on any findings (info+)
+kondo_output=$(clj-kondo --lint "${staged_files[@]}" 2>&1) || true
+
+if [ -n "$kondo_output" ]; then
+  echo "$kondo_output"
+fi
+
+# Block on info+ findings
+if echo "$kondo_output" | grep -qE '(info|warning|error):'; then
+  echo "Pre-commit hook: clj-kondo found issues. Please fix before committing."
+  exit 1
+fi
+
+exit 0

@@ -1,0 +1,6 @@
+{:tasks
+ {:requires []
+
+  kondo-config
+  {:doc "Pull clj-kondo config from dependencies"
+   :task (shell "clj-kondo --copy-configs --dependencies --lint .")}}}

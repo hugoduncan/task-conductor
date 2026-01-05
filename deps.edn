@@ -1,0 +1,8 @@
+{:paths []
+ :deps {task-conductor/agent-runner {:local/root "bases/agent-runner"}}
+ :aliases
+ {:dev {:extra-paths ["dev"]
+        :extra-deps {dev.weavejester/cljfmt {:mvn/version "0.13.1"}}}
+  :nrepl {:extra-deps {nrepl/nrepl {:mvn/version "1.5.1"}}}
+  :test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+         :main-opts ["-m" "kaocha.runner"]}}}
