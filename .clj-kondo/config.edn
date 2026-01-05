@@ -1,5 +1,11 @@
-{:linters
- {:unresolved-symbol
+{:lint-as
+ {task-conductor.claude-agent-sdk.core/with-session clojure.core/let
+  task-conductor.claude-agent-sdk.interface/with-session clojure.core/let}
+
+ :linters
+ {:unresolved-namespace
+  {:exclude [task-conductor.claude-agent-sdk.core]}
+  :unresolved-symbol
   {:exclude
    ;; Python method names used with py. macro from libpython-clj2
    [is_dataclass

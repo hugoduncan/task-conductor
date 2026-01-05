@@ -3,4 +3,7 @@
            :source-paths ["bases/agent-runner/src"
                           "components/claude-agent-sdk/src"]
            :test-paths   ["bases/agent-runner/test"
-                          "components/claude-agent-sdk/test"]}]}
+                          "components/claude-agent-sdk/test"]}
+          {:id           :integration
+           :source-paths ["components/claude-agent-sdk/src"]
+           :test-paths   ["components/claude-agent-sdk/test-integration"]}]}

@@ -196,6 +196,187 @@
         (is (some? client)
             "should create client with fork and options")))))
 
+;;; Mocked Unit Tests
+;;
+;; These tests use with-redefs to mock Python layer interactions,
+;; allowing us to test error handling and response parsing logic
+;; without live Python/SDK calls.
+
+(deftest connect-mocked-test
+  ;; Tests connect error handling with mocked run-async.
+  (testing "connect"
+    (sdk/initialize! {:venv-path venv-path})
+
+    (testing "when connection succeeds"
+      (testing "returns the client"
+        (let [client (sdk/create-client)
+              run-async-called (atom false)]
+          (with-redefs [task-conductor.claude-agent-sdk.core/run-async
+                        (fn [_coro]
+                          (reset! run-async-called true)
+                          nil)]
+            (let [result (sdk/connect client)]
+              (is (= client result)
+                  "should return the same client")
+              (is @run-async-called
+                  "should call run-async"))))))
+
+    (testing "when connection fails"
+      (testing "throws ex-info with :connection-error type"
+        (let [client (sdk/create-client)]
+          (with-redefs [task-conductor.claude-agent-sdk.core/run-async
+                        (fn [_coro]
+                          (throw (Exception. "Connection refused")))]
+            (let [ex (try
+                       (sdk/connect client "hello")
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+              (is (some? ex)
+                  "should throw an exception")
+              (is (= :connection-error (:type (ex-data ex)))
+                  "should have :connection-error type")
+              (is (= "hello" (:prompt (ex-data ex)))
+                  "should include prompt in ex-data"))))))))
+
+(deftest disconnect-mocked-test
+  ;; Tests disconnect error handling with mocked run-async.
+  (testing "disconnect"
+    (sdk/initialize! {:venv-path venv-path})
+
+    (testing "when disconnection succeeds"
+      (testing "returns nil"
+        (let [client (sdk/create-client)]
+          (with-redefs [task-conductor.claude-agent-sdk.core/run-async
+                        (fn [_coro] nil)]
+            (is (nil? (sdk/disconnect client))
+                "should return nil")))))
+
+    (testing "when disconnection fails"
+      (testing "throws ex-info with :disconnection-error type"
+        (let [client (sdk/create-client)]
+          (with-redefs [task-conductor.claude-agent-sdk.core/run-async
+                        (fn [_coro]
+                          (throw (Exception. "Disconnect failed")))]
+            (let [ex (try
+                       (sdk/disconnect client)
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+              (is (some? ex)
+                  "should throw an exception")
+              (is (= :disconnection-error (:type (ex-data ex)))
+                  "should have :disconnection-error type"))))))))
+
+(deftest query-mocked-test
+  ;; Tests query function with mocked async operations.
+  (testing "query"
+    (sdk/initialize! {:venv-path venv-path})
+
+    (testing "when query fails"
+      (testing "throws ex-info with :query-error type"
+        (let [client (sdk/create-client)]
+          (with-redefs [task-conductor.claude-agent-sdk.core/run-async
+                        (fn [_coro]
+                          (throw (Exception. "Query timeout")))]
+            (let [ex (try
+                       (sdk/query client "test prompt")
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+              (is (some? ex)
+                  "should throw an exception")
+              (is (= :query-error (:type (ex-data ex)))
+                  "should have :query-error type")
+              (is (= "test prompt" (:prompt (ex-data ex)))
+                  "should include prompt in ex-data"))))))))
+
+(deftest with-session-mocked-test
+  ;; Tests with-session macro flow with mocked operations.
+  (testing "with-session"
+    (sdk/initialize! {:venv-path venv-path})
+
+    (testing "when session succeeds"
+      (testing "returns result and session-id"
+        (let [connect-called (atom false)
+              disconnect-called (atom false)]
+          (with-redefs [task-conductor.claude-agent-sdk.core/connect
+                        (fn [client & _args]
+                          (reset! connect-called true)
+                          client)
+                        task-conductor.claude-agent-sdk.core/disconnect
+                        (fn [_client]
+                          (reset! disconnect-called true)
+                          nil)]
+            (let [result (sdk/with-session [client {}]
+                           ;; Manually update session-id atom
+                           (reset! (:session-id-atom client) "mock-session")
+                           {:value 42})]
+              (is (= {:value 42} (:result result))
+                  "should return body result")
+              (is (= "mock-session" (:session-id result))
+                  "should return session-id")
+              (is @connect-called
+                  "should call connect")
+              (is @disconnect-called
+                  "should call disconnect"))))))
+
+    (testing "when body throws exception"
+      (testing "includes session-id in ex-data and disconnects"
+        (let [disconnect-called (atom false)]
+          (with-redefs [task-conductor.claude-agent-sdk.core/connect
+                        (fn [client & _args] client)
+                        task-conductor.claude-agent-sdk.core/disconnect
+                        (fn [_client]
+                          (reset! disconnect-called true)
+                          nil)]
+            (let [ex (try
+                       (sdk/with-session [client {}]
+                         (reset! (:session-id-atom client) "error-session")
+                         (throw (Exception. "Body error")))
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+              (is (some? ex)
+                  "should throw an exception")
+              (is (= :session-error (:type (ex-data ex)))
+                  "should have :session-error type")
+              (is (= "error-session" (:session-id (ex-data ex)))
+                  "should include session-id in ex-data")
+              (is @disconnect-called
+                  "should disconnect even on error"))))))))
+
+(deftest session-query-mocked-test
+  ;; Tests session-query updates session-id atom.
+  (testing "session-query"
+    (sdk/initialize! {:venv-path venv-path})
+
+    (testing "updates session-id atom from result"
+      (let [raw-client (sdk/create-client)
+            session-atom (atom nil)
+            tracked ((resolve 'task-conductor.claude-agent-sdk.core/->TrackedClient)
+                     raw-client session-atom)]
+        (with-redefs [task-conductor.claude-agent-sdk.core/query
+                      (fn [_client _prompt]
+                        {:messages [{:type :result-message
+                                     :session-id "captured-id"}]
+                         :session-id "captured-id"})]
+          (let [result (sdk/session-query tracked "test")]
+            (is (= "captured-id" (:session-id result))
+                "should return session-id in result")
+            (is (= "captured-id" @session-atom)
+                "should update session-id atom")))))
+
+    (testing "returns query result unchanged"
+      (let [raw-client (sdk/create-client)
+            session-atom (atom nil)
+            tracked ((resolve 'task-conductor.claude-agent-sdk.core/->TrackedClient)
+                     raw-client session-atom)
+            expected-result {:messages [{:type :assistant-message
+                                         :content "Hello!"}]
+                             :session-id nil}]
+        (with-redefs [task-conductor.claude-agent-sdk.core/query
+                      (fn [_client _prompt] expected-result)]
+          (let [result (sdk/session-query tracked "test")]
+            (is (= expected-result result)
+                "should return full query result")))))))
+
 (deftest tracked-client-test
   ;; Verifies TrackedClient record and accessors.
   (testing "TrackedClient"
