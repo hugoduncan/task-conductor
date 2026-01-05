@@ -261,11 +261,6 @@
   [client]
   (core/get-py-client client))
 
-(defn get-loop-runner
-  "Get the event loop runner from a ManagedClient."
-  [client]
-  (core/get-loop-runner client))
-
 (defn make-tracked-client
   "Create a TrackedClient wrapping a raw Python client.
 

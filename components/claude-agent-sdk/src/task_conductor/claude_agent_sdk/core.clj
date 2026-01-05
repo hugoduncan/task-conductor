@@ -312,13 +312,6 @@ async def _query_and_receive(client, prompt):
   (when (managed-client? client)
     (:session-runner client)))
 
-;; Legacy alias for compatibility
-(defn get-loop-runner
-  "Get the event loop runner from a ManagedClient (legacy, returns session-runner)."
-  [client]
-  (when (managed-client? client)
-    (:loop-runner client)))
-
 (defn- make-collector-coroutine
   "Create a Python coroutine that collects all items from an async iterator."
   [async-iter]
