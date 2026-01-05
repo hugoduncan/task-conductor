@@ -4,6 +4,7 @@
    Provides functionality to create Claude SDK clients, manage sessions,
    send queries, and handle responses."
   (:require
+   [clojure.java.io :as io]
    [clojure.string :as str]
    [libpython-clj2.python :as py :refer [py. py.-]]
    [libpython-clj2.require :refer [require-python]]))
@@ -26,6 +27,12 @@
   []
   (:initialized? @state))
 
+(defn- abs-path
+  "Convert a path to absolute, resolving relative paths against cwd."
+  [path]
+  (when path
+    (.getAbsolutePath (io/file path))))
+
 (defn initialize!
   "Initialize Python interpreter and import Claude Agent SDK.
 
@@ -38,16 +45,17 @@
    (initialize! {}))
   ([{:keys [venv-path python-executable]}]
    (when-not (initialized?)
-     (let [py-exe (or python-executable
-                      (when venv-path
-                        (str venv-path "/bin/python")))]
+     (let [abs-venv (abs-path venv-path)
+           py-exe (or python-executable
+                      (when abs-venv
+                        (str abs-venv "/bin/python")))]
        (if py-exe
          (py/initialize! :python-executable py-exe)
          (py/initialize!))
 
        ;; Import required modules
-       (require-python '[asyncio :as asyncio])
-       (require-python '[claude_agent_sdk :as sdk])
+       (require-python 'asyncio)
+       (require-python 'claude_agent_sdk)
 
        ;; Store module references for later use
        (reset! modules
@@ -58,7 +66,7 @@
 
        (swap! state assoc
               :initialized? true
-              :venv-path venv-path)
+              :venv-path abs-venv)
        true))))
 
 (defn- ensure-initialized!
