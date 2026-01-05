@@ -87,17 +87,41 @@
         (is (some? opts)
             "should create a non-nil options object")))
 
+    (testing "creates options with disallowed-tools"
+      (let [opts (sdk/make-options {:disallowed-tools ["Bash"]})]
+        (is (some? opts)
+            "should create options with disallowed-tools")))
+
     (testing "creates options with cwd"
       (let [opts (sdk/make-options {:cwd "/tmp"})]
         (is (some? opts)
             "should create options with cwd set")))
+
+    (testing "creates options with permission-mode"
+      (let [opts (sdk/make-options {:permission-mode "bypassPermissions"})]
+        (is (some? opts)
+            "should create options with permission-mode")))
+
+    (testing "creates options with env"
+      (let [opts (sdk/make-options {:env {"MY_VAR" "value"}})]
+        (is (some? opts)
+            "should create options with env map")))
 
     (testing "creates options with multiple settings"
       (let [opts (sdk/make-options {:allowed-tools ["Bash"]
                                     :permission-mode "acceptEdits"
                                     :max-turns 10})]
         (is (some? opts)
-            "should create options with multiple settings")))))
+            "should create options with multiple settings")))
+
+    (testing "creates options with comprehensive tool configuration"
+      (let [opts (sdk/make-options {:allowed-tools ["Read" "Write" "Edit"]
+                                    :disallowed-tools ["Bash"]
+                                    :permission-mode "plan"
+                                    :cwd "/home/user/project"
+                                    :max-turns 5})]
+        (is (some? opts)
+            "should create options with full tool configuration")))))
 
 (deftest create-client-test
   ;; Verifies ClaudeSDKClient instantiation.

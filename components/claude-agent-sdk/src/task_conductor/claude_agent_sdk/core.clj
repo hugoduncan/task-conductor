@@ -196,13 +196,23 @@ async def _collect_async_iter(aiter):
 ;;; ClaudeAgentOptions Construction
 
 (def ^:private option-keys
-  "Valid keys for ClaudeAgentOptions."
-  #{:allowed-tools :system-prompt :mcp-servers :permission-mode
-    :continue-conversation :resume :max-turns :disallowed-tools
-    :model :output-format :permission-prompt-tool-name :cwd
+  "Valid keys for ClaudeAgentOptions.
+
+   See ClaudeAgentOptions Python class for full documentation.
+   Key options:
+   - :tools - preset map or tool list
+   - :allowed-tools - list of allowed tool name strings
+   - :disallowed-tools - list of disallowed tool name strings
+   - :permission-mode - \"default\", \"acceptEdits\", \"plan\", or \"bypassPermissions\"
+   - :cwd - working directory path"
+  #{:tools :allowed-tools :system-prompt :mcp-servers :permission-mode
+    :continue-conversation :resume :max-turns :max-budget-usd
+    :disallowed-tools :model :fallback-model :betas
+    :permission-prompt-tool-name :cwd :cli-path
     :settings :add-dirs :env :extra-args :max-buffer-size
     :stderr :can-use-tool :hooks :user :include-partial-messages
-    :fork-session :agents :setting-sources})
+    :fork-session :agents :setting-sources :sandbox :plugins
+    :max-thinking-tokens :output-format :enable-file-checkpointing})
 
 (defn- clj-key->py-key
   "Convert Clojure keyword to Python parameter name.
@@ -216,13 +226,34 @@ async def _collect_async_iter(aiter):
   "Create a ClaudeAgentOptions instance from a Clojure map.
 
    Supported keys (use kebab-case, will be converted to snake_case):
-   - :allowed-tools - vector of tool name strings
-   - :system-prompt - string or preset map
+
+   Tool configuration:
+   - :tools - preset map {:type \"preset\" :preset \"claude_code\"} or list
+   - :allowed-tools - vector of allowed tool name strings
+   - :disallowed-tools - vector of disallowed tool name strings
+
+   Permission and security:
    - :permission-mode - \"default\", \"acceptEdits\", \"plan\", \"bypassPermissions\"
-   - :cwd - working directory path
+   - :can-use-tool - callback for custom tool permissions
+
+   Working environment:
+   - :cwd - working directory path (string or Path)
+   - :env - map of environment variables
+   - :add-dirs - vector of additional directory paths
+
+   Prompt and model:
+   - :system-prompt - string or preset map
+   - :model - model name string
+   - :fallback-model - fallback model name
+
+   Session control:
    - :max-turns - max conversation turns
-   - :model - model name
-   - and more (see ClaudeAgentOptions documentation)
+   - :max-budget-usd - max budget in USD
+   - :resume - session ID to resume
+   - :continue-conversation - boolean
+   - :fork-session - boolean
+
+   See ClaudeAgentOptions Python class for complete documentation.
 
    Returns a Python ClaudeAgentOptions instance."
   [opts]

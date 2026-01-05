@@ -73,13 +73,28 @@
   "Create a ClaudeAgentOptions instance from a Clojure map.
 
    Supported keys (use kebab-case, will be converted to snake_case):
-   - :allowed-tools - vector of tool name strings
-   - :system-prompt - string or preset map
+
+   Tool configuration:
+   - :tools - preset map {:type \"preset\" :preset \"claude_code\"} or list
+   - :allowed-tools - vector of allowed tool name strings
+   - :disallowed-tools - vector of disallowed tool name strings
+
+   Permission and security:
    - :permission-mode - \"default\", \"acceptEdits\", \"plan\", \"bypassPermissions\"
-   - :cwd - working directory path
+
+   Working environment:
+   - :cwd - working directory path (string or Path)
+   - :env - map of environment variables
+
+   Prompt and model:
+   - :system-prompt - string or preset map
+   - :model - model name string
+
+   Session control:
    - :max-turns - max conversation turns
-   - :model - model name
-   - and more (see ClaudeAgentOptions documentation)
+   - :resume - session ID to resume
+
+   See ClaudeAgentOptions Python class for complete documentation.
 
    Returns a Python ClaudeAgentOptions instance."
   [opts]
@@ -105,13 +120,24 @@
   "Create a ClaudeSDKClient instance.
 
    Options map is passed to make-options to create ClaudeAgentOptions.
-   Supported options include:
-   - :allowed-tools - vector of tool name strings
-   - :system-prompt - custom system prompt string
+   Key options include:
+
+   Tool configuration:
+   - :tools - preset map or tool list
+   - :allowed-tools - vector of allowed tool name strings
+   - :disallowed-tools - vector of disallowed tool name strings
+
+   Permission and security:
    - :permission-mode - \"default\", \"acceptEdits\", \"plan\", \"bypassPermissions\"
+
+   Working environment:
    - :cwd - working directory path
-   - :model - model name
+
+   Session:
    - :resume - session ID string to resume a previous session
+   - :model - model name
+
+   See make-options for the complete list of supported options.
 
    Returns the Python ClaudeSDKClient instance."
   ([]
