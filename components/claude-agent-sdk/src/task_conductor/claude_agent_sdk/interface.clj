@@ -207,3 +207,59 @@
     :session-id \"abc123\"}"
   [client prompt]
   (core/query client prompt))
+
+;;; Session Management
+
+(defmacro with-session
+  "Execute body with a session-managed Claude client.
+
+   Binds client-sym to a TrackedClient. Use session-query to send prompts
+   and automatically capture the session-id.
+
+   Returns {:result <body-result> :session-id <captured-id>}.
+   On exception, throws ex-info with :session-id in ex-data.
+
+   Example:
+     (with-session [client {:model \"claude-sonnet-4-5\"}]
+       (session-query client \"Hello!\")
+       (session-query client \"Continue...\"))
+     ;; => {:result {...} :session-id \"abc123\"}"
+  [[client-sym opts] & body]
+  `(core/with-session [~client-sym ~opts] ~@body))
+
+(defn session-query
+  "Query using a TrackedClient, updating the session-id atom.
+
+   Like query, but captures the session-id for later retrieval.
+   Use within with-session macro."
+  [tracked-client prompt]
+  (core/session-query tracked-client prompt))
+
+(defn get-session-id
+  "Get the current session-id from a TrackedClient."
+  [tracked-client]
+  (core/get-session-id tracked-client))
+
+(defn get-raw-client
+  "Get the underlying Python client from a TrackedClient."
+  [tracked-client]
+  (core/get-raw-client tracked-client))
+
+(defn resume-client
+  "Create a client configured to resume a previous session.
+
+   Convenience function that sets the :resume option."
+  ([session-id]
+   (core/resume-client session-id))
+  ([session-id opts]
+   (core/resume-client session-id opts)))
+
+(defn fork-client
+  "Create a client configured to fork from a previous session.
+
+   Creates a new session branching from the given session-id,
+   leaving the original session unchanged."
+  ([session-id]
+   (core/fork-client session-id))
+  ([session-id opts]
+   (core/fork-client session-id opts)))

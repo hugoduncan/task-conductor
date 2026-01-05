@@ -513,3 +513,79 @@ async def _query_and_receive(client, prompt):
                       {:type :query-error
                        :prompt prompt}
                       e)))))
+
+;;; Session Management
+
+(defrecord TrackedClient [client session-id-atom])
+
+(defn session-query
+  "Query using a TrackedClient, updating the session-id atom.
+
+   Like query, but captures the session-id for later retrieval.
+   Use within with-session macro."
+  [tracked-client prompt]
+  (let [{:keys [client session-id-atom]} tracked-client
+        result (query client prompt)]
+    (when-let [sid (:session-id result)]
+      (reset! session-id-atom sid))
+    result))
+
+(defn get-session-id
+  "Get the current session-id from a TrackedClient."
+  [tracked-client]
+  @(:session-id-atom tracked-client))
+
+(defn get-raw-client
+  "Get the underlying Python client from a TrackedClient."
+  [tracked-client]
+  (:client tracked-client))
+
+(defmacro with-session
+  "Execute body with a session-managed Claude client.
+
+   Binds client-sym to a TrackedClient. Use session-query to send prompts
+   and automatically capture the session-id.
+
+   Returns {:result <body-result> :session-id <captured-id>}.
+   On exception, throws ex-info with :session-id in ex-data.
+
+   Example:
+     (with-session [client {:model \"claude-sonnet-4-5\"}]
+       (session-query client \"Hello!\")
+       (session-query client \"Continue...\"))
+     ;; => {:result {...} :session-id \"abc123\"}"
+  [[client-sym opts] & body]
+  `(let [session-id-atom# (atom nil)
+         raw-client# (create-client ~opts)]
+     (try
+       (connect raw-client#)
+       (let [~client-sym (->TrackedClient raw-client# session-id-atom#)
+             result# (do ~@body)]
+         {:result result#
+          :session-id @session-id-atom#})
+       (catch Exception e#
+         (throw (ex-info "Session error"
+                         {:type :session-error
+                          :session-id @session-id-atom#}
+                         e#)))
+       (finally
+         (disconnect raw-client#)))))
+
+(defn resume-client
+  "Create a client configured to resume a previous session.
+
+   Convenience function that sets the :resume option."
+  ([session-id]
+   (resume-client session-id {}))
+  ([session-id opts]
+   (create-client (assoc opts :resume session-id))))
+
+(defn fork-client
+  "Create a client configured to fork from a previous session.
+
+   Creates a new session branching from the given session-id,
+   leaving the original session unchanged."
+  ([session-id]
+   (fork-client session-id {}))
+  ([session-id opts]
+   (create-client (assoc opts :resume session-id :fork-session true))))

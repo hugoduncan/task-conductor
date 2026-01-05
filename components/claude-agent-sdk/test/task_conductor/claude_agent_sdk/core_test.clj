@@ -4,6 +4,7 @@
   ;;
   ;; IMPORTANT: We initialize libpython-clj with the venv BEFORE
   ;; requiring our SDK to prevent auto-initialization with system Python.
+  ;; Do NOT add SDK requires here - they must be loaded after py/initialize!
   (:require
    [clojure.java.io :as io]
    [clojure.test :refer [deftest is testing]]
@@ -162,3 +163,58 @@
 
     (testing "returns nil for nil input"
       (is (nil? (sdk/parse-message nil))))))
+
+(deftest resume-client-test
+  ;; Verifies client creation with resume option.
+  (testing "resume-client"
+    (sdk/initialize! {:venv-path venv-path})
+
+    (testing "creates client with session-id only"
+      (let [client (sdk/resume-client "test-session-123")]
+        (is (some? client)
+            "should create a non-nil client")))
+
+    (testing "creates client with session-id and additional options"
+      (let [client (sdk/resume-client "test-session-123"
+                                      {:allowed-tools ["Read"]})]
+        (is (some? client)
+            "should create client with resume and options")))))
+
+(deftest fork-client-test
+  ;; Verifies client creation with fork-session option.
+  (testing "fork-client"
+    (sdk/initialize! {:venv-path venv-path})
+
+    (testing "creates client with session-id only"
+      (let [client (sdk/fork-client "test-session-123")]
+        (is (some? client)
+            "should create a non-nil client")))
+
+    (testing "creates client with session-id and additional options"
+      (let [client (sdk/fork-client "test-session-123"
+                                    {:max-turns 5})]
+        (is (some? client)
+            "should create client with fork and options")))))
+
+(deftest tracked-client-test
+  ;; Verifies TrackedClient record and accessors.
+  (testing "TrackedClient"
+    (sdk/initialize! {:venv-path venv-path})
+    (let [raw-client (sdk/create-client)
+          session-atom (atom nil)
+          ;; Using resolved var since core is loaded after py/initialize!
+          tracked ((resolve 'task-conductor.claude-agent-sdk.core/->TrackedClient)
+                   raw-client session-atom)]
+
+      (testing "get-raw-client returns the underlying client"
+        (is (= raw-client (sdk/get-raw-client tracked))
+            "should return the raw Python client"))
+
+      (testing "get-session-id returns nil initially"
+        (is (nil? (sdk/get-session-id tracked))
+            "should return nil when no session-id set"))
+
+      (testing "get-session-id returns value after atom update"
+        (reset! session-atom "test-session-456")
+        (is (= "test-session-456" (sdk/get-session-id tracked))
+            "should return the session-id from atom")))))
