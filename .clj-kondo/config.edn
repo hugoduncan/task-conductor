@@ -1,0 +1,52 @@
+{:lint-as
+ {task-conductor.claude-agent-sdk.core/with-session clojure.core/let
+  task-conductor.claude-agent-sdk.interface/with-session clojure.core/let}
+
+ :linters
+ {:unresolved-namespace
+  {:exclude [task-conductor.claude-agent-sdk.core]}
+  :unresolved-symbol
+  {:exclude
+   ;; Python method names used with py. macro from libpython-clj2
+   [is_dataclass
+    fields
+    run
+    close
+    sleep
+    ;; Python attribute names used with py.- macro
+    __class__
+    __name__
+    text
+    thinking
+    signature
+    id
+    name
+    input
+    content
+    is_error
+    tool_use_id
+    uuid
+    parent_tool_use_id
+    error
+    model
+    subtype
+    data
+    total_cost_usd
+    usage
+    result
+    structured_output
+    duration_ms
+    duration_api_ms
+    num_turns
+    session_id
+    event
+    ;; ClaudeAgentOptions attributes (used in tests)
+    allowed_tools
+    disallowed_tools
+    cwd
+    permission_mode
+    env
+    max_turns
+    resume
+    fork_session
+    options]}}}
