@@ -251,6 +251,21 @@
   [tracked-client]
   (core/get-raw-client tracked-client))
 
+(defn make-tracked-client
+  "Create a TrackedClient wrapping a raw Python client.
+
+   A TrackedClient maintains session-id state across queries when used
+   with session-query.
+
+   Arguments:
+   - client - a Python ClaudeSDKClient instance (from create-client)
+   - session-id-atom - (optional) an atom to track the session-id;
+                       defaults to (atom nil)"
+  ([client]
+   (core/->TrackedClient client (atom nil)))
+  ([client session-id-atom]
+   (core/->TrackedClient client session-id-atom)))
+
 (defn resume-client
   "Create a client configured to resume a previous session.
 
