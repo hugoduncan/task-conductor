@@ -26,6 +26,7 @@
 
 ;; Now require the SDK (which will find Python already initialized)
 (require '[task-conductor.claude-agent-sdk.interface :as sdk])
+(require '[task-conductor.claude-agent-sdk.core :as core])
 
 ;; Complete our initialization (imports modules)
 (defonce ^:private init-result
@@ -52,7 +53,7 @@
   ;; Verifies SDK module is accessible after initialization.
   (testing "get-sdk-module"
     (testing "returns the claude_agent_sdk module"
-      (let [sdk-mod (sdk/get-sdk-module)]
+      (let [sdk-mod (core/get-sdk-module)]
         (is (some? sdk-mod)
             "should return a non-nil module")))))
 
@@ -60,18 +61,18 @@
   ;; Verifies Python to Clojure type conversion.
   (testing "py->clj"
     (testing "converts nil to nil"
-      (is (nil? (sdk/py->clj nil))))
+      (is (nil? (core/py->clj nil))))
 
     (testing "passes through JVM primitives"
-      (is (= "hello" (sdk/py->clj "hello")))
-      (is (= 42 (sdk/py->clj 42)))
-      (is (= true (sdk/py->clj true))))))
+      (is (= "hello" (core/py->clj "hello")))
+      (is (= 42 (core/py->clj 42)))
+      (is (= true (core/py->clj true))))))
 
 (deftest clj->py-test
   ;; Verifies Clojure to Python type conversion.
   (testing "clj->py"
     (testing "converts keywords to strings"
-      (is (= "foo" (sdk/clj->py :foo))))))
+      (is (= "foo" (core/clj->py :foo))))))
 
 (deftest make-options-test
   ;; Verifies ClaudeAgentOptions construction from Clojure maps.
@@ -405,11 +406,11 @@
   (testing "run-async"
     (testing "when coroutine succeeds"
       (testing "returns the coroutine result"
-        (let [asyncio (sdk/get-asyncio-module)
+        (let [asyncio (core/get-asyncio-module)
               ;; Create a simple coroutine that returns a value
               coro (py. asyncio sleep 0)]
           ;; asyncio.sleep(0) returns None, just verify no exception
-          (is (nil? (sdk/run-async coro))
+          (is (nil? (core/run-async coro))
               "should return nil for sleep(0)"))))
 
     (testing "when coroutine raises exception"
@@ -425,7 +426,7 @@ async def _test_failing_coro():
               failing-coro-fn (py/get-attr main-mod "_test_failing_coro")
               coro (failing-coro-fn)]
           (is (thrown-with-msg? Exception #"test coroutine failure"
-                                (sdk/run-async coro))
+                                (core/run-async coro))
               "should propagate exception from failed coroutine"))))))
 
 (deftest collect-async-iterator-test
@@ -450,7 +451,7 @@ async def _test_failing_coro():
                       (fn [obj]
                         (reset! py->clj-called obj)
                         ["item1" "item2" "item3"])]
-          (let [result (sdk/collect-async-iterator mock-iter)]
+          (let [result (core/collect-async-iterator mock-iter)]
             (is (= mock-iter @collector-called)
                 "should pass async-iter to make-collector-coroutine")
             (is (= :mock-coroutine @run-async-called)
@@ -467,7 +468,7 @@ async def _test_failing_coro():
                     (fn [_] :empty-py-list)
                     task-conductor.claude-agent-sdk.core/py->clj
                     (fn [_] [])]
-        (let [result (sdk/collect-async-iterator :empty-iter)]
+        (let [result (core/collect-async-iterator :empty-iter)]
           (is (= [] result)
               "should return empty vector"))))
 
@@ -481,7 +482,7 @@ async def _test_failing_coro():
                       (fn [obj]
                         (reset! conversion-input obj)
                         [1 2 3])]
-          (let [result (sdk/collect-async-iterator :iter)]
+          (let [result (core/collect-async-iterator :iter)]
             (is (= :py-list-of-numbers @conversion-input)
                 "should convert run-async result")
             (is (= [1 2 3] result)
