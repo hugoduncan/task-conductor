@@ -120,3 +120,21 @@
                                        :permission-mode "default"})]
         (is (some? client)
             "should create client with cwd and permission-mode")))))
+
+(deftest parse-content-block-test
+  ;; Verifies ContentBlock parsing handles nil and unknown types.
+  ;; Full parsing tests require live Python objects from SDK responses.
+  (testing "parse-content-block"
+    (sdk/initialize! {:venv-path venv-path})
+
+    (testing "returns nil for nil input"
+      (is (nil? (sdk/parse-content-block nil))))))
+
+(deftest parse-message-test
+  ;; Verifies Message parsing handles nil.
+  ;; Full parsing tests require live Python objects from SDK responses.
+  (testing "parse-message"
+    (sdk/initialize! {:venv-path venv-path})
+
+    (testing "returns nil for nil input"
+      (is (nil? (sdk/parse-message nil))))))

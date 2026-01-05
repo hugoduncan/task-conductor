@@ -137,3 +137,47 @@
    Blocks until disconnection is complete. Returns nil."
   [client]
   (core/disconnect client))
+
+;;; Message and ContentBlock Parsing
+
+(defn parse-content-block
+  "Parse a Python ContentBlock into a Clojure map with :type discriminator.
+
+   Supported types:
+   - TextBlock -> {:type :text-block :text \"...\"}
+   - ThinkingBlock -> {:type :thinking-block :thinking \"...\" :signature \"...\"}
+   - ToolUseBlock -> {:type :tool-use-block :id \"...\" :name \"...\" :input {...}}
+   - ToolResultBlock -> {:type :tool-result-block :tool-use-id \"...\" ...}"
+  [block]
+  (core/parse-content-block block))
+
+(defn parse-message
+  "Parse a Python Message into a Clojure map with :type discriminator.
+
+   Supported types:
+   - UserMessage -> {:type :user-message :content ...}
+   - AssistantMessage -> {:type :assistant-message :content [...] :model \"...\"}
+   - SystemMessage -> {:type :system-message :subtype \"...\" :data {...}}
+   - ResultMessage -> {:type :result-message :session-id \"...\" ...}
+   - StreamEvent -> {:type :stream-event ...}"
+  [msg]
+  (core/parse-message msg))
+
+;;; Query
+
+(defn query
+  "Send a prompt to a connected client and collect response messages.
+
+   Returns a map with:
+   - :messages - vector of parsed Message maps
+   - :session-id - session ID from the ResultMessage (nil if not found)
+
+   The client must be connected before calling query.
+
+   Example response:
+   {:messages [{:type :user-message :content \"Hello\"}
+               {:type :assistant-message :content [...] :model \"claude-sonnet-4-...\"}
+               {:type :result-message :session-id \"abc123\" ...}]
+    :session-id \"abc123\"}"
+  [client prompt]
+  (core/query client prompt))
