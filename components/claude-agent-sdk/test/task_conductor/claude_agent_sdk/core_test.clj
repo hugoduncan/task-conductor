@@ -8,7 +8,7 @@
   (:require
    [clojure.java.io :as io]
    [clojure.test :refer [deftest is testing]]
-   [libpython-clj2.python :as py]))
+   [libpython-clj2.python :as py :refer [py.]]))
 
 (def ^:private venv-path
   "Relative path to venv from project root."
@@ -383,6 +383,36 @@
         (reset! session-atom "test-session-456")
         (is (= "test-session-456" (sdk/get-session-id tracked))
             "should return the session-id from atom")))))
+
+(deftest run-async-error-handling-test
+  ;; Tests run-async propagates exceptions when coroutine fails.
+  ;; The function uses asyncio.run() to execute a coroutine synchronously;
+  ;; if the coroutine throws, the exception should propagate to the caller.
+  (testing "run-async"
+    (testing "when coroutine succeeds"
+      (testing "returns the coroutine result"
+        (let [asyncio (sdk/get-asyncio-module)
+              ;; Create a simple coroutine that returns a value
+              coro (py. asyncio sleep 0)]
+          ;; asyncio.sleep(0) returns None, just verify no exception
+          (is (nil? (sdk/run-async coro))
+              "should return nil for sleep(0)"))))
+
+    (testing "when coroutine raises exception"
+      (testing "propagates the exception to caller"
+        ;; Create a coroutine that fails using Python's asyncio
+        ;; We'll use a coroutine that raises an exception
+        (py/run-simple-string
+         "
+async def _test_failing_coro():
+    raise RuntimeError('test coroutine failure')
+")
+        (let [main-mod (py/import-module "__main__")
+              failing-coro-fn (py/get-attr main-mod "_test_failing_coro")
+              coro (failing-coro-fn)]
+          (is (thrown-with-msg? Exception #"test coroutine failure"
+                                (sdk/run-async coro))
+              "should propagate exception from failed coroutine"))))))
 
 (deftest collect-async-iterator-test
   ;; Tests collect-async-iterator with mocked async operations.

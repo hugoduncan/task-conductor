@@ -12,6 +12,7 @@
     fields
     run
     close
+    sleep
     ;; Python attribute names used with py.- macro
     __class__
     __name__
