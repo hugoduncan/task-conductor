@@ -81,18 +81,24 @@
 
    Permission and security:
    - :permission-mode - \"default\", \"acceptEdits\", \"plan\", \"bypassPermissions\"
+   - :can-use-tool - callback for custom tool permissions
 
    Working environment:
    - :cwd - working directory path (string or Path)
    - :env - map of environment variables
+   - :add-dirs - vector of additional directory paths
 
    Prompt and model:
    - :system-prompt - string or preset map
    - :model - model name string
+   - :fallback-model - fallback model name
 
    Session control:
    - :max-turns - max conversation turns
+   - :max-budget-usd - max budget in USD
    - :resume - session ID to resume
+   - :continue-conversation - boolean
+   - :fork-session - boolean
 
    See ClaudeAgentOptions Python class for complete documentation.
 
