@@ -10,13 +10,9 @@ if [ ${#staged_files[@]} -eq 0 ]; then
   exit 0
 fi
 
-# Run cljfmt fix on staged files and restage
-for file in "${staged_files[@]}"; do
-  if [ -f "$file" ]; then
-    clj -M:dev -m cljfmt.main fix "$file"
-    git add "$file"
-  fi
-done
+# Run cljfmt fix on all staged files at once and restage
+cljfmt fix "${staged_files[@]}"
+git add "${staged_files[@]}"
 
 # Run clj-kondo on staged files, block on any findings (info+)
 kondo_output=$(clj-kondo --lint "${staged_files[@]}" 2>&1) || true
