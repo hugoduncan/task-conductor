@@ -511,6 +511,23 @@
 
 ;;; Message Parsing
 
+(defn- assoc-if-present
+  "Assoc a Python field into map if the field is not None.
+
+   py-field-name should be a string (e.g., \"total_cost_usd\").
+
+   Returns m unchanged if the field value is Python None,
+   otherwise returns (assoc m clj-key field-value).
+
+   With transform-fn, applies the function to the value before assoc."
+  ([m py-obj py-field-name clj-key]
+   (assoc-if-present m py-obj py-field-name clj-key identity))
+  ([m py-obj py-field-name clj-key transform-fn]
+   (let [v (py/get-attr py-obj py-field-name)]
+     (if (py-none? v)
+       m
+       (assoc m clj-key (transform-fn v))))))
+
 (defn parse-message
   "Parse a Python Message into a Clojure map with :type discriminator.
 
@@ -525,25 +542,17 @@
     (let [class-name (get-class-name msg)]
       (case class-name
         "UserMessage"
-        (let [uuid (py.- msg uuid)
-              parent-tool-use-id (py.- msg parent_tool_use_id)]
-          (cond-> {:type :user-message
-                   :content (parse-content (py.- msg content))}
-            (and uuid (not (py-none? uuid)))
-            (assoc :uuid uuid)
-            (and parent-tool-use-id (not (py-none? parent-tool-use-id)))
-            (assoc :parent-tool-use-id parent-tool-use-id)))
+        (-> {:type :user-message
+             :content (parse-content (py.- msg content))}
+            (assoc-if-present msg "uuid" :uuid)
+            (assoc-if-present msg "parent_tool_use_id" :parent-tool-use-id))
 
         "AssistantMessage"
-        (let [parent-tool-use-id (py.- msg parent_tool_use_id)
-              error (py.- msg error)]
-          (cond-> {:type :assistant-message
-                   :content (parse-content (py.- msg content))
-                   :model (py.- msg model)}
-            (and parent-tool-use-id (not (py-none? parent-tool-use-id)))
-            (assoc :parent-tool-use-id parent-tool-use-id)
-            (and error (not (py-none? error)))
-            (assoc :error error)))
+        (-> {:type :assistant-message
+             :content (parse-content (py.- msg content))
+             :model (py.- msg model)}
+            (assoc-if-present msg "parent_tool_use_id" :parent-tool-use-id)
+            (assoc-if-present msg "error" :error))
 
         "SystemMessage"
         {:type :system-message
@@ -551,34 +560,24 @@
          :data (py->clj (py.- msg data))}
 
         "ResultMessage"
-        (let [total-cost (py.- msg total_cost_usd)
-              usage (py.- msg usage)
-              result (py.- msg result)
-              structured-output (py.- msg structured_output)]
-          (cond-> {:type :result-message
-                   :subtype (py.- msg subtype)
-                   :duration-ms (py.- msg duration_ms)
-                   :duration-api-ms (py.- msg duration_api_ms)
-                   :is-error (py.- msg is_error)
-                   :num-turns (py.- msg num_turns)
-                   :session-id (py.- msg session_id)}
-            (and total-cost (not (py-none? total-cost)))
-            (assoc :total-cost-usd total-cost)
-            (and usage (not (py-none? usage)))
-            (assoc :usage (py->clj usage))
-            (and result (not (py-none? result)))
-            (assoc :result result)
-            (and structured-output (not (py-none? structured-output)))
-            (assoc :structured-output (py->clj structured-output))))
+        (-> {:type :result-message
+             :subtype (py.- msg subtype)
+             :duration-ms (py.- msg duration_ms)
+             :duration-api-ms (py.- msg duration_api_ms)
+             :is-error (py.- msg is_error)
+             :num-turns (py.- msg num_turns)
+             :session-id (py.- msg session_id)}
+            (assoc-if-present msg "total_cost_usd" :total-cost-usd)
+            (assoc-if-present msg "usage" :usage py->clj)
+            (assoc-if-present msg "result" :result)
+            (assoc-if-present msg "structured_output" :structured-output py->clj))
 
         "StreamEvent"
-        (let [parent-tool-use-id (py.- msg parent_tool_use_id)]
-          (cond-> {:type :stream-event
-                   :uuid (py.- msg uuid)
-                   :session-id (py.- msg session_id)
-                   :event (py->clj (py.- msg event))}
-            (and parent-tool-use-id (not (py-none? parent-tool-use-id)))
-            (assoc :parent-tool-use-id parent-tool-use-id)))
+        (-> {:type :stream-event
+             :uuid (py.- msg uuid)
+             :session-id (py.- msg session_id)
+             :event (py->clj (py.- msg event))}
+            (assoc-if-present msg "parent_tool_use_id" :parent-tool-use-id))
 
         ;; Fallback for unknown message types
         {:type :unknown-message
