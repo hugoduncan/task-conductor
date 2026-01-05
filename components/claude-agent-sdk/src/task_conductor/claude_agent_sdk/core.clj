@@ -692,7 +692,14 @@ async def _query_and_receive(client, prompt):
 
 ;;; Session Management
 
-(defrecord TrackedClient [client session-id-atom])
+(defrecord
+ ^{:doc "A client wrapper that tracks session ID across queries.
+
+   Fields:
+   - client: The underlying ClaudeSDKClient Python object
+   - session-id-atom: An atom holding the current session ID (string or nil)"}
+ TrackedClient
+ [client session-id-atom])
 
 (defn session-query
   "Query using a TrackedClient, updating the session-id atom.
