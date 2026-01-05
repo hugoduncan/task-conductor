@@ -166,6 +166,14 @@
     (keyword? obj) (name obj)
     :else (py/->python obj)))
 
+;;; Timeout Helpers
+
+(defn- ms->s
+  "Convert milliseconds to seconds for Python timeout parameter."
+  [timeout-ms]
+  (when timeout-ms
+    (/ timeout-ms 1000.0)))
+
 ;;; Async Bridge
 
 (defn run-async
@@ -395,22 +403,31 @@
 (defn connect
   "Connect the client to establish a session.
 
-   Optionally accepts an initial prompt string. Blocks until connection
-   is established.
+   Optionally accepts an initial prompt string and/or options map.
+   Blocks until connection is established or timeout expires.
+
+   Options:
+   - :timeout-ms - timeout in milliseconds (nil = no timeout)
 
    On connection failure, the session runner is automatically closed to
    prevent resource leaks.
 
-   Returns the client for chaining."
+   Returns the client for chaining.
+   Throws ex-info with :type :timeout if timeout expires."
   ([client]
-   (connect client nil))
-  ([client prompt]
+   (connect client nil nil))
+  ([client prompt-or-opts]
+   (if (map? prompt-or-opts)
+     (connect client nil prompt-or-opts)
+     (connect client prompt-or-opts nil)))
+  ([client prompt opts]
    (ensure-initialized!)
-   (let [runner (get-session-runner client)]
+   (let [runner (get-session-runner client)
+         timeout-s (ms->s (:timeout-ms opts))]
      (try
        (if runner
          ;; Use the session runner (keeps operations in same async task)
-         (py. runner connect prompt)
+         (py. runner connect prompt :timeout timeout-s)
          ;; Fallback for raw Python clients (legacy)
          (let [py-client (get-py-client client)]
            (run-async (if prompt
@@ -420,30 +437,54 @@
        (catch Exception e
          ;; Clean up session runner to prevent thread leak
          (close-client client)
-         (throw (ex-info "Failed to connect client"
-                         {:type :connection-error
-                          :prompt prompt}
-                         e)))))))
+         (let [msg (ex-message e)]
+           (if (and msg (.contains msg "timed out"))
+             (throw (ex-info "Connect operation timed out"
+                             {:type :timeout
+                              :operation :connect
+                              :timeout-ms (:timeout-ms opts)
+                              :prompt prompt}
+                             e))
+             (throw (ex-info "Failed to connect client"
+                             {:type :connection-error
+                              :prompt prompt}
+                             e)))))))))
 
 (defn disconnect
   "Disconnect the client and close the session.
 
-   Blocks until disconnection is complete. Returns nil."
-  [client]
-  (ensure-initialized!)
-  (let [runner (get-session-runner client)]
-    (try
-      (if runner
-        ;; Use the session runner (this also stops its background thread)
-        (py. runner disconnect)
-        ;; Fallback for raw Python clients (legacy)
-        (let [py-client (get-py-client client)]
-          (run-async (py. py-client disconnect))))
-      nil
-      (catch Exception e
-        (throw (ex-info "Failed to disconnect client"
-                        {:type :disconnection-error}
-                        e))))))
+   Blocks until disconnection is complete or timeout expires.
+
+   Options:
+   - :timeout-ms - timeout in milliseconds (nil = no timeout)
+
+   Returns nil.
+   Throws ex-info with :type :timeout if timeout expires."
+  ([client]
+   (disconnect client nil))
+  ([client opts]
+   (ensure-initialized!)
+   (let [runner (get-session-runner client)
+         timeout-s (ms->s (:timeout-ms opts))]
+     (try
+       (if runner
+         ;; Use the session runner (this also stops its background thread)
+         (py. runner disconnect :timeout timeout-s)
+         ;; Fallback for raw Python clients (legacy)
+         (let [py-client (get-py-client client)]
+           (run-async (py. py-client disconnect))))
+       nil
+       (catch Exception e
+         (let [msg (ex-message e)]
+           (if (and msg (.contains msg "timed out"))
+             (throw (ex-info "Disconnect operation timed out"
+                             {:type :timeout
+                              :operation :disconnect
+                              :timeout-ms (:timeout-ms opts)}
+                             e))
+             (throw (ex-info "Failed to disconnect client"
+                             {:type :disconnection-error}
+                             e)))))))))
 
 ;;; Data-driven Field Extraction
 
@@ -615,31 +656,46 @@
    - :messages - vector of parsed Message maps
    - :session-id - session ID from the ResultMessage (nil if not found)
 
-   The client must be connected before calling query."
-  [client prompt]
-  (ensure-initialized!)
-  (let [runner (get-session-runner client)]
-    (try
-      (let [py-messages (if runner
-                          ;; Use session runner's query method
-                          (py. runner query prompt)
-                          ;; Fallback for raw Python clients (legacy)
-                          (let [py-client (get-py-client client)
-                                coroutine (make-query-and-receive-coroutine py-client prompt)]
-                            (run-async coroutine)))
-            messages (mapv parse-message (py/as-list py-messages))
-            ;; Extract session-id from the ResultMessage
-            session-id (->> messages
-                            (filter #(= :result-message (:type %)))
-                            first
-                            :session-id)]
-        {:messages messages
-         :session-id session-id})
-      (catch Exception e
-        (throw (ex-info "Failed to query client"
-                        {:type :query-error
-                         :prompt prompt}
-                        e))))))
+   Options:
+   - :timeout-ms - timeout in milliseconds (nil = no timeout)
+
+   The client must be connected before calling query.
+   Throws ex-info with :type :timeout if timeout expires."
+  ([client prompt]
+   (query client prompt nil))
+  ([client prompt opts]
+   (ensure-initialized!)
+   (let [runner (get-session-runner client)
+         timeout-s (ms->s (:timeout-ms opts))]
+     (try
+       (let [py-messages (if runner
+                           ;; Use session runner's query method
+                           (py. runner query prompt :timeout timeout-s)
+                           ;; Fallback for raw Python clients (legacy)
+                           (let [py-client (get-py-client client)
+                                 coroutine (make-query-and-receive-coroutine py-client prompt)]
+                             (run-async coroutine)))
+             messages (mapv parse-message (py/as-list py-messages))
+             ;; Extract session-id from the ResultMessage
+             session-id (->> messages
+                             (filter #(= :result-message (:type %)))
+                             first
+                             :session-id)]
+         {:messages messages
+          :session-id session-id})
+       (catch Exception e
+         (let [msg (ex-message e)]
+           (if (and msg (.contains msg "timed out"))
+             (throw (ex-info "Query operation timed out"
+                             {:type :timeout
+                              :operation :query
+                              :timeout-ms (:timeout-ms opts)
+                              :prompt prompt}
+                             e))
+             (throw (ex-info "Failed to query client"
+                             {:type :query-error
+                              :prompt prompt}
+                             e)))))))))
 
 ;;; Session Management
 
@@ -674,13 +730,18 @@
   "Query using a TrackedClient, updating the session-id atom.
 
    Like query, but captures the session-id for later retrieval.
-   Use within with-session macro."
-  [tracked-client prompt]
-  (let [{:keys [client session-id-atom]} tracked-client
-        result (query client prompt)]
-    (when-let [sid (:session-id result)]
-      (reset! session-id-atom sid))
-    result))
+   Use within with-session macro.
+
+   Options:
+   - :timeout-ms - timeout in milliseconds (nil = no timeout)"
+  ([tracked-client prompt]
+   (session-query tracked-client prompt nil))
+  ([tracked-client prompt opts]
+   (let [{:keys [client session-id-atom]} tracked-client
+         result (query client prompt opts)]
+     (when-let [sid (:session-id result)]
+       (reset! session-id-atom sid))
+     result)))
 
 (defn get-session-id
   "Get the current session-id from a TrackedClient."

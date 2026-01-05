@@ -74,27 +74,53 @@ class ClientSessionRunner:
             except Exception as e:
                 result_future.set_exception(e)
 
-    def _send_command(self, cmd_type, args=None):
-        """Send a command and wait for result."""
+    def _send_command(self, cmd_type, args=None, timeout=None):
+        """Send a command and wait for result.
+
+        Args:
+            cmd_type: The command type string
+            args: Optional dict of command arguments
+            timeout: Optional timeout in seconds. None means wait indefinitely.
+
+        Raises:
+            TimeoutError: If timeout expires before command completes
+        """
         result_holder = concurrent.futures.Future()
         self._command_queue.put((cmd_type, args or {}, result_holder))
-        return result_holder.result()
+        try:
+            return result_holder.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(f"{cmd_type} operation timed out after {timeout}s")
 
-    def connect(self, prompt=None):
-        """Connect the client."""
-        return self._send_command("connect", {"prompt": prompt})
+    def connect(self, prompt=None, timeout=None):
+        """Connect the client.
 
-    def query(self, prompt):
-        """Send a query and receive response."""
-        return self._send_command("query", {"prompt": prompt})
+        Args:
+            prompt: Optional initial prompt string
+            timeout: Optional timeout in seconds
+        """
+        return self._send_command("connect", {"prompt": prompt}, timeout=timeout)
 
-    def disconnect(self):
-        """Disconnect the client."""
-        return self._send_command("disconnect")
+    def query(self, prompt, timeout=None):
+        """Send a query and receive response.
+
+        Args:
+            prompt: The prompt to send
+            timeout: Optional timeout in seconds
+        """
+        return self._send_command("query", {"prompt": prompt}, timeout=timeout)
+
+    def disconnect(self, timeout=None):
+        """Disconnect the client.
+
+        Args:
+            timeout: Optional timeout in seconds
+        """
+        return self._send_command("disconnect", timeout=timeout)
 
     def close(self):
         """Shutdown the runner without disconnecting."""
-        self._send_command("shutdown")
+        self._send_command("shutdown", timeout=5.0)
         self._thread.join(timeout=5.0)
 
 

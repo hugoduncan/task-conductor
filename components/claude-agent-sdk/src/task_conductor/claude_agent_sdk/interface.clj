@@ -103,21 +103,35 @@
 (defn connect
   "Connect the client to establish a session.
 
-   Optionally accepts an initial prompt string. Blocks until connection
-   is established.
+   Optionally accepts an initial prompt string and/or options map.
+   Blocks until connection is established or timeout expires.
 
-   Returns the client for chaining."
+   Options:
+   - :timeout-ms - timeout in milliseconds (nil = no timeout)
+
+   Returns the client for chaining.
+   Throws ex-info with :type :timeout if timeout expires."
   ([client]
    (core/connect client))
-  ([client prompt]
-   (core/connect client prompt)))
+  ([client prompt-or-opts]
+   (core/connect client prompt-or-opts))
+  ([client prompt opts]
+   (core/connect client prompt opts)))
 
 (defn disconnect
   "Disconnect the client and close the session.
 
-   Blocks until disconnection is complete. Returns nil."
-  [client]
-  (core/disconnect client))
+   Blocks until disconnection is complete or timeout expires.
+
+   Options:
+   - :timeout-ms - timeout in milliseconds (nil = no timeout)
+
+   Returns nil.
+   Throws ex-info with :type :timeout if timeout expires."
+  ([client]
+   (core/disconnect client))
+  ([client opts]
+   (core/disconnect client opts)))
 
 (defn close-client
   "Close the session runner without disconnecting the client session.
@@ -164,15 +178,21 @@
    - :messages - vector of parsed Message maps
    - :session-id - session ID from the ResultMessage (nil if not found)
 
+   Options:
+   - :timeout-ms - timeout in milliseconds (nil = no timeout)
+
    The client must be connected before calling query.
+   Throws ex-info with :type :timeout if timeout expires.
 
    Example response:
    {:messages [{:type :user-message :content \"Hello\"}
                {:type :assistant-message :content [...] :model \"claude-sonnet-4-...\"}
                {:type :result-message :session-id \"abc123\" ...}]
     :session-id \"abc123\"}"
-  [client prompt]
-  (core/query client prompt))
+  ([client prompt]
+   (core/query client prompt))
+  ([client prompt opts]
+   (core/query client prompt opts)))
 
 ;;; Session Management
 
@@ -197,9 +217,14 @@
   "Query using a TrackedClient, updating the session-id atom.
 
    Like query, but captures the session-id for later retrieval.
-   Use within with-session macro."
-  [tracked-client prompt]
-  (core/session-query tracked-client prompt))
+   Use within with-session macro.
+
+   Options:
+   - :timeout-ms - timeout in milliseconds (nil = no timeout)"
+  ([tracked-client prompt]
+   (core/session-query tracked-client prompt))
+  ([tracked-client prompt opts]
+   (core/session-query tracked-client prompt opts)))
 
 (defn get-session-id
   "Get the current session-id from a TrackedClient."

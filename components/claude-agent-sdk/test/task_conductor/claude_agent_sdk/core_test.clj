@@ -430,7 +430,7 @@
             tracked ((resolve 'task-conductor.claude-agent-sdk.core/->TrackedClient)
                      raw-client session-atom)]
         (with-redefs [task-conductor.claude-agent-sdk.core/query
-                      (fn [_client _prompt]
+                      (fn [_client _prompt _opts]
                         {:messages [{:type :result-message
                                      :session-id "captured-id"}]
                          :session-id "captured-id"})]
@@ -449,7 +449,7 @@
                                          :content "Hello!"}]
                              :session-id nil}]
         (with-redefs [task-conductor.claude-agent-sdk.core/query
-                      (fn [_client _prompt] expected-result)]
+                      (fn [_client _prompt _opts] expected-result)]
           (let [result (sdk/session-query tracked "test")]
             (is (= expected-result result)
                 "should return full query result")))))))
@@ -567,3 +567,109 @@ async def _test_failing_coro():
                 "should return converted result")
             (is (vector? result)
                 "result should be a vector")))))))
+
+;;; Timeout Tests
+
+(deftest connect-timeout-test
+  ;; Tests connect timeout parameter handling.
+  (testing "connect with timeout"
+    (testing "when timeout is not specified"
+      (testing "passes nil timeout to Python"
+        (let [timeout-passed (atom :not-called)]
+          (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                        (fn [_] nil)
+                        task-conductor.claude-agent-sdk.core/run-async
+                        (fn [_coro]
+                          (reset! timeout-passed nil)
+                          nil)]
+            (let [client (sdk/create-client)]
+              (sdk/connect client)
+              (is (nil? @timeout-passed)))))))
+
+    (testing "when timeout-ms is provided"
+      (testing "throws ex-info with :timeout type on timeout"
+        (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                      (fn [_] nil)
+                      task-conductor.claude-agent-sdk.core/run-async
+                      (fn [_coro]
+                        (throw (Exception. "connect operation timed out after 5.0s")))]
+          (let [client (sdk/create-client)
+                ex (try
+                     (sdk/connect client nil {:timeout-ms 5000})
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+            (is (some? ex)
+                "should throw an exception")
+            (is (= :timeout (:type (ex-data ex)))
+                "should have :timeout type")
+            (is (= :connect (:operation (ex-data ex)))
+                "should have :connect operation")
+            (is (= 5000 (:timeout-ms (ex-data ex)))
+                "should include timeout-ms in ex-data")))))))
+
+(deftest disconnect-timeout-test
+  ;; Tests disconnect timeout parameter handling.
+  (testing "disconnect with timeout"
+    (testing "when timeout-ms is provided"
+      (testing "throws ex-info with :timeout type on timeout"
+        (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                      (fn [_] nil)
+                      task-conductor.claude-agent-sdk.core/run-async
+                      (fn [_coro]
+                        (throw (Exception. "disconnect operation timed out after 3.0s")))]
+          (let [client (sdk/create-client)
+                ex (try
+                     (sdk/disconnect client {:timeout-ms 3000})
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+            (is (some? ex)
+                "should throw an exception")
+            (is (= :timeout (:type (ex-data ex)))
+                "should have :timeout type")
+            (is (= :disconnect (:operation (ex-data ex)))
+                "should have :disconnect operation")
+            (is (= 3000 (:timeout-ms (ex-data ex)))
+                "should include timeout-ms in ex-data")))))))
+
+(deftest query-timeout-test
+  ;; Tests query timeout parameter handling.
+  (testing "query with timeout"
+    (testing "when timeout-ms is provided"
+      (testing "throws ex-info with :timeout type on timeout"
+        (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                      (fn [_] nil)
+                      task-conductor.claude-agent-sdk.core/run-async
+                      (fn [_coro]
+                        (throw (Exception. "query operation timed out after 60.0s")))]
+          (let [client (sdk/create-client)
+                ex (try
+                     (sdk/query client "test" {:timeout-ms 60000})
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+            (is (some? ex)
+                "should throw an exception")
+            (is (= :timeout (:type (ex-data ex)))
+                "should have :timeout type")
+            (is (= :query (:operation (ex-data ex)))
+                "should have :query operation")
+            (is (= 60000 (:timeout-ms (ex-data ex)))
+                "should include timeout-ms in ex-data")
+            (is (= "test" (:prompt (ex-data ex)))
+                "should include prompt in ex-data")))))))
+
+(deftest session-query-timeout-test
+  ;; Tests session-query timeout parameter handling.
+  (testing "session-query with timeout"
+    (testing "passes timeout to underlying query"
+      (let [opts-passed (atom nil)
+            raw-client (sdk/create-client)
+            session-atom (atom nil)
+            tracked ((resolve 'task-conductor.claude-agent-sdk.core/->TrackedClient)
+                     raw-client session-atom)]
+        (with-redefs [task-conductor.claude-agent-sdk.core/query
+                      (fn [_client _prompt opts]
+                        (reset! opts-passed opts)
+                        {:messages [] :session-id nil})]
+          (sdk/session-query tracked "test" {:timeout-ms 10000})
+          (is (= {:timeout-ms 10000} @opts-passed)
+              "should pass opts to query"))))))
