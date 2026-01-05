@@ -383,3 +383,64 @@
         (reset! session-atom "test-session-456")
         (is (= "test-session-456" (sdk/get-session-id tracked))
             "should return the session-id from atom")))))
+
+(deftest collect-async-iterator-test
+  ;; Tests collect-async-iterator with mocked async operations.
+  ;; Verifies that the function collects items from an async iterator,
+  ;; runs the collector coroutine, and converts the result to Clojure.
+  (testing "collect-async-iterator"
+    (testing "collects items from mock async iterator"
+      (let [mock-iter :mock-async-iter
+            collector-called (atom nil)
+            run-async-called (atom nil)
+            py->clj-called (atom nil)]
+        (with-redefs [task-conductor.claude-agent-sdk.core/make-collector-coroutine
+                      (fn [async-iter]
+                        (reset! collector-called async-iter)
+                        :mock-coroutine)
+                      task-conductor.claude-agent-sdk.core/run-async
+                      (fn [coro]
+                        (reset! run-async-called coro)
+                        :raw-py-result)
+                      task-conductor.claude-agent-sdk.core/py->clj
+                      (fn [obj]
+                        (reset! py->clj-called obj)
+                        ["item1" "item2" "item3"])]
+          (let [result (sdk/collect-async-iterator mock-iter)]
+            (is (= mock-iter @collector-called)
+                "should pass async-iter to make-collector-coroutine")
+            (is (= :mock-coroutine @run-async-called)
+                "should pass coroutine to run-async")
+            (is (= :raw-py-result @py->clj-called)
+                "should pass run-async result to py->clj")
+            (is (= ["item1" "item2" "item3"] result)
+                "should return py->clj converted result")))))
+
+    (testing "returns empty vector for empty iterator"
+      (with-redefs [task-conductor.claude-agent-sdk.core/make-collector-coroutine
+                    (fn [_] :empty-coroutine)
+                    task-conductor.claude-agent-sdk.core/run-async
+                    (fn [_] :empty-py-list)
+                    task-conductor.claude-agent-sdk.core/py->clj
+                    (fn [_] [])]
+        (let [result (sdk/collect-async-iterator :empty-iter)]
+          (is (= [] result)
+              "should return empty vector"))))
+
+    (testing "applies py->clj conversion to results"
+      (let [conversion-input (atom nil)]
+        (with-redefs [task-conductor.claude-agent-sdk.core/make-collector-coroutine
+                      (fn [_] :coro)
+                      task-conductor.claude-agent-sdk.core/run-async
+                      (fn [_] :py-list-of-numbers)
+                      task-conductor.claude-agent-sdk.core/py->clj
+                      (fn [obj]
+                        (reset! conversion-input obj)
+                        [1 2 3])]
+          (let [result (sdk/collect-async-iterator :iter)]
+            (is (= :py-list-of-numbers @conversion-input)
+                "should convert run-async result")
+            (is (= [1 2 3] result)
+                "should return converted result")
+            (is (vector? result)
+                "result should be a vector")))))))
