@@ -64,9 +64,98 @@
                 :inspect (py/import-module "inspect")
                 :dataclasses (py/import-module "dataclasses")})
 
-       ;; Define Python helper coroutines once
+       ;; Define Python helper classes and coroutines once
        (py/run-simple-string
         "
+import asyncio
+import threading
+import queue
+
+class ClientSessionRunner:
+    '''Runs client operations in a single persistent async Task.
+
+    This ensures all async operations run in the same task context,
+    which is required by anyio's cancel scope tracking. Commands are
+    sent via a thread-safe queue and results returned via futures.
+    '''
+    def __init__(self, client):
+        self.client = client
+        self.loop = asyncio.new_event_loop()
+        self._command_queue = queue.Queue()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._running = True
+        self._thread.start()
+
+    def _run_loop(self):
+        '''Run the event loop in the background thread.'''
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self._process_commands())
+
+    async def _process_commands(self):
+        '''Process commands from the queue in a single async task.'''
+        while self._running:
+            try:
+                # Check for commands with a timeout to allow shutdown
+                cmd = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self._command_queue.get(timeout=0.1))
+            except queue.Empty:
+                continue
+
+            cmd_type, args, result_future = cmd
+
+            try:
+                if cmd_type == 'connect':
+                    prompt = args.get('prompt')
+                    if prompt:
+                        await self.client.connect(prompt)
+                    else:
+                        await self.client.connect()
+                    result_future.set_result(None)
+
+                elif cmd_type == 'query':
+                    prompt = args['prompt']
+                    await self.client.query(prompt)
+                    messages = []
+                    async for msg in self.client.receive_response():
+                        messages.append(msg)
+                    result_future.set_result(messages)
+
+                elif cmd_type == 'disconnect':
+                    await self.client.disconnect()
+                    self._running = False
+                    result_future.set_result(None)
+
+                elif cmd_type == 'shutdown':
+                    self._running = False
+                    result_future.set_result(None)
+
+            except Exception as e:
+                result_future.set_exception(e)
+
+    def _send_command(self, cmd_type, args=None):
+        '''Send a command and wait for result.'''
+        import concurrent.futures
+        result_holder = concurrent.futures.Future()
+        self._command_queue.put((cmd_type, args or {}, result_holder))
+        return result_holder.result()
+
+    def connect(self, prompt=None):
+        '''Connect the client.'''
+        return self._send_command('connect', {'prompt': prompt})
+
+    def query(self, prompt):
+        '''Send a query and receive response.'''
+        return self._send_command('query', {'prompt': prompt})
+
+    def disconnect(self):
+        '''Disconnect the client.'''
+        return self._send_command('disconnect')
+
+    def close(self):
+        '''Shutdown the runner without disconnecting.'''
+        self._send_command('shutdown')
+        self._thread.join(timeout=5.0)
+
 async def _collect_async_iter(aiter):
     result = []
     async for item in aiter:
@@ -82,6 +171,7 @@ async def _query_and_receive(client, prompt):
 ")
        (let [main-module (py/import-module "__main__")]
          (swap! modules assoc
+                :session-runner-class (py/get-attr main-module "ClientSessionRunner")
                 :collect-async-iter (py/get-attr main-module "_collect_async_iter")
                 :query-and-receive (py/get-attr main-module "_query_and_receive")))
 
@@ -183,11 +273,51 @@ async def _query_and_receive(client, prompt):
   "Run a Python coroutine synchronously, blocking until complete.
 
    Uses asyncio.run() to execute the coroutine in a new event loop.
-   Returns the result of the coroutine."
+   Returns the result of the coroutine.
+
+   Note: For client operations, use the session runner instead to maintain
+   a consistent async task across connect/query/disconnect calls."
   [coroutine]
   (ensure-initialized!)
   (let [asyncio (:asyncio @modules)]
     (py. asyncio run coroutine)))
+
+(defn- create-session-runner
+  "Create a ClientSessionRunner for the given Python client."
+  [py-client]
+  (ensure-initialized!)
+  (let [runner-class (:session-runner-class @modules)]
+    (runner-class py-client)))
+
+;;; Managed Client
+;; Wraps a Python client with its session runner.
+
+(defrecord ManagedClient [py-client session-runner])
+
+(defn managed-client?
+  "Returns true if x is a ManagedClient."
+  [x]
+  (instance? ManagedClient x))
+
+(defn get-py-client
+  "Get the underlying Python client from a ManagedClient or return as-is."
+  [client]
+  (if (managed-client? client)
+    (:py-client client)
+    client))
+
+(defn get-session-runner
+  "Get the session runner from a ManagedClient."
+  [client]
+  (when (managed-client? client)
+    (:session-runner client)))
+
+;; Legacy alias for compatibility
+(defn get-loop-runner
+  "Get the event loop runner from a ManagedClient (legacy, returns session-runner)."
+  [client]
+  (when (managed-client? client)
+    (:loop-runner client)))
 
 (defn- make-collector-coroutine
   "Create a Python coroutine that collects all items from an async iterator."
@@ -298,19 +428,22 @@ async def _query_and_receive(client, prompt):
 ;;; Client Lifecycle
 
 (defn create-client
-  "Create a ClaudeSDKClient instance.
+  "Create a ClaudeSDKClient instance wrapped in a ManagedClient.
 
    Options map is passed to make-options to create ClaudeAgentOptions.
-   Returns the Python ClaudeSDKClient instance."
+   Returns a ManagedClient containing the Python ClaudeSDKClient and
+   a session runner for executing async operations in a single task context."
   ([]
    (create-client nil))
   ([opts]
    (ensure-initialized!)
    (let [sdk (:sdk @modules)
-         client-class (py/get-attr sdk "ClaudeSDKClient")]
-     (if opts
-       (client-class :options (make-options opts))
-       (client-class)))))
+         client-class (py/get-attr sdk "ClaudeSDKClient")
+         py-client (if opts
+                     (client-class :options (make-options opts))
+                     (client-class))
+         session-runner (create-session-runner py-client)]
+     (->ManagedClient py-client session-runner))))
 
 (defn connect
   "Connect the client to establish a session.
@@ -323,16 +456,22 @@ async def _query_and_receive(client, prompt):
    (connect client nil))
   ([client prompt]
    (ensure-initialized!)
-   (try
-     (run-async (if prompt
-                  (py. client connect prompt)
-                  (py. client connect)))
-     client
-     (catch Exception e
-       (throw (ex-info "Failed to connect client"
-                       {:type :connection-error
-                        :prompt prompt}
-                       e))))))
+   (let [runner (get-session-runner client)]
+     (try
+       (if runner
+         ;; Use the session runner (keeps operations in same async task)
+         (py. runner connect prompt)
+         ;; Fallback for raw Python clients (legacy)
+         (let [py-client (get-py-client client)]
+           (run-async (if prompt
+                        (py. py-client connect prompt)
+                        (py. py-client connect)))))
+       client
+       (catch Exception e
+         (throw (ex-info "Failed to connect client"
+                         {:type :connection-error
+                          :prompt prompt}
+                         e)))))))
 
 (defn disconnect
   "Disconnect the client and close the session.
@@ -340,13 +479,19 @@ async def _query_and_receive(client, prompt):
    Blocks until disconnection is complete. Returns nil."
   [client]
   (ensure-initialized!)
-  (try
-    (run-async (py. client disconnect))
-    nil
-    (catch Exception e
-      (throw (ex-info "Failed to disconnect client"
-                      {:type :disconnection-error}
-                      e)))))
+  (let [runner (get-session-runner client)]
+    (try
+      (if runner
+        ;; Use the session runner (this also stops its background thread)
+        (py. runner disconnect)
+        ;; Fallback for raw Python clients (legacy)
+        (let [py-client (get-py-client client)]
+          (run-async (py. py-client disconnect))))
+      nil
+      (catch Exception e
+        (throw (ex-info "Failed to disconnect client"
+                        {:type :disconnection-error}
+                        e))))))
 
 ;;; ContentBlock Parsing
 
@@ -356,11 +501,11 @@ async def _query_and_receive(client, prompt):
    Returns nil if the object is nil or if the type cannot be determined."
   [obj]
   (when obj
-    (when-let [py-type (py/python-type obj)]
-      (try
-        (py.- py-type __name__)
-        (catch Exception _
-          nil)))))
+    (try
+      ;; Use obj.__class__.__name__ since py/python-type returns a keyword
+      (py.- (py.- obj __class__) __name__)
+      (catch Exception _
+        nil))))
 
 (defn parse-content-block
   "Parse a Python ContentBlock into a Clojure map with :type discriminator.
@@ -506,21 +651,28 @@ async def _query_and_receive(client, prompt):
    The client must be connected before calling query."
   [client prompt]
   (ensure-initialized!)
-  (try
-    (let [py-messages (run-async (make-query-and-receive-coroutine client prompt))
-          messages (mapv parse-message (py/as-list py-messages))
-          ;; Extract session-id from the ResultMessage
-          session-id (->> messages
-                          (filter #(= :result-message (:type %)))
-                          first
-                          :session-id)]
-      {:messages messages
-       :session-id session-id})
-    (catch Exception e
-      (throw (ex-info "Failed to query client"
-                      {:type :query-error
-                       :prompt prompt}
-                      e)))))
+  (let [runner (get-session-runner client)]
+    (try
+      (let [py-messages (if runner
+                          ;; Use session runner's query method
+                          (py. runner query prompt)
+                          ;; Fallback for raw Python clients (legacy)
+                          (let [py-client (get-py-client client)
+                                coroutine (make-query-and-receive-coroutine py-client prompt)]
+                            (run-async coroutine)))
+            messages (mapv parse-message (py/as-list py-messages))
+            ;; Extract session-id from the ResultMessage
+            session-id (->> messages
+                            (filter #(= :result-message (:type %)))
+                            first
+                            :session-id)]
+        {:messages messages
+         :session-id session-id})
+      (catch Exception e
+        (throw (ex-info "Failed to query client"
+                        {:type :query-error
+                         :prompt prompt}
+                        e))))))
 
 ;;; Session Management
 
@@ -544,9 +696,10 @@ async def _query_and_receive(client, prompt):
   @(:session-id-atom tracked-client))
 
 (defn get-raw-client
-  "Get the underlying Python client from a TrackedClient."
+  "Get the underlying Python client from a TrackedClient or ManagedClient."
   [tracked-client]
-  (:client tracked-client))
+  (let [client (:client tracked-client)]
+    (get-py-client client)))
 
 (defmacro with-session
   "Execute body with a session-managed Claude client.

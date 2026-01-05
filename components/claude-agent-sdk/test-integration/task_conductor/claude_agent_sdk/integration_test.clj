@@ -99,6 +99,8 @@
 
 (deftest live-message-parsing-test
   ;; Tests that live responses are correctly parsed into Clojure data.
+  ;; Note: SDK returns received messages (system, assistant, result),
+  ;; not the sent user message.
   (with-auth-skip
     (testing "message parsing"
       (let [client (sdk/create-client {:max-turns 1
@@ -108,10 +110,10 @@
           (let [result (sdk/query client "Reply: test")
                 messages (:messages result)]
 
-            (testing "includes user message"
-              (let [user-msgs (filter #(= :user-message (:type %)) messages)]
-                (is (seq user-msgs)
-                    "should have user message")))
+            (testing "includes system message (init)"
+              (let [sys-msgs (filter #(= :system-message (:type %)) messages)]
+                (is (seq sys-msgs)
+                    "should have system message")))
 
             (testing "includes assistant message with content"
               (let [assistant-msgs (filter #(= :assistant-message (:type %))

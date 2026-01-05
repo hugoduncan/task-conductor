@@ -11,7 +11,9 @@
    [is_dataclass
     fields
     run
+    close
     ;; Python attribute names used with py.- macro
+    __class__
     __name__
     text
     thinking

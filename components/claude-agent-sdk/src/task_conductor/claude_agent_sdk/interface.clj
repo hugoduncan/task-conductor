@@ -251,6 +251,21 @@
   [tracked-client]
   (core/get-raw-client tracked-client))
 
+(defn managed-client?
+  "Returns true if x is a ManagedClient."
+  [x]
+  (core/managed-client? x))
+
+(defn get-py-client
+  "Get the underlying Python client from a ManagedClient or return as-is."
+  [client]
+  (core/get-py-client client))
+
+(defn get-loop-runner
+  "Get the event loop runner from a ManagedClient."
+  [client]
+  (core/get-loop-runner client))
+
 (defn make-tracked-client
   "Create a TrackedClient wrapping a raw Python client.
 

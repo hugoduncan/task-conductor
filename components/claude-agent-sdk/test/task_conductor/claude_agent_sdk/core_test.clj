@@ -186,84 +186,95 @@
 ;; without live Python/SDK calls.
 
 (deftest connect-mocked-test
-  ;; Tests connect error handling with mocked run-async.
+  ;; Tests connect error handling with mocked session runner.
   (testing "connect"
     (testing "when connection succeeds"
       (testing "returns the client"
-        (let [client (sdk/create-client)
-              run-async-called (atom false)]
-          (with-redefs [task-conductor.claude-agent-sdk.core/run-async
+        (let [connect-called (atom false)]
+          ;; Mock session runner creation to return nil, forcing legacy path
+          (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                        (fn [_] nil)
+                        task-conductor.claude-agent-sdk.core/run-async
                         (fn [_coro]
-                          (reset! run-async-called true)
+                          (reset! connect-called true)
                           nil)]
-            (let [result (sdk/connect client)]
+            (let [client (sdk/create-client)
+                  result (sdk/connect client)]
               (is (= client result)
                   "should return the same client")
-              (is @run-async-called
+              (is @connect-called
                   "should call run-async"))))))
 
     (testing "when connection fails"
       (testing "throws ex-info with :connection-error type"
-        (let [client (sdk/create-client)]
-          (with-redefs [task-conductor.claude-agent-sdk.core/run-async
-                        (fn [_coro]
-                          (throw (Exception. "Connection refused")))]
-            (let [ex (try
-                       (sdk/connect client "hello")
-                       nil
-                       (catch clojure.lang.ExceptionInfo e e))]
-              (is (some? ex)
-                  "should throw an exception")
-              (is (= :connection-error (:type (ex-data ex)))
-                  "should have :connection-error type")
-              (is (= "hello" (:prompt (ex-data ex)))
-                  "should include prompt in ex-data"))))))))
+        (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                      (fn [_] nil)
+                      task-conductor.claude-agent-sdk.core/run-async
+                      (fn [_coro]
+                        (throw (Exception. "Connection refused")))]
+          (let [client (sdk/create-client)
+                ex (try
+                     (sdk/connect client "hello")
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+            (is (some? ex)
+                "should throw an exception")
+            (is (= :connection-error (:type (ex-data ex)))
+                "should have :connection-error type")
+            (is (= "hello" (:prompt (ex-data ex)))
+                "should include prompt in ex-data")))))))
 
 (deftest disconnect-mocked-test
-  ;; Tests disconnect error handling with mocked run-async.
+  ;; Tests disconnect error handling with mocked session runner.
   (testing "disconnect"
     (testing "when disconnection succeeds"
       (testing "returns nil"
-        (let [client (sdk/create-client)]
-          (with-redefs [task-conductor.claude-agent-sdk.core/run-async
-                        (fn [_coro] nil)]
+        (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                      (fn [_] nil)
+                      task-conductor.claude-agent-sdk.core/run-async
+                      (fn [_coro] nil)]
+          (let [client (sdk/create-client)]
             (is (nil? (sdk/disconnect client))
                 "should return nil")))))
 
     (testing "when disconnection fails"
       (testing "throws ex-info with :disconnection-error type"
-        (let [client (sdk/create-client)]
-          (with-redefs [task-conductor.claude-agent-sdk.core/run-async
-                        (fn [_coro]
-                          (throw (Exception. "Disconnect failed")))]
-            (let [ex (try
-                       (sdk/disconnect client)
-                       nil
-                       (catch clojure.lang.ExceptionInfo e e))]
-              (is (some? ex)
-                  "should throw an exception")
-              (is (= :disconnection-error (:type (ex-data ex)))
-                  "should have :disconnection-error type"))))))))
+        (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                      (fn [_] nil)
+                      task-conductor.claude-agent-sdk.core/run-async
+                      (fn [_coro]
+                        (throw (Exception. "Disconnect failed")))]
+          (let [client (sdk/create-client)
+                ex (try
+                     (sdk/disconnect client)
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+            (is (some? ex)
+                "should throw an exception")
+            (is (= :disconnection-error (:type (ex-data ex)))
+                "should have :disconnection-error type")))))))
 
 (deftest query-mocked-test
   ;; Tests query function with mocked async operations.
   (testing "query"
     (testing "when query fails"
       (testing "throws ex-info with :query-error type"
-        (let [client (sdk/create-client)]
-          (with-redefs [task-conductor.claude-agent-sdk.core/run-async
-                        (fn [_coro]
-                          (throw (Exception. "Query timeout")))]
-            (let [ex (try
-                       (sdk/query client "test prompt")
-                       nil
-                       (catch clojure.lang.ExceptionInfo e e))]
-              (is (some? ex)
-                  "should throw an exception")
-              (is (= :query-error (:type (ex-data ex)))
-                  "should have :query-error type")
-              (is (= "test prompt" (:prompt (ex-data ex)))
-                  "should include prompt in ex-data"))))))))
+        (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
+                      (fn [_] nil)
+                      task-conductor.claude-agent-sdk.core/run-async
+                      (fn [_coro]
+                        (throw (Exception. "Query timeout")))]
+          (let [client (sdk/create-client)
+                ex (try
+                     (sdk/query client "test prompt")
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+            (is (some? ex)
+                "should throw an exception")
+            (is (= :query-error (:type (ex-data ex)))
+                "should have :query-error type")
+            (is (= "test prompt" (:prompt (ex-data ex)))
+                "should include prompt in ex-data")))))))
 
 (deftest with-session-mocked-test
   ;; Tests with-session macro flow with mocked operations.
@@ -353,14 +364,15 @@
 (deftest tracked-client-test
   ;; Verifies TrackedClient record and accessors.
   (testing "TrackedClient"
-    (let [raw-client (sdk/create-client)
+    (let [managed-client (sdk/create-client)
+          py-client (sdk/get-py-client managed-client)
           session-atom (atom nil)
           ;; Using resolved var since core is loaded after py/initialize!
           tracked ((resolve 'task-conductor.claude-agent-sdk.core/->TrackedClient)
-                   raw-client session-atom)]
+                   managed-client session-atom)]
 
-      (testing "get-raw-client returns the underlying client"
-        (is (= raw-client (sdk/get-raw-client tracked))
+      (testing "get-raw-client returns the underlying Python client"
+        (is (= py-client (sdk/get-raw-client tracked))
             "should return the raw Python client"))
 
       (testing "get-session-id returns nil initially"
