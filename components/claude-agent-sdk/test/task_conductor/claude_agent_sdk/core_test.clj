@@ -8,7 +8,7 @@
   (:require
    [clojure.java.io :as io]
    [clojure.test :refer [deftest is testing]]
-   [libpython-clj2.python :as py :refer [py.]]))
+   [libpython-clj2.python :as py :refer [py. py.-]]))
 
 (def ^:private venv-path
   "Relative path to venv from project root."
@@ -52,10 +52,14 @@
 (deftest get-sdk-module-test
   ;; Verifies SDK module is accessible after initialization.
   (testing "get-sdk-module"
-    (testing "returns the claude_agent_sdk module"
+    (testing "returns the claude_agent_sdk module with expected classes"
       (let [sdk-mod (core/get-sdk-module)]
         (is (some? sdk-mod)
-            "should return a non-nil module")))))
+            "should return a non-nil module")
+        (is (some? (py/get-attr sdk-mod "ClaudeSDKClient"))
+            "should have ClaudeSDKClient class")
+        (is (some? (py/get-attr sdk-mod "ClaudeAgentOptions"))
+            "should have ClaudeAgentOptions class")))))
 
 (deftest py->clj-test
   ;; Verifies Python to Clojure type conversion.
@@ -80,34 +84,40 @@
     (testing "creates options with allowed-tools"
       (let [opts (sdk/make-options {:allowed-tools ["Read" "Write"]})]
         (is (some? opts)
-            "should create a non-nil options object")))
+            "should create a non-nil options object")
+        (is (= ["Read" "Write"] (vec (py.- opts allowed_tools)))
+            "should set allowed_tools attribute")))
 
     (testing "creates options with disallowed-tools"
       (let [opts (sdk/make-options {:disallowed-tools ["Bash"]})]
-        (is (some? opts)
-            "should create options with disallowed-tools")))
+        (is (= ["Bash"] (vec (py.- opts disallowed_tools)))
+            "should set disallowed_tools attribute")))
 
     (testing "creates options with cwd"
       (let [opts (sdk/make-options {:cwd "/tmp"})]
-        (is (some? opts)
-            "should create options with cwd set")))
+        (is (= "/tmp" (py.- opts cwd))
+            "should set cwd attribute")))
 
     (testing "creates options with permission-mode"
       (let [opts (sdk/make-options {:permission-mode "bypassPermissions"})]
-        (is (some? opts)
-            "should create options with permission-mode")))
+        (is (= "bypassPermissions" (py.- opts permission_mode))
+            "should set permission_mode attribute")))
 
     (testing "creates options with env"
       (let [opts (sdk/make-options {:env {"MY_VAR" "value"}})]
-        (is (some? opts)
-            "should create options with env map")))
+        (is (= {"MY_VAR" "value"} (into {} (py.- opts env)))
+            "should set env attribute as dict")))
 
     (testing "creates options with multiple settings"
       (let [opts (sdk/make-options {:allowed-tools ["Bash"]
                                     :permission-mode "acceptEdits"
                                     :max-turns 10})]
-        (is (some? opts)
-            "should create options with multiple settings")))
+        (is (= ["Bash"] (vec (py.- opts allowed_tools)))
+            "should set allowed_tools")
+        (is (= "acceptEdits" (py.- opts permission_mode))
+            "should set permission_mode")
+        (is (= 10 (py.- opts max_turns))
+            "should set max_turns")))
 
     (testing "creates options with comprehensive tool configuration"
       (let [opts (sdk/make-options {:allowed-tools ["Read" "Write" "Edit"]
@@ -115,8 +125,16 @@
                                     :permission-mode "plan"
                                     :cwd "/home/user/project"
                                     :max-turns 5})]
-        (is (some? opts)
-            "should create options with full tool configuration")))
+        (is (= ["Read" "Write" "Edit"] (vec (py.- opts allowed_tools)))
+            "should set allowed_tools")
+        (is (= ["Bash"] (vec (py.- opts disallowed_tools)))
+            "should set disallowed_tools")
+        (is (= "plan" (py.- opts permission_mode))
+            "should set permission_mode")
+        (is (= "/home/user/project" (py.- opts cwd))
+            "should set cwd")
+        (is (= 5 (py.- opts max_turns))
+            "should set max_turns")))
 
     (testing "throws on unknown option keys"
       (let [ex (try
@@ -139,18 +157,30 @@
     (testing "creates client without options"
       (let [client (sdk/create-client)]
         (is (some? client)
-            "should create a non-nil client")))
+            "should create a non-nil client")
+        (is (core/managed-client? client)
+            "should return a ManagedClient")
+        (is (some? (sdk/get-py-client client))
+            "should have underlying Python client")))
 
     (testing "creates client with options map"
       (let [client (sdk/create-client {:allowed-tools ["Read"]})]
-        (is (some? client)
-            "should create client with options")))
+        (is (core/managed-client? client)
+            "should return a ManagedClient")
+        (let [py-client (sdk/get-py-client client)
+              options (py.- py-client options)]
+          (is (= ["Read"] (vec (py.- options allowed_tools)))
+              "should pass allowed_tools to Python client"))))
 
     (testing "creates client with cwd option"
       (let [client (sdk/create-client {:cwd "/tmp"
-                                       :permission-mode "default"})]
-        (is (some? client)
-            "should create client with cwd and permission-mode")))))
+                                       :permission-mode "default"})
+            py-client (sdk/get-py-client client)
+            options (py.- py-client options)]
+        (is (= "/tmp" (py.- options cwd))
+            "should set cwd option")
+        (is (= "default" (py.- options permission_mode))
+            "should set permission_mode option")))))
 
 (deftest parse-content-block-test
   ;; Verifies ContentBlock parsing handles nil and unknown types.
@@ -171,28 +201,48 @@
   (testing "resume-client"
     (testing "creates client with session-id only"
       (let [client (sdk/resume-client "test-session-123")]
-        (is (some? client)
-            "should create a non-nil client")))
+        (is (core/managed-client? client)
+            "should return a ManagedClient")
+        (let [py-client (sdk/get-py-client client)
+              options (py.- py-client options)]
+          (is (= "test-session-123" (py.- options resume))
+              "should set resume option to session-id"))))
 
     (testing "creates client with session-id and additional options"
       (let [client (sdk/resume-client "test-session-123"
-                                      {:allowed-tools ["Read"]})]
-        (is (some? client)
-            "should create client with resume and options")))))
+                                      {:allowed-tools ["Read"]})
+            py-client (sdk/get-py-client client)
+            options (py.- py-client options)]
+        (is (= "test-session-123" (py.- options resume))
+            "should set resume option")
+        (is (= ["Read"] (vec (py.- options allowed_tools)))
+            "should set allowed_tools option")))))
 
 (deftest fork-client-test
   ;; Verifies client creation with fork-session option.
   (testing "fork-client"
     (testing "creates client with session-id only"
       (let [client (sdk/fork-client "test-session-123")]
-        (is (some? client)
-            "should create a non-nil client")))
+        (is (core/managed-client? client)
+            "should return a ManagedClient")
+        (let [py-client (sdk/get-py-client client)
+              options (py.- py-client options)]
+          (is (= "test-session-123" (py.- options resume))
+              "should set resume option to session-id")
+          (is (true? (py.- options fork_session))
+              "should set fork_session to true"))))
 
     (testing "creates client with session-id and additional options"
       (let [client (sdk/fork-client "test-session-123"
-                                    {:max-turns 5})]
-        (is (some? client)
-            "should create client with fork and options")))))
+                                    {:max-turns 5})
+            py-client (sdk/get-py-client client)
+            options (py.- py-client options)]
+        (is (= "test-session-123" (py.- options resume))
+            "should set resume option")
+        (is (true? (py.- options fork_session))
+            "should set fork_session to true")
+        (is (= 5 (py.- options max_turns))
+            "should set max_turns option")))))
 
 ;;; Mocked Unit Tests
 ;;

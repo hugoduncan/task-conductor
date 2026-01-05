@@ -39,4 +39,14 @@
     duration_api_ms
     num_turns
     session_id
-    event]}}}
+    event
+    ;; ClaudeAgentOptions attributes (used in tests)
+    allowed_tools
+    disallowed_tools
+    cwd
+    permission_mode
+    env
+    max_turns
+    resume
+    fork_session
+    options]}}}
