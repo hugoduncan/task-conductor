@@ -293,7 +293,7 @@
         (let [close-called (atom false)]
           (with-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
                         (fn [_] nil)
-                        task-conductor.claude-agent-sdk.core/close-runner
+                        task-conductor.claude-agent-sdk.core/close-client
                         (fn [_client]
                           (reset! close-called true)
                           nil)
@@ -305,7 +305,7 @@
                 (sdk/connect client)
                 (catch Exception _))
               (is @close-called
-                  "should call close-runner on connection failure"))))))))
+                  "should call close-client on connection failure"))))))))
 
 (deftest close-client-test
   ;; Tests close-client function for cleaning up session runners.

@@ -226,7 +226,7 @@
   (when (managed-client? client)
     (:session-runner client)))
 
-(defn close-runner
+(defn close-client
   "Close the session runner without disconnecting the client session.
 
    Call this to clean up resources if create-client succeeded but connect
@@ -419,7 +419,7 @@
        client
        (catch Exception e
          ;; Clean up session runner to prevent thread leak
-         (close-runner client)
+         (close-client client)
          (throw (ex-info "Failed to connect client"
                          {:type :connection-error
                           :prompt prompt}

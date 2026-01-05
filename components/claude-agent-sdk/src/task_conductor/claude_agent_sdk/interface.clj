@@ -128,7 +128,7 @@
 
    If connect succeeded, use disconnect instead (which also closes the runner)."
   [client]
-  (core/close-runner client))
+  (core/close-client client))
 
 ;;; Message and ContentBlock Parsing
 
