@@ -4,11 +4,19 @@ set -euo pipefail
 # Pre-commit hook: format with cljfmt, lint with clj-kondo
 
 # Get staged Clojure files into array
-mapfile -t staged_files < <(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(clj|cljs|cljc|edn)$' || true)
-
-if [ ${#staged_files[@]} -eq 0 ]; then
+# grep exits 1 for no matches, 2+ for errors; only suppress exit 1
+grep_output=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(clj|cljs|cljc|edn)$') || {
+  grep_exit=$?
+  if [ $grep_exit -ne 1 ]; then
+    echo "Pre-commit hook: grep failed with exit $grep_exit"
+    exit $grep_exit
+  fi
+  grep_output=""
+}
+if [ -z "$grep_output" ]; then
   exit 0
 fi
+mapfile -t staged_files <<< "$grep_output"
 
 # Run cljfmt fix on all staged files at once and restage
 cljfmt fix "${staged_files[@]}"
