@@ -445,7 +445,7 @@
                         {:type :disconnection-error}
                         e))))))
 
-;;; ContentBlock Parsing
+;;; Data-driven Field Extraction
 
 (defn- get-class-name
   "Get the class name of a Python object.
@@ -459,6 +459,72 @@
       (catch Exception _
         nil))))
 
+(defn- extract-field
+  "Extract a single field from a Python object based on a field spec.
+
+   Field spec keys:
+   - :key - Clojure keyword for the result map
+   - :py - Python attribute name (string)
+   - :xf - Optional transform function (default: identity)
+   - :optional? - If true, skip field when Python value is None (default: false)
+
+   Returns [key value] pair, or nil if optional and None."
+  [py-obj {:keys [key py xf optional?] :or {xf identity}}]
+  (let [v (py/get-attr py-obj py)]
+    (cond
+      (and optional? (py-none? v)) nil
+      (py-none? v) [key nil]
+      :else [key (xf v)])))
+
+(defn- extract-fields
+  "Extract multiple fields from a Python object into a Clojure map."
+  [py-obj fields]
+  (into {}
+        (keep #(extract-field py-obj %))
+        fields))
+
+(defn- parse-with-spec
+  "Parse a Python object using a type spec map.
+
+   spec-map is a map from class name strings to specs.
+   Each spec has :type and :fields keys.
+
+   Returns parsed map with :type, or unknown fallback if class not in spec-map."
+  [py-obj spec-map unknown-type]
+  (when py-obj
+    (let [class-name (get-class-name py-obj)]
+      (if-let [spec (get spec-map class-name)]
+        (assoc (extract-fields py-obj (:fields spec))
+               :type (:type spec))
+        {:type unknown-type
+         :class-name class-name
+         :data (py->clj py-obj)}))))
+
+;;; ContentBlock Parsing
+
+(def ^:private content-block-specs
+  "Specs for parsing Python ContentBlock types to Clojure maps."
+  {"TextBlock"
+   {:type :text-block
+    :fields [{:key :text :py "text"}]}
+
+   "ThinkingBlock"
+   {:type :thinking-block
+    :fields [{:key :thinking :py "thinking"}
+             {:key :signature :py "signature"}]}
+
+   "ToolUseBlock"
+   {:type :tool-use-block
+    :fields [{:key :id :py "id"}
+             {:key :name :py "name"}
+             {:key :input :py "input" :xf py->clj}]}
+
+   "ToolResultBlock"
+   {:type :tool-result-block
+    :fields [{:key :tool-use-id :py "tool_use_id"}
+             {:key :content :py "content" :xf py->clj}
+             {:key :is-error :py "is_error" :optional? true}]}})
+
 (defn parse-content-block
   "Parse a Python ContentBlock into a Clojure map with :type discriminator.
 
@@ -468,36 +534,7 @@
    - ToolUseBlock -> {:type :tool-use-block :id \"...\" :name \"...\" :input {...}}
    - ToolResultBlock -> {:type :tool-result-block :tool-use-id \"...\" ...}"
   [block]
-  (when block
-    (let [class-name (get-class-name block)]
-      (case class-name
-        "TextBlock"
-        {:type :text-block
-         :text (py.- block text)}
-
-        "ThinkingBlock"
-        {:type :thinking-block
-         :thinking (py.- block thinking)
-         :signature (py.- block signature)}
-
-        "ToolUseBlock"
-        {:type :tool-use-block
-         :id (py.- block id)
-         :name (py.- block name)
-         :input (py->clj (py.- block input))}
-
-        "ToolResultBlock"
-        (let [content (py.- block content)
-              is-error (py.- block is_error)]
-          {:type :tool-result-block
-           :tool-use-id (py.- block tool_use_id)
-           :content (py->clj content)
-           :is-error (when-not (py-none? is-error) is-error)})
-
-        ;; Fallback for unknown block types
-        {:type :unknown-block
-         :class-name class-name
-         :data (py->clj block)}))))
+  (parse-with-spec block content-block-specs :unknown-block))
 
 (defn- parse-content
   "Parse message content field, handling both string and list of ContentBlocks."
@@ -511,22 +548,45 @@
 
 ;;; Message Parsing
 
-(defn- assoc-if-present
-  "Assoc a Python field into map if the field is not None.
+(def ^:private message-specs
+  "Specs for parsing Python Message types to Clojure maps."
+  {"UserMessage"
+   {:type :user-message
+    :fields [{:key :content :py "content" :xf parse-content}
+             {:key :uuid :py "uuid" :optional? true}
+             {:key :parent-tool-use-id :py "parent_tool_use_id" :optional? true}]}
 
-   py-field-name should be a string (e.g., \"total_cost_usd\").
+   "AssistantMessage"
+   {:type :assistant-message
+    :fields [{:key :content :py "content" :xf parse-content}
+             {:key :model :py "model"}
+             {:key :parent-tool-use-id :py "parent_tool_use_id" :optional? true}
+             {:key :error :py "error" :optional? true}]}
 
-   Returns m unchanged if the field value is Python None,
-   otherwise returns (assoc m clj-key field-value).
+   "SystemMessage"
+   {:type :system-message
+    :fields [{:key :subtype :py "subtype"}
+             {:key :data :py "data" :xf py->clj}]}
 
-   With transform-fn, applies the function to the value before assoc."
-  ([m py-obj py-field-name clj-key]
-   (assoc-if-present m py-obj py-field-name clj-key identity))
-  ([m py-obj py-field-name clj-key transform-fn]
-   (let [v (py/get-attr py-obj py-field-name)]
-     (if (py-none? v)
-       m
-       (assoc m clj-key (transform-fn v))))))
+   "ResultMessage"
+   {:type :result-message
+    :fields [{:key :subtype :py "subtype"}
+             {:key :duration-ms :py "duration_ms"}
+             {:key :duration-api-ms :py "duration_api_ms"}
+             {:key :is-error :py "is_error"}
+             {:key :num-turns :py "num_turns"}
+             {:key :session-id :py "session_id"}
+             {:key :total-cost-usd :py "total_cost_usd" :optional? true}
+             {:key :usage :py "usage" :optional? true :xf py->clj}
+             {:key :result :py "result" :optional? true}
+             {:key :structured-output :py "structured_output" :optional? true :xf py->clj}]}
+
+   "StreamEvent"
+   {:type :stream-event
+    :fields [{:key :uuid :py "uuid"}
+             {:key :session-id :py "session_id"}
+             {:key :event :py "event" :xf py->clj}
+             {:key :parent-tool-use-id :py "parent_tool_use_id" :optional? true}]}})
 
 (defn parse-message
   "Parse a Python Message into a Clojure map with :type discriminator.
@@ -538,51 +598,7 @@
    - ResultMessage -> {:type :result-message :session-id \"...\" ...}
    - StreamEvent -> {:type :stream-event ...}"
   [msg]
-  (when msg
-    (let [class-name (get-class-name msg)]
-      (case class-name
-        "UserMessage"
-        (-> {:type :user-message
-             :content (parse-content (py.- msg content))}
-            (assoc-if-present msg "uuid" :uuid)
-            (assoc-if-present msg "parent_tool_use_id" :parent-tool-use-id))
-
-        "AssistantMessage"
-        (-> {:type :assistant-message
-             :content (parse-content (py.- msg content))
-             :model (py.- msg model)}
-            (assoc-if-present msg "parent_tool_use_id" :parent-tool-use-id)
-            (assoc-if-present msg "error" :error))
-
-        "SystemMessage"
-        {:type :system-message
-         :subtype (py.- msg subtype)
-         :data (py->clj (py.- msg data))}
-
-        "ResultMessage"
-        (-> {:type :result-message
-             :subtype (py.- msg subtype)
-             :duration-ms (py.- msg duration_ms)
-             :duration-api-ms (py.- msg duration_api_ms)
-             :is-error (py.- msg is_error)
-             :num-turns (py.- msg num_turns)
-             :session-id (py.- msg session_id)}
-            (assoc-if-present msg "total_cost_usd" :total-cost-usd)
-            (assoc-if-present msg "usage" :usage py->clj)
-            (assoc-if-present msg "result" :result)
-            (assoc-if-present msg "structured_output" :structured-output py->clj))
-
-        "StreamEvent"
-        (-> {:type :stream-event
-             :uuid (py.- msg uuid)
-             :session-id (py.- msg session_id)
-             :event (py->clj (py.- msg event))}
-            (assoc-if-present msg "parent_tool_use_id" :parent-tool-use-id))
-
-        ;; Fallback for unknown message types
-        {:type :unknown-message
-         :class-name class-name
-         :data (py->clj msg)}))))
+  (parse-with-spec msg message-specs :unknown-message))
 
 ;;; Query
 
