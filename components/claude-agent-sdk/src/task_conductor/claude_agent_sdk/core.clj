@@ -351,10 +351,16 @@ async def _query_and_receive(client, prompt):
 ;;; ContentBlock Parsing
 
 (defn- get-class-name
-  "Get the class name of a Python object."
+  "Get the class name of a Python object.
+
+   Returns nil if the object is nil or if the type cannot be determined."
   [obj]
   (when obj
-    (py.- (py/python-type obj) __name__)))
+    (when-let [py-type (py/python-type obj)]
+      (try
+        (py.- py-type __name__)
+        (catch Exception _
+          nil)))))
 
 (defn parse-content-block
   "Parse a Python ContentBlock into a Clojure map with :type discriminator.
