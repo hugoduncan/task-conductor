@@ -339,13 +339,29 @@ async def _query_and_receive(client, prompt):
 (def ^:private option-keys
   "Valid keys for ClaudeAgentOptions.
 
-   See ClaudeAgentOptions Python class for full documentation.
-   Key options:
-   - :tools - preset map or tool list
-   - :allowed-tools - list of allowed tool name strings
-   - :disallowed-tools - list of disallowed tool name strings
-   - :permission-mode - \"default\", \"acceptEdits\", \"plan\", or \"bypassPermissions\"
-   - :cwd - working directory path"
+   See https://github.com/anthropics/claude-agent-sdk-python for full docs.
+
+   Tool configuration:
+     :tools :allowed-tools :disallowed-tools :mcp-servers
+
+   Permission and security:
+     :permission-mode :can-use-tool :permission-prompt-tool-name :sandbox
+
+   Working environment:
+     :cwd :env :add-dirs :settings :setting-sources
+
+   Prompt and model:
+     :system-prompt :model :fallback-model :betas :max-thinking-tokens
+
+   Session control:
+     :max-turns :max-budget-usd :resume :continue-conversation :fork-session
+
+   Output and streaming:
+     :include-partial-messages :output-format :stderr :max-buffer-size
+
+   CLI and infrastructure:
+     :cli-path :extra-args :hooks :user :agents :plugins
+     :enable-file-checkpointing"
   #{:tools :allowed-tools :system-prompt :mcp-servers :permission-mode
     :continue-conversation :resume :max-turns :max-budget-usd
     :disallowed-tools :model :fallback-model :betas
