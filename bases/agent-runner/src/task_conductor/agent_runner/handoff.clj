@@ -152,7 +152,7 @@
          parent-dir (or (.getParent file) ".")
          handler (fn [{:keys [type path]}]
                    (when (and (#{:create :modify} type)
-                              (= filename (.getName (File. (str path)))))
+                              (= filename (str (.getFileName path))))
                      (try
                        (callback (read-handoff-state abs-path))
                        (catch Exception _e
