@@ -9,7 +9,8 @@
    [clojure.tools.logging :as log]
    [malli.core :as m]
    [malli.error :as me]
-   [nextjournal.beholder :as beholder])
+   [nextjournal.beholder :as beholder]
+   [task-conductor.agent-runner.logging])
   (:import
    [java.io File FileNotFoundException]
    [java.nio.file Files StandardCopyOption]
