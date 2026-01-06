@@ -3,21 +3,19 @@
   ;; Requires Claude authentication (API key or subscription).
   ;; Run with: clj -M:test --focus :integration
   ;;
-  ;; Initializes libpython-clj with venv Python at load time.
+  ;; Uses lazy initialization to gracefully skip when venv is unavailable.
   ;; Tests skip gracefully when authentication is unavailable.
   (:require
-   [clojure.java.io :as io]
    [clojure.test :refer [deftest is testing]]
-   [libpython-clj2.python :as py]))
+   [task-conductor.python-venv.interface :as venv]))
 
 (def ^:private venv-path
   "Relative path to venv from project root."
   "components/claude-agent-sdk/.venv")
 
-(defn- abs-venv-python
-  "Get absolute path to venv Python executable."
-  []
-  (str (.getAbsolutePath (io/file venv-path)) "/bin/python"))
+(def ^:private requirements-path
+  "Relative path to requirements.txt from project root."
+  "components/claude-agent-sdk/requirements.txt")
 
 (defn- skip-integration-tests?
   "Check if integration tests should be skipped.
@@ -25,15 +23,27 @@
   []
   (some? (System/getenv "SKIP_INTEGRATION_TESTS")))
 
-;; Initialize libpython-clj with venv Python before requiring SDK.
-(py/initialize! :python-executable (abs-venv-python))
+;; Track whether SDK initialization succeeded.
+(def ^:private sdk-initialized?
+  (delay
+    (when (not (skip-integration-tests?))
+      (when (venv/ensure! venv-path requirements-path)
+        (try
+          (require 'libpython-clj2.python)
+          ((resolve 'libpython-clj2.python/initialize!)
+           :python-executable (venv/python-path venv-path))
+          (require '[task-conductor.claude-agent-sdk.interface :as sdk])
+          ((resolve 'task-conductor.claude-agent-sdk.interface/initialize!)
+           {:venv-path venv-path})
+          true
+          (catch Exception e
+            (println "SDK initialization failed:" (.getMessage e))
+            false))))))
 
-;; Now require SDK interface - it will use the already-initialized Python.
-(require '[task-conductor.claude-agent-sdk.interface :as sdk])
-
-;; Initialize SDK module imports.
-((resolve 'task-conductor.claude-agent-sdk.interface/initialize!)
- {:venv-path venv-path})
+(defn- sdk-available?
+  "Check if the SDK is initialized and available."
+  []
+  @sdk-initialized?)
 
 (defn- auth-error?
   "Check if exception is an authentication error."
@@ -45,11 +55,18 @@
         (re-find #"(?i)not.logged.in" msg))))
 
 (defmacro with-auth-skip
-  "Execute body, skipping if SKIP_INTEGRATION_TESTS is set or auth fails."
+  "Execute body, skipping if SKIP_INTEGRATION_TESTS is set, SDK unavailable, or auth fails."
   [& body]
-  `(if (skip-integration-tests?)
+  `(cond
+     (skip-integration-tests?)
      (testing "skipped (SKIP_INTEGRATION_TESTS set)"
        (is true))
+
+     (not (sdk-available?))
+     (testing "skipped (Python venv not available)"
+       (is true))
+
+     :else
      (try
        ~@body
        (catch Exception e#
@@ -58,18 +75,51 @@
              (is true))
            (throw e#))))))
 
+;;; SDK API Wrappers
+;;
+;; These functions wrap the dynamically-loaded SDK namespace.
+
+(defn- sdk-create-client [opts]
+  ((resolve 'task-conductor.claude-agent-sdk.interface/create-client) opts))
+
+(defn- sdk-connect [client]
+  ((resolve 'task-conductor.claude-agent-sdk.interface/connect) client))
+
+(defn- sdk-disconnect [client]
+  ((resolve 'task-conductor.claude-agent-sdk.interface/disconnect) client))
+
+(defn- sdk-query [client prompt]
+  ((resolve 'task-conductor.claude-agent-sdk.interface/query) client prompt))
+
+(defn- sdk-resume-client [session-id opts]
+  ((resolve 'task-conductor.claude-agent-sdk.interface/resume-client) session-id opts))
+
+(defn- sdk-fork-client [session-id opts]
+  ((resolve 'task-conductor.claude-agent-sdk.interface/fork-client) session-id opts))
+
+(defn- sdk-session-query [client prompt]
+  ((resolve 'task-conductor.claude-agent-sdk.interface/session-query) client prompt))
+
+(defn- sdk-make-tracked-client [client]
+  ((resolve 'task-conductor.claude-agent-sdk.interface/make-tracked-client) client))
+
+(defn- sdk-get-session-id [tracked-client]
+  ((resolve 'task-conductor.claude-agent-sdk.interface/get-session-id) tracked-client))
+
+;;; Tests
+
 (deftest live-query-test
   ;; Tests full query lifecycle with live Claude API.
   ;; Sends a simple prompt and verifies response structure.
   (with-auth-skip
     (testing "live query"
-      (let [client (sdk/create-client {:max-turns 1
+      (let [client (sdk-create-client {:max-turns 1
                                        :permission-mode "bypassPermissions"})]
         (try
-          (sdk/connect client)
+          (sdk-connect client)
 
           (testing "returns response with messages and session-id"
-            (let [result (sdk/query client "Reply with just: OK")]
+            (let [result (sdk-query client "Reply with just: OK")]
               (is (map? result)
                   "should return a map")
               (is (vector? (:messages result))
@@ -80,22 +130,27 @@
                   "should have session-id string")))
 
           (finally
-            (sdk/disconnect client)))))))
+            (sdk-disconnect client)))))))
 
 (deftest live-with-session-test
   ;; Tests with-session macro with live Claude API.
+  ;; Uses tracked client directly since macro can't be resolved dynamically.
   (with-auth-skip
     (testing "with-session"
       (testing "manages session lifecycle and captures session-id"
-        (let [result (sdk/with-session [client {:max-turns 1
-                                                :permission-mode "bypassPermissions"}]
-                       (sdk/session-query client "Reply: OK"))]
-          (is (map? result)
-              "should return a map")
-          (is (some? (:result result))
-              "should have :result")
-          (is (string? (:session-id result))
-              "should capture session-id"))))))
+        (let [client (sdk-create-client {:max-turns 1
+                                         :permission-mode "bypassPermissions"})
+              tracked (sdk-make-tracked-client client)]
+          (try
+            (sdk-connect client)
+            (let [result (sdk-session-query tracked "Reply: OK")
+                  session-id (sdk-get-session-id tracked)]
+              (is (map? result)
+                  "should return a map")
+              (is (string? session-id)
+                  "should capture session-id"))
+            (finally
+              (sdk-disconnect client))))))))
 
 (deftest live-message-parsing-test
   ;; Tests that live responses are correctly parsed into Clojure data.
@@ -103,11 +158,11 @@
   ;; not the sent user message.
   (with-auth-skip
     (testing "message parsing"
-      (let [client (sdk/create-client {:max-turns 1
+      (let [client (sdk-create-client {:max-turns 1
                                        :permission-mode "bypassPermissions"})]
         (try
-          (sdk/connect client)
-          (let [result (sdk/query client "Reply: test")
+          (sdk-connect client)
+          (let [result (sdk-query client "Reply: test")
                 messages (:messages result)]
 
             (testing "includes system message (init)"
@@ -136,57 +191,63 @@
                   (is (number? (:duration-ms msg))
                       "result message should have duration-ms")))))
           (finally
-            (sdk/disconnect client)))))))
+            (sdk-disconnect client)))))))
 
 (deftest live-session-resumption-test
   ;; Tests that resume-client can continue a previous session.
   ;; Establishes a session, captures its ID, then resumes it.
   (with-auth-skip
     (testing "session resumption"
-      (let [session-result (sdk/with-session [client {:max-turns 1
-                                                      :permission-mode "bypassPermissions"}]
-                             (sdk/session-query client "Remember: CODE=42"))
-            session-id (:session-id session-result)]
+      (let [client (sdk-create-client {:max-turns 1
+                                       :permission-mode "bypassPermissions"})
+            tracked (sdk-make-tracked-client client)
+            _ (sdk-connect client)
+            _ (sdk-session-query tracked "Remember: CODE=42")
+            session-id (sdk-get-session-id tracked)
+            _ (sdk-disconnect client)]
 
         (testing "captures session-id from initial session"
           (is (string? session-id)
               "should have session-id"))
 
         (testing "resumed client can query"
-          (let [resumed-client (sdk/resume-client session-id
+          (let [resumed-client (sdk-resume-client session-id
                                                   {:max-turns 1
                                                    :permission-mode "bypassPermissions"})]
             (try
-              (sdk/connect resumed-client)
-              (let [result (sdk/query resumed-client "What was CODE?")
+              (sdk-connect resumed-client)
+              (let [result (sdk-query resumed-client "What was CODE?")
                     messages (:messages result)]
                 (is (vector? messages)
                     "should return messages")
                 (is (seq messages)
                     "should have at least one message"))
               (finally
-                (sdk/disconnect resumed-client)))))))))
+                (sdk-disconnect resumed-client)))))))))
 
 (deftest live-session-fork-test
   ;; Tests that fork-client creates a new session branching from an existing one.
   (with-auth-skip
     (testing "session forking"
-      (let [session-result (sdk/with-session [client {:max-turns 1
-                                                      :permission-mode "bypassPermissions"}]
-                             (sdk/session-query client "Remember: SECRET=xyz"))
-            original-session-id (:session-id session-result)]
+      (let [client (sdk-create-client {:max-turns 1
+                                       :permission-mode "bypassPermissions"})
+            tracked (sdk-make-tracked-client client)
+            _ (sdk-connect client)
+            _ (sdk-session-query tracked "Remember: SECRET=xyz")
+            original-session-id (sdk-get-session-id tracked)
+            _ (sdk-disconnect client)]
 
         (testing "captures session-id from original session"
           (is (string? original-session-id)
               "should have session-id"))
 
         (testing "forked client can query"
-          (let [forked-client (sdk/fork-client original-session-id
+          (let [forked-client (sdk-fork-client original-session-id
                                                {:max-turns 1
                                                 :permission-mode "bypassPermissions"})]
             (try
-              (sdk/connect forked-client)
-              (let [result (sdk/query forked-client "What was SECRET?")
+              (sdk-connect forked-client)
+              (let [result (sdk-query forked-client "What was SECRET?")
                     new-session-id (:session-id result)]
                 (is (vector? (:messages result))
                     "should return messages")
@@ -195,4 +256,4 @@
                 (is (not= original-session-id new-session-id)
                     "forked session-id should differ from original"))
               (finally
-                (sdk/disconnect forked-client)))))))))
+                (sdk-disconnect forked-client)))))))))
