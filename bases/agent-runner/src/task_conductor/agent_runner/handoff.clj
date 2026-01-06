@@ -6,6 +6,7 @@
    shared communication channel."
   (:require
    [clojure.edn :as edn]
+   [clojure.tools.logging :as log]
    [malli.core :as m]
    [malli.error :as me]
    [nextjournal.beholder :as beholder])
@@ -155,8 +156,9 @@
                               (= filename (str (.getFileName path))))
                      (try
                        (callback (read-handoff-state abs-path))
-                       (catch Exception _e
+                       (catch Exception e
                          ;; Ignore read errors - file may be mid-write
-                         nil))))
+                         (log/debug e "Ignoring exception reading handoff file"
+                                    {:path abs-path})))))
          watcher (beholder/watch handler parent-dir)]
      (fn [] (beholder/stop watcher)))))
