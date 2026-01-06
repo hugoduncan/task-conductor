@@ -7,7 +7,8 @@
   (:require
    [clojure.edn :as edn]
    [malli.core :as m]
-   [malli.error :as me])
+   [malli.error :as me]
+   [nextjournal.beholder :as beholder])
   (:import
    [java.io File FileNotFoundException]
    [java.nio.file Files StandardCopyOption]
@@ -132,3 +133,30 @@
      (when (.exists file)
        (.delete file)))
    nil))
+
+(defn watch-handoff-file
+  "Watch handoff file for changes and invoke callback with new state.
+
+   Watches the parent directory and filters for the specific handoff file.
+   On create or modify events, reads the state and invokes callback with
+   the parsed state map. Read errors are silently ignored (file may be
+   mid-write during atomic rename).
+
+   Returns a stop function that halts the watcher when called."
+  ([callback]
+   (watch-handoff-file callback default-handoff-path))
+  ([callback path]
+   (let [file (File. ^String path)
+         abs-path (.getAbsolutePath file)
+         filename (.getName file)
+         parent-dir (or (.getParent file) ".")
+         handler (fn [{:keys [type path]}]
+                   (when (and (#{:create :modify} type)
+                              (= filename (.getName (File. (str path)))))
+                     (try
+                       (callback (read-handoff-state abs-path))
+                       (catch Exception _e
+                         ;; Ignore read errors - file may be mid-write
+                         nil))))
+         watcher (beholder/watch handler parent-dir)]
+     (fn [] (beholder/stop watcher)))))

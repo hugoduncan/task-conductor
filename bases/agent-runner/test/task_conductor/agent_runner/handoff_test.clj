@@ -145,3 +145,88 @@
             (let [state (assoc (valid-state) :status status)]
               (handoff/write-handoff-state state path)
               (is (= status (:status (handoff/read-handoff-state path)))))))))))
+
+;; Tests for watch-handoff-file
+;; Contracts tested:
+;; - Callback invoked on file create/modify with parsed state
+;; - Stop function halts the watcher
+;; - Read errors during mid-write are silently ignored
+
+(deftest watch-handoff-file-test
+  (testing "watch-handoff-file"
+    (testing "invokes callback when file is created"
+      (with-temp-file
+        (fn [path]
+          (let [received (promise)
+                stop-fn (handoff/watch-handoff-file
+                         (fn [state] (deliver received state))
+                         path)]
+            (try
+              (Thread/sleep 100) ; Allow watcher to initialize
+              (handoff/write-handoff-state (valid-state) path)
+              (let [result (deref received 2000 :timeout)]
+                (is (not= :timeout result) "callback should be invoked")
+                (is (= :active (:status result)))
+                (is (= "test-session-123" (:session-id result))))
+              (finally
+                (stop-fn)))))))
+
+    (testing "invokes callback when file is modified"
+      (with-temp-file
+        (fn [path]
+          (let [states (atom [])
+                stop-fn (handoff/watch-handoff-file
+                         (fn [state]
+                           (swap! states conj state))
+                         path)]
+            (try
+              (Thread/sleep 200)
+              (handoff/write-handoff-state (valid-state) path)
+              (Thread/sleep 1000)
+              (handoff/write-handoff-state
+               (assoc (valid-state) :status :completed)
+               path)
+              (Thread/sleep 1000)
+              ;; At minimum, at least one callback should fire
+              (is (pos? (count @states)) "callback invoked at least once")
+              ;; The last observed state should be :completed
+              (is (= :completed (:status (last @states)))
+                  "final state is :completed")
+              (finally
+                (stop-fn)))))))
+
+    (testing "returns working stop function"
+      (with-temp-file
+        (fn [path]
+          (let [call-count (atom 0)
+                stop-fn (handoff/watch-handoff-file
+                         (fn [_] (swap! call-count inc))
+                         path)]
+            (Thread/sleep 100)
+            (stop-fn)
+            (Thread/sleep 100)
+            (let [count-before @call-count]
+              (handoff/write-handoff-state (valid-state) path)
+              (Thread/sleep 500)
+              (is (= count-before @call-count)
+                  "callback not invoked after stop"))))))
+
+    (testing "ignores read errors silently"
+      (with-temp-file
+        (fn [path]
+          (let [received (promise)
+                stop-fn (handoff/watch-handoff-file
+                         (fn [state] (deliver received state))
+                         path)]
+            (try
+              (Thread/sleep 100)
+              ;; Write invalid EDN - should not throw or invoke callback
+              (spit path "{:invalid}")
+              (Thread/sleep 500)
+              ;; Now write valid state
+              (handoff/write-handoff-state (valid-state) path)
+              (let [result (deref received 2000 :timeout)]
+                (is (not= :timeout result)
+                    "callback invoked with valid state"))
+              (finally
+                (stop-fn)))))))))
