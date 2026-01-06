@@ -14,8 +14,8 @@
   ;; Skip with: SKIP_INTEGRATION_TESTS=1
   (:require
    [babashka.process :as p]
-   [clojure.java.io :as io]
-   [clojure.test :refer [deftest is testing]]))
+   [clojure.test :refer [deftest is testing]]
+   [task-conductor.python-venv.interface :as venv]))
 
 ;;; Initialization
 
@@ -24,28 +24,8 @@
   "components/claude-agent-sdk/.venv")
 
 (def ^:private requirements-path
-  "Path to requirements.txt for the SDK."
+  "Relative path to requirements.txt from project root."
   "components/claude-agent-sdk/requirements.txt")
-
-(defn- abs-venv-path
-  "Get absolute path to venv directory."
-  []
-  (.getAbsolutePath (io/file venv-path)))
-
-(defn- abs-venv-python
-  "Get absolute path to venv Python executable."
-  []
-  (str (abs-venv-path) "/bin/python"))
-
-(defn- abs-venv-pip
-  "Get absolute path to venv pip executable."
-  []
-  (str (abs-venv-path) "/bin/pip"))
-
-(defn- venv-exists?
-  "Check if the Python venv exists."
-  []
-  (.exists (io/file (abs-venv-python))))
 
 (defn- skip-integration-tests?
   "Check if integration tests should be skipped.
@@ -53,42 +33,15 @@
   []
   (some? (System/getenv "SKIP_INTEGRATION_TESTS")))
 
-(defn- ensure-venv!
-  "Create the Python venv and install requirements if it doesn't exist.
-   Returns true if venv is ready, false if creation failed."
-  []
-  (if (venv-exists?)
-    true
-    (try
-      (println "Creating Python venv at" (abs-venv-path))
-      (let [create-result (p/shell {:out :string :err :string :continue true}
-                                   "python3" "-m" "venv" (abs-venv-path))]
-        (if (zero? (:exit create-result))
-          (do
-            (println "Installing requirements from" requirements-path)
-            (let [install-result (p/shell {:out :string :err :string :continue true}
-                                          (abs-venv-pip) "install" "-r"
-                                          (.getAbsolutePath (io/file requirements-path)))]
-              (if (zero? (:exit install-result))
-                (do (println "Venv setup complete")
-                    true)
-                (do (println "Failed to install requirements:" (:err install-result))
-                    false))))
-          (do (println "Failed to create venv:" (:err create-result))
-              false)))
-      (catch Exception e
-        (println "Venv setup failed:" (.getMessage e))
-        false))))
-
 ;; Track whether SDK initialization succeeded.
 (def ^:private sdk-initialized?
   (delay
     (when (not (skip-integration-tests?))
-      (when (ensure-venv!)
+      (when (venv/ensure! venv-path requirements-path)
         (try
           (require 'libpython-clj2.python)
           ((resolve 'libpython-clj2.python/initialize!)
-           :python-executable (abs-venv-python))
+           :python-executable (venv/python-path venv-path))
           (require '[task-conductor.claude-agent-sdk.interface :as sdk])
           (require '[task-conductor.agent-runner.session :as session])
           ((resolve 'task-conductor.claude-agent-sdk.interface/initialize!)
