@@ -5,5 +5,12 @@
            :test-paths   ["bases/agent-runner/test"
                           "components/claude-agent-sdk/test"]}
           {:id           :integration
-           :source-paths ["components/claude-agent-sdk/src"]
-           :test-paths   ["components/claude-agent-sdk/test-integration"]}]}
+           :source-paths ["bases/agent-runner/src"
+                          "components/claude-agent-sdk/src"]
+           :test-paths   ["bases/agent-runner/test-integration"
+                          "components/claude-agent-sdk/test-integration"]}
+          ;; Agent-runner specific tests (graceful skip when venv unavailable)
+          {:id           :agent-runner-integration
+           :source-paths ["bases/agent-runner/src"
+                          "components/claude-agent-sdk/src"]
+           :test-paths   ["bases/agent-runner/test-integration"]}]}
