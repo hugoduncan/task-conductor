@@ -50,6 +50,26 @@
    :story-id 10
    :timestamp (Instant/now)})
 
+(defn- poll-until-ready!
+  "Poll-write until ready-pred returns truthy. Used to ensure watcher is ready.
+  Returns true if ready-pred returned truthy, false on timeout."
+  [ready-pred path timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      ;; Create fresh state each write to ensure unique content (different timestamp)
+      (handoff/write-handoff-state (valid-state) path)
+      (if (wait-for ready-pred 200)
+        true
+        (if (< (System/currentTimeMillis) deadline)
+          (recur)
+          false)))))
+
+(defn- wait-for-watcher-ready!
+  "Wait for watcher to be ready by poll-writing until callback fires.
+  Returns true if watcher responded, false on timeout."
+  [received-atom path timeout-ms]
+  (poll-until-ready! #(some? @received-atom) path timeout-ms))
+
 (deftest write-handoff-state-test
   (testing "write-handoff-state"
     (testing "writes valid state to file"
@@ -182,12 +202,10 @@
                          (fn [state] (reset! received state))
                          path)]
             (try
-              (Thread/sleep 50) ; Allow watcher to initialize
-              (handoff/write-handoff-state (valid-state) path)
-              (let [result (wait-for #(deref received) 2000)]
-                (is result "callback should be invoked")
-                (is (= :active (:status result)))
-                (is (= "test-session-123" (:session-id result))))
+              (is (wait-for-watcher-ready! received path 2000)
+                  "watcher should initialize and invoke callback")
+              (is (= :active (:status @received)))
+              (is (= "test-session-123" (:session-id @received)))
               (finally
                 (stop-fn)))))))
 
@@ -200,18 +218,15 @@
                            (swap! states conj state))
                          path)]
             (try
-              (Thread/sleep 50)
-              (handoff/write-handoff-state (valid-state) path)
-              (wait-for #(pos? (count @states)) 2000)
+              ;; Ensure watcher is ready
+              (is (poll-until-ready! #(pos? (count @states)) path 2000)
+                  "watcher should initialize")
+              ;; Write modified state
               (handoff/write-handoff-state
                (assoc (valid-state) :status :completed)
                path)
-              (wait-for #(= :completed (:status (last @states))) 2000)
-              ;; At minimum, at least one callback should fire
-              (is (pos? (count @states)) "callback invoked at least once")
-              ;; The last observed state should be :completed
-              (is (= :completed (:status (last @states)))
-                  "final state is :completed")
+              (is (wait-for #(= :completed (:status (last @states))) 2000)
+                  "should receive :completed state")
               (finally
                 (stop-fn)))))))
 
@@ -222,12 +237,16 @@
                 stop-fn (handoff/watch-handoff-file
                          (fn [_] (swap! call-count inc))
                          path)]
-            (Thread/sleep 50)
-            (stop-fn)
-            (Thread/sleep 50)
+            ;; First confirm watcher is working
+            (is (poll-until-ready! #(pos? @call-count) path 2000)
+                "watcher should initialize and fire")
             (let [count-before @call-count]
-              (handoff/write-handoff-state (valid-state) path)
-              ;; Short wait to confirm no callback fires
+              (stop-fn)
+              ;; Write after stop
+              (handoff/write-handoff-state
+               (assoc (valid-state) :status :completed)
+               path)
+              ;; Brief wait then verify count unchanged
               (Thread/sleep 200)
               (is (= count-before @call-count)
                   "callback not invoked after stop"))))))
@@ -240,14 +259,18 @@
                          (fn [state] (reset! received state))
                          path)]
             (try
-              (Thread/sleep 50)
+              ;; Ensure watcher is ready
+              (is (wait-for-watcher-ready! received path 2000)
+                  "watcher should initialize")
+              (reset! received nil)
               ;; Write invalid EDN - should not throw or invoke callback
               (spit path "{:invalid}")
-              (Thread/sleep 100)
-              ;; Now write valid state
-              (handoff/write-handoff-state (valid-state) path)
-              (let [result (wait-for #(deref received) 2000)]
-                (is result "callback invoked with valid state"))
+              ;; Write valid state with different status to distinguish
+              (handoff/write-handoff-state
+               (assoc (valid-state) :status :completed)
+               path)
+              (is (wait-for #(= :completed (:status @received)) 2000)
+                  "callback invoked with valid state after invalid EDN")
               (finally
                 (stop-fn)))))))))
 
@@ -277,12 +300,16 @@
                   stop-fn (handoff/watch-handoff-file
                            (fn [state] (reset! received state)))]
               (try
-                (Thread/sleep 50)
+                ;; Ensure watcher is ready by poll-writing
+                (is (poll-until-ready! #(some? @received)
+                                       handoff/default-handoff-path
+                                       2000)
+                    "watcher should initialize")
+                (reset! received nil)
                 (handoff/write-handoff-state
                  (assoc (valid-state) :status :completed))
-                (let [result (wait-for #(deref received) 2000)]
-                  (is result "callback invoked")
-                  (is (= :completed (:status result))))
+                (is (wait-for #(= :completed (:status @received)) 2000)
+                    "callback invoked with :completed status")
                 (finally
                   (stop-fn)))))
           (finally
