@@ -22,7 +22,9 @@
    :story-complete  #{:idle}})
 
 (def all-states
-  "Set of all valid states in the state machine."
+  "Set of all valid states in the state machine.
+   States: :idle, :selecting-task, :running-sdk, :needs-input,
+           :running-cli, :error-recovery, :task-complete, :story-complete."
   (into #{} (keys valid-transitions)))
 
 ;;; Handoff Integration
