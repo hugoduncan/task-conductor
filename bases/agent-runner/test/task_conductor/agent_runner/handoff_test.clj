@@ -48,7 +48,7 @@
    :session-id "test-session-123"
    :task-id 42
    :story-id 10
-   :timestamp (Instant/parse "2024-01-15T10:30:00Z")})
+   :timestamp (Instant/now)})
 
 (deftest write-handoff-state-test
   (testing "write-handoff-state"
