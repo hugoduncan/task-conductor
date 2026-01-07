@@ -248,3 +248,40 @@
                 (is result "callback invoked with valid state"))
               (finally
                 (stop-fn)))))))))
+
+;; Tests for default-handoff-path usage
+;; Contracts tested:
+;; - 0-arity write-handoff-state uses default-handoff-path
+;; - 0-arity read-handoff-state uses default-handoff-path
+;; - 1-arity watch-handoff-file uses default-handoff-path
+
+(deftest default-path-test
+  (testing "default-handoff-path usage"
+    (testing "when no path provided"
+      (let [default-path handoff/default-handoff-path
+            file (File. default-path)]
+        (try
+          (testing "write-handoff-state writes to default path"
+            (handoff/write-handoff-state (valid-state))
+            (is (.exists file) "file created at default path"))
+
+          (testing "read-handoff-state reads from default path"
+            (let [state (handoff/read-handoff-state)]
+              (is (= :active (:status state)))
+              (is (= "test-session-123" (:session-id state)))))
+
+          (testing "watch-handoff-file watches default path"
+            (let [received (atom nil)
+                  stop-fn (handoff/watch-handoff-file
+                           (fn [state] (reset! received state)))]
+              (try
+                (Thread/sleep 50)
+                (handoff/write-handoff-state
+                 (assoc (valid-state) :status :completed))
+                (let [result (wait-for #(deref received) 2000)]
+                  (is result "callback invoked")
+                  (is (= :completed (:status result))))
+                (finally
+                  (stop-fn)))))
+          (finally
+            (.delete file)))))))
