@@ -23,6 +23,24 @@
       (finally
         (.delete file)))))
 
+(defn- wait-for
+  "Poll condition-fn at interval-ms until truthy or timeout-ms exceeded.
+  Returns the truthy result or nil on timeout."
+  ([condition-fn]
+   (wait-for condition-fn 1000 20))
+  ([condition-fn timeout-ms]
+   (wait-for condition-fn timeout-ms 20))
+  ([condition-fn timeout-ms interval-ms]
+   (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+     (loop []
+       (if-let [result (condition-fn)]
+         result
+         (if (> (System/currentTimeMillis) deadline)
+           nil
+           (do
+             (Thread/sleep interval-ms)
+             (recur))))))))
+
 (defn- valid-state
   "Create a valid handoff state for testing."
   []
@@ -157,15 +175,15 @@
     (testing "invokes callback when file is created"
       (with-temp-file
         (fn [path]
-          (let [received (promise)
+          (let [received (atom nil)
                 stop-fn (handoff/watch-handoff-file
-                         (fn [state] (deliver received state))
+                         (fn [state] (reset! received state))
                          path)]
             (try
-              (Thread/sleep 100) ; Allow watcher to initialize
+              (Thread/sleep 50) ; Allow watcher to initialize
               (handoff/write-handoff-state (valid-state) path)
-              (let [result (deref received 2000 :timeout)]
-                (is (not= :timeout result) "callback should be invoked")
+              (let [result (wait-for #(deref received) 2000)]
+                (is result "callback should be invoked")
                 (is (= :active (:status result)))
                 (is (= "test-session-123" (:session-id result))))
               (finally
@@ -180,13 +198,13 @@
                            (swap! states conj state))
                          path)]
             (try
-              (Thread/sleep 200)
+              (Thread/sleep 50)
               (handoff/write-handoff-state (valid-state) path)
-              (Thread/sleep 1000)
+              (wait-for #(pos? (count @states)) 2000)
               (handoff/write-handoff-state
                (assoc (valid-state) :status :completed)
                path)
-              (Thread/sleep 1000)
+              (wait-for #(= :completed (:status (last @states))) 2000)
               ;; At minimum, at least one callback should fire
               (is (pos? (count @states)) "callback invoked at least once")
               ;; The last observed state should be :completed
@@ -202,31 +220,31 @@
                 stop-fn (handoff/watch-handoff-file
                          (fn [_] (swap! call-count inc))
                          path)]
-            (Thread/sleep 100)
+            (Thread/sleep 50)
             (stop-fn)
-            (Thread/sleep 100)
+            (Thread/sleep 50)
             (let [count-before @call-count]
               (handoff/write-handoff-state (valid-state) path)
-              (Thread/sleep 500)
+              ;; Short wait to confirm no callback fires
+              (Thread/sleep 200)
               (is (= count-before @call-count)
                   "callback not invoked after stop"))))))
 
     (testing "ignores read errors silently"
       (with-temp-file
         (fn [path]
-          (let [received (promise)
+          (let [received (atom nil)
                 stop-fn (handoff/watch-handoff-file
-                         (fn [state] (deliver received state))
+                         (fn [state] (reset! received state))
                          path)]
             (try
-              (Thread/sleep 100)
+              (Thread/sleep 50)
               ;; Write invalid EDN - should not throw or invoke callback
               (spit path "{:invalid}")
-              (Thread/sleep 500)
+              (Thread/sleep 100)
               ;; Now write valid state
               (handoff/write-handoff-state (valid-state) path)
-              (let [result (deref received 2000 :timeout)]
-                (is (not= :timeout result)
-                    "callback invoked with valid state"))
+              (let [result (wait-for #(deref received) 2000)]
+                (is result "callback invoked with valid state"))
               (finally
                 (stop-fn)))))))))
