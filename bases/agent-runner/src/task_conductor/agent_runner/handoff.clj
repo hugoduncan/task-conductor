@@ -59,13 +59,13 @@
                      :errors (me/humanize (m/explain RawHandoffState state))})))
   state)
 
-(defn- instant->iso8601
-  "Format Instant to ISO-8601 string."
+(defn instant->iso8601
+  "Convert java.time.Instant to ISO-8601 string."
   [^Instant inst]
   (.format DateTimeFormatter/ISO_INSTANT inst))
 
-(defn- iso8601->instant
-  "Parse ISO-8601 string to Instant."
+(defn iso8601->instant
+  "Parse ISO-8601 string to java.time.Instant."
   [^String s]
   (Instant/parse s))
 
