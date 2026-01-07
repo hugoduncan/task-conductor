@@ -3,7 +3,9 @@
 
    Manages workflow state transitions between SDK agent execution,
    CLI handoff, and task completion. This namespace provides pure
-   transition functions; mutable wrappers are in separate tasks.")
+   transition functions and mutable wrappers with history tracking."
+  (:require
+   [task-conductor.agent-runner.handoff :as handoff]))
 
 ;;; State Machine Definition
 
@@ -22,6 +24,43 @@
 (def all-states
   "Set of all valid states in the state machine."
   (into #{} (keys valid-transitions)))
+
+;;; Handoff Integration
+
+(def state->handoff-status
+  "Map from console states to handoff statuses.
+   States not in this map do not trigger handoff writes."
+  {:running-sdk    :active
+   :needs-input    :needs-input
+   :running-cli    :active
+   :task-complete  :completed
+   :story-complete :completed
+   :error-recovery :error})
+
+(def ^:dynamic *handoff-path*
+  "Path for handoff file. Rebind for testing."
+  handoff/default-handoff-path)
+
+(def ^:private states-using-pre-transition-values
+  "States where handoff should use pre-transition values.
+   These states clear task/session fields during transition."
+  #{:task-complete :story-complete})
+
+(defn- build-handoff-state
+  "Build handoff state map from console states for writing.
+   Uses post-state by default, but pre-state for transitions that clear fields.
+   Returns nil if required fields are missing."
+  [pre-state post-state to-state handoff-status]
+  (let [source (if (states-using-pre-transition-values to-state)
+                 pre-state
+                 post-state)
+        {:keys [session-id current-task-id story-id]} source]
+    (when (and session-id current-task-id story-id)
+      {:status handoff-status
+       :session-id session-id
+       :task-id current-task-id
+       :story-id story-id
+       :timestamp (java.time.Instant/now)})))
 
 ;;; State Predicates
 
@@ -162,10 +201,19 @@
    :timestamp (java.time.Instant/now)
    :context (when (seq context) context)})
 
+(defn- maybe-write-handoff!
+  "Write handoff state if target state has a handoff mapping.
+   Returns nil, called for side effects only."
+  [pre-state post-state to-state]
+  (when-let [handoff-status (state->handoff-status to-state)]
+    (when-let [handoff-state (build-handoff-state pre-state post-state to-state handoff-status)]
+      (handoff/write-handoff-state handoff-state *handoff-path*))))
+
 (defn transition!
   "Transitions console state atom to a new state.
 
-   Validates transition, updates atom, and appends to history.
+   Validates transition, updates atom, appends to history, and writes
+   handoff file for states that require it.
    Returns the new state map.
 
    Arguments:
@@ -176,13 +224,16 @@
   ([to-state]
    (transition! to-state {}))
   ([to-state context]
-   (let [new-state
+   ;; Capture pre-transition state for handoff (some transitions clear fields)
+   (let [pre-state @console-state
+         new-state
          (swap! console-state
                 (fn [current]
                   (let [from-state (:state current)
                         transitioned (transition current to-state context)
                         entry (make-history-entry from-state to-state context)]
                     (update transitioned :history conj entry))))]
+     (maybe-write-handoff! pre-state new-state to-state)
      new-state)))
 
 ;;; Query Functions

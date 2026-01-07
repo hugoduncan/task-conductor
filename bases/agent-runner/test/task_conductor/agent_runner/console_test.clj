@@ -5,9 +5,13 @@
   ;; - can-transition? correctly identifies valid/invalid transitions
   ;; - transition function applies context and validates transitions
   ;; - invalid transitions throw informative errors
+  ;; - handoff file integration writes state on relevant transitions
   (:require
    [clojure.test :refer [deftest is testing]]
-   [task-conductor.agent-runner.console :as console]))
+   [task-conductor.agent-runner.console :as console]
+   [task-conductor.agent-runner.handoff :as handoff])
+  (:import
+   [java.io File]))
 
 (deftest valid-transitions-test
   (testing "valid-transitions"
@@ -452,3 +456,131 @@
       (console/reset-state!)
       (is (= [] (console/state-history))
           "should clear history after reset"))))
+
+;;; Handoff Integration Tests
+
+(defn- create-temp-handoff-file
+  "Create a temp file for handoff testing."
+  []
+  (File/createTempFile "handoff-test" ".edn"))
+
+(defmacro with-temp-handoff
+  "Execute body with a temp handoff file, cleaning up afterward.
+   Binds path-sym to the temp file path and sets *handoff-path*."
+  [[path-sym temp-file-expr] & body]
+  `(let [temp-file# ~temp-file-expr
+         ~path-sym (.getAbsolutePath temp-file#)]
+     (try
+       (binding [console/*handoff-path* ~path-sym]
+         ~@body)
+       (finally
+         (.delete temp-file#)))))
+
+(deftest state->handoff-status-test
+  ;; Tests the state->handoff-status mapping.
+  ;; Verifies each console state maps to the correct handoff status.
+  (testing "state->handoff-status"
+    (testing "maps :running-sdk to :active"
+      (is (= :active (console/state->handoff-status :running-sdk))))
+    (testing "maps :needs-input to :needs-input"
+      (is (= :needs-input (console/state->handoff-status :needs-input))))
+    (testing "maps :running-cli to :active"
+      (is (= :active (console/state->handoff-status :running-cli))))
+    (testing "maps :task-complete to :completed"
+      (is (= :completed (console/state->handoff-status :task-complete))))
+    (testing "maps :story-complete to :completed"
+      (is (= :completed (console/state->handoff-status :story-complete))))
+    (testing "maps :error-recovery to :error"
+      (is (= :error (console/state->handoff-status :error-recovery))))
+    (testing "returns nil for :idle"
+      (is (nil? (console/state->handoff-status :idle))))
+    (testing "returns nil for :selecting-task"
+      (is (nil? (console/state->handoff-status :selecting-task))))))
+
+(deftest handoff-integration-test
+  ;; Tests handoff file writes on state transitions.
+  ;; Verifies:
+  ;; - Handoff file written with correct status on relevant transitions
+  ;; - Handoff file contains correct session-id, task-id, story-id
+  ;; - No handoff write on :idle or :selecting-task transitions
+  (testing "transition!"
+    (testing "writes handoff file on :running-sdk transition"
+      (with-temp-handoff [path (create-temp-handoff-file)]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-1"
+                                           :current-task-id 75})
+        (let [state (handoff/read-handoff-state path)]
+          (is (= :active (:status state)))
+          (is (= "sess-1" (:session-id state)))
+          (is (= 75 (:task-id state)))
+          (is (= 53 (:story-id state)))
+          (is (inst? (:timestamp state))))))
+
+    (testing "writes handoff file on :needs-input transition"
+      (with-temp-handoff [path (create-temp-handoff-file)]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-2"
+                                           :current-task-id 76})
+        (console/transition! :needs-input)
+        (let [state (handoff/read-handoff-state path)]
+          (is (= :needs-input (:status state)))
+          (is (= "sess-2" (:session-id state)))
+          (is (= 76 (:task-id state))))))
+
+    (testing "writes handoff file on :running-cli transition"
+      (with-temp-handoff [path (create-temp-handoff-file)]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-3"
+                                           :current-task-id 77})
+        (console/transition! :needs-input)
+        (console/transition! :running-cli)
+        (let [state (handoff/read-handoff-state path)]
+          (is (= :active (:status state)))
+          (is (= "sess-3" (:session-id state))))))
+
+    (testing "writes handoff file on :task-complete transition"
+      (with-temp-handoff [path (create-temp-handoff-file)]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-4"
+                                           :current-task-id 78})
+        (console/transition! :task-complete)
+        (let [state (handoff/read-handoff-state path)]
+          (is (= :completed (:status state)))
+          (is (= "sess-4" (:session-id state))))))
+
+    (testing "writes handoff file on :error-recovery transition"
+      (with-temp-handoff [path (create-temp-handoff-file)]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-5"
+                                           :current-task-id 79})
+        (console/transition! :error-recovery {:error {:type :test}})
+        (let [state (handoff/read-handoff-state path)]
+          (is (= :error (:status state)))
+          (is (= "sess-5" (:session-id state))))))
+
+    (testing "does not write handoff file on :selecting-task transition"
+      (with-temp-handoff [path (create-temp-handoff-file)]
+        (handoff/clear-handoff-state path)
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (is (not (.exists (File. path)))
+            "handoff file should not exist")))
+
+    (testing "does not write handoff file on :idle transition"
+      (with-temp-handoff [path (create-temp-handoff-file)]
+        (handoff/clear-handoff-state path)
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-6"
+                                           :current-task-id 80})
+        (console/transition! :error-recovery {:error {:type :test}})
+        ;; Clear the handoff file to test :idle doesn't write
+        (handoff/clear-handoff-state path)
+        (console/transition! :idle)
+        (is (not (.exists (File. path)))
+            "handoff file should not exist after :idle transition")))))
