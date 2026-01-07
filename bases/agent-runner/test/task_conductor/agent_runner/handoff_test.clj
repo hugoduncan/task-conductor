@@ -131,20 +131,22 @@
 
 (deftest clear-handoff-state-test
   (testing "clear-handoff-state"
-    (testing "deletes existing file"
-      (with-temp-file
-        (fn [path]
-          (handoff/write-handoff-state (valid-state) path)
-          (is (.exists (File. path)))
-          (handoff/clear-handoff-state path)
-          (is (not (.exists (File. path)))))))
+    (testing "when file exists"
+      (testing "deletes it and returns true"
+        (with-temp-file
+          (fn [path]
+            (handoff/write-handoff-state (valid-state) path)
+            (is (.exists (File. path)))
+            (is (true? (handoff/clear-handoff-state path)))
+            (is (not (.exists (File. path))))))))
 
-    (testing "is no-op when file missing"
-      (with-temp-file
-        (fn [path]
-          (is (not (.exists (File. path))))
-          (is (nil? (handoff/clear-handoff-state path)))
-          (is (not (.exists (File. path)))))))))
+    (testing "when file missing"
+      (testing "returns false"
+        (with-temp-file
+          (fn [path]
+            (is (not (.exists (File. path))))
+            (is (false? (handoff/clear-handoff-state path)))
+            (is (not (.exists (File. path))))))))))
 
 (deftest round-trip-test
   (testing "round-trip"

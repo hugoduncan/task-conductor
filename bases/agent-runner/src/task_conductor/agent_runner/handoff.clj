@@ -127,14 +127,12 @@
        (deserialize-state parsed)))))
 
 (defn clear-handoff-state
-  "Delete handoff file if it exists. No-op if file missing."
+  "Delete handoff file if it exists. Returns true if file was deleted, false if
+   file didn't exist."
   ([]
    (clear-handoff-state default-handoff-path))
   ([path]
-   (let [file (File. ^String path)]
-     (when (.exists file)
-       (.delete file)))
-   nil))
+   (.delete (File. ^String path))))
 
 (defn- file-not-found? [e]
   (instance? FileNotFoundException e))
