@@ -316,3 +316,139 @@
                  (catch clojure.lang.ExceptionInfo e e))]
         (is (re-find #":running-sdk → :idle" (ex-message ex))
             "error message should show transition attempted")))))
+
+;;; Mutable Wrapper Tests
+
+(deftest transition!-test
+  ;; Tests the mutable transition! wrapper function.
+  ;; Verifies:
+  ;; - Atom mutation on valid transitions
+  ;; - History tracking with timestamps
+  ;; - Context is recorded in history
+  ;; - Invalid transitions throw without mutating state
+  (testing "transition!"
+    (testing "mutates console-state atom"
+      (console/reset-state!)
+      (console/transition! :selecting-task {:story-id 53})
+      (is (= :selecting-task (console/current-state))
+          "should update current state")
+      (is (= 53 (:story-id @console/console-state))
+          "should apply context"))
+
+    (testing "records transition in history"
+      (console/reset-state!)
+      (console/transition! :selecting-task {:story-id 53})
+      (let [history (console/state-history)]
+        (is (= 1 (count history))
+            "should have one history entry")
+        (let [entry (first history)]
+          (is (= :idle (:from entry))
+              "should record source state")
+          (is (= :selecting-task (:to entry))
+              "should record target state")
+          (is (instance? java.time.Instant (:timestamp entry))
+              "should include timestamp")
+          (is (= {:story-id 53} (:context entry))
+              "should include context"))))
+
+    (testing "accumulates history across transitions"
+      (console/reset-state!)
+      (console/transition! :selecting-task {:story-id 53})
+      (console/transition! :running-sdk {:session-id "s1" :current-task-id 75})
+      (console/transition! :task-complete)
+      (let [history (console/state-history)]
+        (is (= 3 (count history))
+            "should have three history entries")
+        (is (= [:idle :selecting-task :running-sdk]
+               (mapv :from history))
+            "should record each source state")
+        (is (= [:selecting-task :running-sdk :task-complete]
+               (mapv :to history))
+            "should record each target state")))
+
+    (testing "omits context when empty"
+      (console/reset-state!)
+      (console/transition! :selecting-task {:story-id 53})
+      (console/transition! :running-sdk {:session-id "s1" :current-task-id 75})
+      (console/transition! :task-complete)
+      (let [entry (last (console/state-history))]
+        (is (nil? (:context entry))
+            "should not include empty context")))
+
+    (testing "returns new state"
+      (console/reset-state!)
+      (let [result (console/transition! :selecting-task {:story-id 53})]
+        (is (= :selecting-task (:state result))
+            "should return new state map")
+        (is (= 53 (:story-id result))
+            "should include context in returned state")))
+
+    (testing "throws on invalid transition without mutating"
+      (console/reset-state!)
+      (let [state-before @console/console-state
+            ex (try
+                 (console/transition! :running-sdk)
+                 nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+        (is (some? ex)
+            "should throw exception")
+        (is (= :invalid-transition (:type (ex-data ex)))
+            "should have :invalid-transition type")
+        (is (= state-before @console/console-state)
+            "should not mutate state on failure")))))
+
+(deftest current-state-test
+  ;; Tests the current-state query function.
+  (testing "current-state"
+    (testing "returns current state keyword"
+      (console/reset-state!)
+      (is (= :idle (console/current-state)))
+      (console/transition! :selecting-task {:story-id 53})
+      (is (= :selecting-task (console/current-state)))
+      (console/transition! :running-sdk {:session-id "s1" :current-task-id 75})
+      (is (= :running-sdk (console/current-state))))))
+
+(deftest state-history-test
+  ;; Tests the state-history query function.
+  (testing "state-history"
+    (testing "returns empty vector initially"
+      (console/reset-state!)
+      (is (= [] (console/state-history))))
+
+    (testing "returns history vector after transitions"
+      (console/reset-state!)
+      (console/transition! :selecting-task {:story-id 53})
+      (console/transition! :running-sdk {:session-id "s1" :current-task-id 75})
+      (let [history (console/state-history)]
+        (is (= 2 (count history)))
+        (is (every? #(contains? % :from) history)
+            "all entries should have :from")
+        (is (every? #(contains? % :to) history)
+            "all entries should have :to")
+        (is (every? #(contains? % :timestamp) history)
+            "all entries should have :timestamp")))))
+
+(deftest reset-state!-test
+  ;; Tests the reset-state! function.
+  (testing "reset-state!"
+    (testing "resets to initial state"
+      (console/reset-state!)
+      (console/transition! :selecting-task {:story-id 53})
+      (console/transition! :running-sdk {:session-id "s1" :current-task-id 75})
+      (console/reset-state!)
+      (is (= :idle (console/current-state))
+          "should reset state to :idle")
+      (is (nil? (:story-id @console/console-state))
+          "should clear story-id")
+      (is (nil? (:session-id @console/console-state))
+          "should clear session-id"))
+
+    (testing "clears history"
+      (console/reset-state!)
+      (console/transition! :selecting-task {:story-id 53})
+      (console/transition! :running-sdk {:session-id "s1" :current-task-id 75})
+      (is (= 2 (count (console/state-history)))
+          "should have history before reset")
+      (console/reset-state!)
+      (is (= [] (console/state-history))
+          "should clear history after reset"))))

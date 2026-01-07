@@ -47,13 +47,14 @@
 ;; - → :story-complete: {} (clears task/session)
 ;; - → :idle from anywhere: {} (resets to initial)
 
-(def ^:private initial-state
+(def initial-state
   "Initial state map structure."
   {:state :idle
    :story-id nil
    :current-task-id nil
    :session-id nil
-   :error nil})
+   :error nil
+   :history []})
 
 (defn- validate-transition
   "Validates that a transition is legal. Throws ex-info if invalid."
@@ -77,46 +78,49 @@
 
 (defn- apply-transition-context
   "Applies context to state based on target state.
-   Returns updated state map with context fields populated."
+   Returns updated state map with context fields populated.
+   Preserves :history from input state."
   [state to-state context]
-  (case to-state
-    :idle
-    (merge initial-state
-           (select-keys context [:story-id]))
+  (let [history (:history state [])]
+    (case to-state
+      :idle
+      (-> initial-state
+          (assoc :history history)
+          (merge (select-keys context [:story-id])))
 
-    :selecting-task
-    (-> state
-        (assoc :state to-state)
-        (merge (select-keys context [:story-id]))
-        (assoc :error nil))
+      :selecting-task
+      (-> state
+          (assoc :state to-state)
+          (merge (select-keys context [:story-id]))
+          (assoc :error nil))
 
-    :running-sdk
-    (-> state
-        (assoc :state to-state)
-        (merge (select-keys context [:session-id :current-task-id]))
-        (assoc :error nil))
+      :running-sdk
+      (-> state
+          (assoc :state to-state)
+          (merge (select-keys context [:session-id :current-task-id]))
+          (assoc :error nil))
 
-    :needs-input
-    (assoc state :state to-state)
+      :needs-input
+      (assoc state :state to-state)
 
-    :running-cli
-    (assoc state :state to-state)
+      :running-cli
+      (assoc state :state to-state)
 
-    :error-recovery
-    (-> state
-        (assoc :state to-state)
-        (assoc :error (:error context)))
+      :error-recovery
+      (-> state
+          (assoc :state to-state)
+          (assoc :error (:error context)))
 
-    :task-complete
-    (-> state
-        (assoc :state to-state)
-        (assoc :current-task-id nil))
+      :task-complete
+      (-> state
+          (assoc :state to-state)
+          (assoc :current-task-id nil))
 
-    :story-complete
-    (-> state
-        (assoc :state to-state)
-        (assoc :current-task-id nil)
-        (assoc :session-id nil))))
+      :story-complete
+      (-> state
+          (assoc :state to-state)
+          (assoc :current-task-id nil)
+          (assoc :session-id nil)))))
 
 ;;; Pure Transition Function
 
@@ -144,3 +148,57 @@
    (let [from-state (:state state)]
      (validate-transition from-state to-state)
      (apply-transition-context state to-state context))))
+
+;;; Mutable State Management
+
+(defonce console-state
+  (atom initial-state))
+
+(defn- make-history-entry
+  "Creates a history entry for a transition."
+  [from-state to-state context]
+  {:from from-state
+   :to to-state
+   :timestamp (java.time.Instant/now)
+   :context (when (seq context) context)})
+
+(defn transition!
+  "Transitions console state atom to a new state.
+
+   Validates transition, updates atom, and appends to history.
+   Returns the new state map.
+
+   Arguments:
+   - to-state: Target state keyword
+   - context: Optional map of context to apply during transition
+
+   Throws ex-info on invalid transition (see `transition` for details)."
+  ([to-state]
+   (transition! to-state {}))
+  ([to-state context]
+   (let [new-state
+         (swap! console-state
+                (fn [current]
+                  (let [from-state (:state current)
+                        transitioned (transition current to-state context)
+                        entry (make-history-entry from-state to-state context)]
+                    (update transitioned :history conj entry))))]
+     new-state)))
+
+;;; Query Functions
+
+(defn current-state
+  "Returns the current state keyword."
+  []
+  (:state @console-state))
+
+(defn state-history
+  "Returns the history vector of transitions."
+  []
+  (:history @console-state))
+
+(defn reset-state!
+  "Resets the console state to initial values.
+   Clears history. For testing and dev use."
+  []
+  (reset! console-state initial-state))
