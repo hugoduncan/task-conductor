@@ -136,13 +136,22 @@
        (.delete file)))
    nil))
 
+(defn- expected-watcher-exception?
+  "Return true if exception is expected during file watching.
+   FileNotFoundException and parse errors occur during atomic writes."
+  [e]
+  (or (instance? FileNotFoundException e)
+      (and (instance? clojure.lang.ExceptionInfo e)
+           (= :parse-error (:type (ex-data e))))))
+
 (defn watch-handoff-file
   "Watch handoff file for changes and invoke callback with new state.
 
    Watches the parent directory and filters for the specific handoff file.
    On create or modify events, reads the state and invokes callback with
-   the parsed state map. Read errors are silently ignored (file may be
-   mid-write during atomic rename).
+   the parsed state map. FileNotFoundException and parse errors are logged
+   at DEBUG (expected during atomic writes). Other exceptions are logged
+   at WARN to surface potential bugs.
 
    Returns a stop function that halts the watcher when called."
   ([callback]
@@ -158,8 +167,10 @@
                      (try
                        (callback (read-handoff-state abs-path))
                        (catch Exception e
-                         ;; Ignore read errors - file may be mid-write
-                         (log/debug e "Ignoring exception reading handoff file"
-                                    {:path abs-path})))))
+                         (if (expected-watcher-exception? e)
+                           (log/debug e "Expected exception reading handoff file"
+                                      {:path abs-path})
+                           (log/warn e "Unexpected exception reading handoff file"
+                                     {:path abs-path}))))))
          watcher (beholder/watch handler parent-dir)]
      (fn [] (beholder/stop watcher)))))
