@@ -8,7 +8,9 @@
    [taoensso.telemere :as t]
    [taoensso.telemere.tools-logging :as tt]))
 
-;; Route tools.logging calls to telemere
+;; Side-effect at namespace load: globally redirects all clojure.tools.logging
+;; calls to telemere. This must run before any logging occurs to ensure
+;; consistent output format across the application.
 (tt/tools-logging->telemere!)
 
 (defn check-interop
