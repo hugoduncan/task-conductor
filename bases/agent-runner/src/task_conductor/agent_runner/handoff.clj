@@ -162,19 +162,18 @@
    (watch-handoff-file callback default-handoff-path))
   ([callback path]
    (let [file (File. ^String path)
-         abs-path (.getAbsolutePath file)
          filename (.getName file)
          parent-dir (or (.getParent file) ".")
-         handler (fn [{:keys [type path]}]
+         handler (fn [{:keys [type path] :as event}]
                    (when (and (#{:create :modify} type)
                               (= filename (str (.getFileName path))))
                      (try
-                       (callback (read-handoff-state abs-path))
+                       (callback (read-handoff-state (.getAbsolutePath file)))
                        (catch Exception e
                          (if (expected-watcher-exception? e)
                            (log/debug e "Expected exception reading handoff file"
-                                      {:path abs-path})
+                                      {:event event})
                            (log/warn e "Unexpected exception reading handoff file"
-                                     {:path abs-path}))))))
+                                     {:event event}))))))
          watcher (beholder/watch handler parent-dir)]
      (fn [] (beholder/stop watcher)))))
