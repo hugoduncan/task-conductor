@@ -136,13 +136,17 @@
        (.delete file)))
    nil))
 
-(defn- expected-watcher-exception?
+(defn- file-not-found? [e]
+  (instance? FileNotFoundException e))
+
+(defn- parse-error? [e]
+  (and (instance? clojure.lang.ExceptionInfo e)
+       (= :parse-error (:type (ex-data e)))))
+
+(def ^:private expected-watcher-exception?
   "Return true if exception is expected during file watching.
    FileNotFoundException and parse errors occur during atomic writes."
-  [e]
-  (or (instance? FileNotFoundException e)
-      (and (instance? clojure.lang.ExceptionInfo e)
-           (= :parse-error (:type (ex-data e))))))
+  (some-fn file-not-found? parse-error?))
 
 (defn watch-handoff-file
   "Watch handoff file for changes and invoke callback with new state.
