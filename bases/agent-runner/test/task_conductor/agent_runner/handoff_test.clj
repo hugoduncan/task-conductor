@@ -67,20 +67,20 @@
                                 #"Invalid handoff state"
                                 (handoff/write-handoff-state {} path))))))
 
-    (testing "throws on missing required field"
+    (testing "throws on missing required field with field name in message"
       (with-temp-file
         (fn [path]
           (let [state (dissoc (valid-state) :session-id)]
             (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                                  #"Invalid handoff state"
+                                  #"Invalid handoff state:.*:session-id"
                                   (handoff/write-handoff-state state path)))))))
 
-    (testing "throws on invalid status enum"
+    (testing "throws on invalid status enum with field name in message"
       (with-temp-file
         (fn [path]
           (let [state (assoc (valid-state) :status :invalid)]
             (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                                  #"Invalid handoff state"
+                                  #"Invalid handoff state:.*:status"
                                   (handoff/write-handoff-state state path)))))))
 
     (testing "accepts optional fields"
@@ -121,12 +121,12 @@
                                 #"Failed to parse"
                                 (handoff/read-handoff-state path))))))
 
-    (testing "throws on valid EDN with invalid schema"
+    (testing "throws on valid EDN with invalid schema with field name in message"
       (with-temp-file
         (fn [path]
           (spit path (pr-str {:status :active}))
           (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                                #"Invalid handoff state"
+                                #"Invalid handoff state:.*:session-id"
                                 (handoff/read-handoff-state path))))))))
 
 (deftest clear-handoff-state-test

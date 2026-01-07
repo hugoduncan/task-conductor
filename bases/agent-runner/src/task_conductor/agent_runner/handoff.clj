@@ -6,6 +6,7 @@
    shared communication channel."
   (:require
    [clojure.edn :as edn]
+   [clojure.string :as str]
    [clojure.tools.logging :as log]
    [malli.core :as m]
    [malli.error :as me]
@@ -41,22 +42,32 @@
    [:handoff-reason {:optional true} :string]
    [:sdk-result {:optional true} :map]])
 
+(defn- summarize-errors
+  "Convert malli humanized errors map to a summary string.
+   E.g., {:session-id [\"missing required key\"]} -> \":session-id missing required key\""
+  [errors]
+  (->> errors
+       (map (fn [[k v]] (str k " " (first v))))
+       (str/join ", ")))
+
 (defn- validate-state!
   "Validate state against HandoffState schema. Throws on invalid."
   [state]
-  (when-not (m/validate HandoffState state)
-    (throw (ex-info "Invalid handoff state"
-                    {:type :validation-error
-                     :errors (me/humanize (m/explain HandoffState state))})))
+  (when-let [explanation (m/explain HandoffState state)]
+    (let [errors (me/humanize explanation)]
+      (throw (ex-info (str "Invalid handoff state: " (summarize-errors errors))
+                      {:type :validation-error
+                       :errors errors}))))
   state)
 
 (defn- validate-raw-state!
   "Validate raw state (as read from file) against RawHandoffState schema."
   [state]
-  (when-not (m/validate RawHandoffState state)
-    (throw (ex-info "Invalid handoff state"
-                    {:type :validation-error
-                     :errors (me/humanize (m/explain RawHandoffState state))})))
+  (when-let [explanation (m/explain RawHandoffState state)]
+    (let [errors (me/humanize explanation)]
+      (throw (ex-info (str "Invalid handoff state: " (summarize-errors errors))
+                      {:type :validation-error
+                       :errors errors}))))
   state)
 
 (defn instant->iso8601
