@@ -224,15 +224,13 @@
   ([to-state]
    (transition! to-state {}))
   ([to-state context]
-   ;; Capture pre-transition state for handoff (some transitions clear fields)
-   (let [pre-state @console-state
-         new-state
-         (swap! console-state
-                (fn [current]
-                  (let [from-state (:state current)
-                        transitioned (transition current to-state context)
-                        entry (make-history-entry from-state to-state context)]
-                    (update transitioned :history conj entry))))]
+   (let [[pre-state new-state]
+         (swap-vals! console-state
+                     (fn [current]
+                       (let [from-state (:state current)
+                             transitioned (transition current to-state context)
+                             entry (make-history-entry from-state to-state context)]
+                         (update transitioned :history conj entry))))]
      (maybe-write-handoff! pre-state new-state to-state)
      new-state)))
 
