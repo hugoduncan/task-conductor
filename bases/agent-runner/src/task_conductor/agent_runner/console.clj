@@ -265,9 +265,9 @@
    Returns process exit code.
 
    The CLI is launched with inherited stdio so the user interacts
-   directly with the terminal. Working directory is inherited from the
-   current process by babashka.process default behavior. This function
-   blocks until the CLI process exits."
+   directly with the terminal. Both working directory and environment
+   variables are inherited from the current process by babashka.process
+   default behavior. This function blocks until the CLI process exits."
   [session-id]
   (let [proc (p/process ["claude" "--resume" session-id]
                         {:inherit true})]
