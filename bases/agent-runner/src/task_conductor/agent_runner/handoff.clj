@@ -3,7 +3,11 @@
 
    Provides file-based state persistence for coordinating handoffs between
    the Claude Agent SDK and Claude Code CLI. The handoff file acts as a
-   shared communication channel."
+   shared communication channel.
+
+   Defines schemas for:
+   - HandoffState: Console state machine handoff state
+   - HookStatus: CLI exit status captured by stop hooks (extensible)"
   (:require
    [clojure.edn :as edn]
    [clojure.string :as str]
@@ -18,7 +22,57 @@
    [java.time Instant]
    [java.time.format DateTimeFormatter]))
 
+;;; Constants
+
 (def default-handoff-path ".task-conductor-handoff.edn")
+(def hook-handoff-path ".task-conductor/handoff.edn")
+
+;;; Timestamp Utilities
+
+(defn instant->iso8601
+  "Convert java.time.Instant to ISO-8601 string."
+  [^Instant inst]
+  (.format DateTimeFormatter/ISO_INSTANT inst))
+
+(defn iso8601->instant
+  "Parse ISO-8601 string to java.time.Instant."
+  [^String s]
+  (Instant/parse s))
+
+(defn now
+  "Returns the current instant."
+  []
+  (Instant/now))
+
+;;; HookStatus Schema (for CLI stop hook exit status)
+
+(def HookStatus
+  "Schema for CLI exit status captured by stop hooks.
+
+   Required fields:
+   - :status - keyword indicating exit status (:completed, :error, :needs-clarification, etc.)
+   - :timestamp - when the status was recorded
+
+   Optional/extensible fields:
+   - :reason - keyword providing more detail (e.g., :cli-killed, :tool-error)
+   - :question - string containing clarification question (when :needs-clarification)
+   - Additional fields may be added by flow models."
+  [:map {:closed false}
+   [:status keyword?]
+   [:timestamp inst?]
+   [:reason {:optional true} keyword?]
+   [:question {:optional true} string?]])
+
+(def RawHookStatus
+  "File-serializable format for HookStatus.
+   Timestamps are stored as ISO-8601 strings."
+  [:map {:closed false}
+   [:status keyword?]
+   [:timestamp string?]
+   [:reason {:optional true} keyword?]
+   [:question {:optional true} string?]])
+
+;;; HandoffState Schema (for console state machine)
 
 (def HandoffState
   "Malli schema for handoff state between SDK and CLI (domain model)."
@@ -42,6 +96,8 @@
    [:handoff-reason {:optional true} :string]
    [:sdk-result {:optional true} :map]])
 
+;;; Error Formatting
+
 (defn- summarize-errors
   "Convert malli humanized errors map to a summary string.
    E.g., {:session-id [\"missing required key\"]} -> \":session-id missing required key\""
@@ -49,6 +105,21 @@
   (->> errors
        (map (fn [[k v]] (str k " " (first v))))
        (str/join ", ")))
+
+;;; HookStatus Validation
+
+(defn valid-hook-status?
+  "Returns true if the hook-status map is valid."
+  [hook-status]
+  (m/validate HookStatus hook-status))
+
+(defn explain-hook-status
+  "Returns human-readable explanation of validation errors, or nil if valid."
+  [hook-status]
+  (when-let [explanation (m/explain HookStatus hook-status)]
+    (me/humanize explanation)))
+
+;;; HandoffState Validation
 
 (defn- validate-state!
   "Validate state against HandoffState schema. Throws on invalid."
@@ -70,15 +141,21 @@
                        :errors errors}))))
   state)
 
-(defn instant->iso8601
-  "Convert java.time.Instant to ISO-8601 string."
-  [^Instant inst]
-  (.format DateTimeFormatter/ISO_INSTANT inst))
+;;; HookStatus Serialization
 
-(defn iso8601->instant
-  "Parse ISO-8601 string to java.time.Instant."
-  [^String s]
-  (Instant/parse s))
+(defn serialize-hook-status
+  "Convert HookStatus to file-serializable RawHookStatus format.
+   Converts timestamp from Instant to ISO-8601 string."
+  [hook-status]
+  (update hook-status :timestamp instant->iso8601))
+
+(defn deserialize-hook-status
+  "Convert RawHookStatus to HookStatus format.
+   Parses timestamp from ISO-8601 string to Instant."
+  [raw-hook-status]
+  (update raw-hook-status :timestamp iso8601->instant))
+
+;;; HandoffState Serialization
 
 (defn- serialize-state
   "Convert state with Instant to EDN-writable form."
@@ -89,6 +166,8 @@
   "Convert EDN-read state back to domain form with Instant."
   [state]
   (update state :timestamp iso8601->instant))
+
+;;; HandoffState File I/O
 
 (defn write-handoff-state
   "Write handoff state to file with atomic rename.
@@ -145,6 +224,26 @@
   ([path]
    (.delete (File. ^String path))))
 
+;;; HookStatus File I/O
+
+(defn read-hook-status
+  "Read hook status from the hook handoff file.
+   Returns deserialized HookStatus, or nil if file doesn't exist or is invalid."
+  ([]
+   (read-hook-status hook-handoff-path))
+  ([path]
+   (let [file (File. ^String path)]
+     (when (.exists file)
+       (try
+         (let [content (slurp file)
+               parsed (edn/read-string content)]
+           (when (valid-hook-status? (deserialize-hook-status parsed))
+             (deserialize-hook-status parsed)))
+         (catch Exception _
+           nil))))))
+
+;;; File Watching
+
 (defn- file-not-found? [e]
   (instance? FileNotFoundException e))
 
@@ -186,3 +285,17 @@
                                      {:event event}))))))
          watcher (beholder/watch handler parent-dir)]
      (fn [] (beholder/stop watcher)))))
+
+;;; HookStatus Constructors
+
+(defn make-hook-status
+  "Create a HookStatus map with required fields.
+
+   status - keyword indicating exit status
+   opts - optional map with :reason, :question, or other fields"
+  ([status]
+   (make-hook-status status {}))
+  ([status opts]
+   (merge {:status status
+           :timestamp (now)}
+          opts)))

@@ -1,4 +1,13 @@
 (ns task-conductor.agent-runner.handoff-test
+  ;; Tests for handoff state management functions and HookStatus schemas.
+  ;;
+  ;; Contracts tested:
+  ;; - write-handoff-state validates and atomically persists state
+  ;; - read-handoff-state reads, parses, validates, and returns state
+  ;; - clear-handoff-state removes file or no-ops if missing
+  ;; - Round-trip preserves data including Instant timestamps
+  ;; - HookStatus schema validates required and optional fields
+  ;; - HookStatus serialization round-trips preserve data
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.handoff :as handoff])
@@ -6,12 +15,7 @@
    [java.io File FileNotFoundException]
    [java.time Instant]))
 
-;; Tests for handoff state management functions.
-;; Contracts tested:
-;; - write-handoff-state validates and atomically persists state
-;; - read-handoff-state reads, parses, validates, and returns state
-;; - clear-handoff-state removes file or no-ops if missing
-;; - Round-trip preserves data including Instant timestamps
+;;; Test Utilities
 
 (defn- with-temp-file
   "Execute f with a temp file path, ensuring cleanup."
@@ -69,6 +73,8 @@
   Returns true if watcher responded, false on timeout."
   [received-atom path timeout-ms]
   (poll-until-ready! #(some? @received-atom) path timeout-ms))
+
+;;; HandoffState Tests
 
 (deftest write-handoff-state-test
   (testing "write-handoff-state"
@@ -186,11 +192,7 @@
               (handoff/write-handoff-state state path)
               (is (= status (:status (handoff/read-handoff-state path)))))))))))
 
-;; Tests for watch-handoff-file
-;; Contracts tested:
-;; - Callback invoked on file create/modify with parsed state
-;; - Stop function halts the watcher
-;; - Read errors during mid-write are silently ignored
+;;; File Watching Tests
 
 (deftest watch-handoff-file-test
   (testing "watch-handoff-file"
@@ -274,11 +276,7 @@
               (finally
                 (stop-fn)))))))))
 
-;; Tests for default-handoff-path usage
-;; Contracts tested:
-;; - 0-arity write-handoff-state uses default-handoff-path
-;; - 0-arity read-handoff-state uses default-handoff-path
-;; - 1-arity watch-handoff-file uses default-handoff-path
+;;; Default Path Tests
 
 (deftest default-path-test
   (testing "default-handoff-path usage"
@@ -314,3 +312,124 @@
                   (stop-fn)))))
           (finally
             (.delete file)))))))
+
+;;; HookStatus Schema Tests
+
+(def valid-hook-status
+  {:status :completed
+   :timestamp (Instant/parse "2024-01-15T10:30:00Z")})
+
+(def valid-hook-status-extended
+  {:status :needs-clarification
+   :timestamp (Instant/parse "2024-01-15T10:30:00Z")
+   :reason :ambiguous-task
+   :question "Which file?"})
+
+(deftest hook-status-schema-test
+  (testing "HookStatus"
+    (testing "validates minimal valid status"
+      (is (handoff/valid-hook-status? valid-hook-status)))
+
+    (testing "validates status with optional fields"
+      (is (handoff/valid-hook-status? valid-hook-status-extended)))
+
+    (testing "allows custom extension fields"
+      (is (handoff/valid-hook-status?
+           (assoc valid-hook-status :custom-field "value"))))
+
+    (testing "rejects missing :status"
+      (is (not (handoff/valid-hook-status?
+                {:timestamp (Instant/now)}))))
+
+    (testing "rejects missing :timestamp"
+      (is (not (handoff/valid-hook-status?
+                {:status :completed}))))
+
+    (testing "rejects wrong type for :status"
+      (is (not (handoff/valid-hook-status?
+                {:status "completed"
+                 :timestamp (Instant/now)}))))
+
+    (testing "rejects wrong type for :timestamp"
+      (is (not (handoff/valid-hook-status?
+                {:status :completed
+                 :timestamp "not-an-instant"}))))))
+
+(deftest hook-status-explanation-test
+  (testing "explain-hook-status"
+    (testing "returns nil for valid status"
+      (is (nil? (handoff/explain-hook-status valid-hook-status))))
+
+    (testing "returns errors for missing required fields"
+      (let [explanation (handoff/explain-hook-status {})]
+        (is (some? explanation))
+        (is (contains? explanation :status))
+        (is (contains? explanation :timestamp))))))
+
+;;; HookStatus Serialization Tests
+
+(deftest hook-status-serialization-test
+  (testing "HookStatus serialization"
+    (testing "round-trips minimal status"
+      (let [serialized (handoff/serialize-hook-status valid-hook-status)
+            deserialized (handoff/deserialize-hook-status serialized)]
+        (is (= valid-hook-status deserialized))))
+
+    (testing "round-trips extended status"
+      (let [serialized (handoff/serialize-hook-status valid-hook-status-extended)
+            deserialized (handoff/deserialize-hook-status serialized)]
+        (is (= valid-hook-status-extended deserialized))))
+
+    (testing "serialized format has string timestamp"
+      (let [serialized (handoff/serialize-hook-status valid-hook-status)]
+        (is (string? (:timestamp serialized)))
+        (is (= "2024-01-15T10:30:00Z" (:timestamp serialized)))))))
+
+;;; HookStatus Constructor Tests
+
+(deftest make-hook-status-test
+  (testing "make-hook-status"
+    (testing "creates valid status with minimal args"
+      (let [status (handoff/make-hook-status :completed)]
+        (is (handoff/valid-hook-status? status))
+        (is (= :completed (:status status)))
+        (is (inst? (:timestamp status)))))
+
+    (testing "creates valid status with options"
+      (let [status (handoff/make-hook-status :error {:reason :tool-error})]
+        (is (handoff/valid-hook-status? status))
+        (is (= :error (:status status)))
+        (is (= :tool-error (:reason status)))))))
+
+;;; HookStatus File I/O Tests
+
+(deftest read-hook-status-test
+  (testing "read-hook-status"
+    (testing "returns nil for non-existent file"
+      (is (nil? (handoff/read-hook-status "/nonexistent/path.edn"))))
+
+    (testing "reads valid hook status from file"
+      (with-temp-file
+        (fn [path]
+          (spit path (pr-str (handoff/serialize-hook-status valid-hook-status)))
+          (let [read-status (handoff/read-hook-status path)]
+            (is (= valid-hook-status read-status))))))
+
+    (testing "reads extended hook status from file"
+      (with-temp-file
+        (fn [path]
+          (spit path (pr-str (handoff/serialize-hook-status valid-hook-status-extended)))
+          (let [read-status (handoff/read-hook-status path)]
+            (is (= valid-hook-status-extended read-status))))))
+
+    (testing "returns nil for invalid EDN"
+      (with-temp-file
+        (fn [path]
+          (spit path "{:invalid edn")
+          (is (nil? (handoff/read-hook-status path))))))
+
+    (testing "returns nil for invalid hook status schema"
+      (with-temp-file
+        (fn [path]
+          (spit path (pr-str {:status "invalid"}))
+          (is (nil? (handoff/read-hook-status path))))))))
