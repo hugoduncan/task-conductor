@@ -5,6 +5,7 @@
    CLI handoff, and task completion. This namespace provides pure
    transition functions and mutable wrappers with history tracking."
   (:require
+   [babashka.process :as p]
    [task-conductor.agent-runner.handoff :as handoff]))
 
 ;;; State Machine Definition
@@ -256,3 +257,46 @@
    Clears history. For testing and dev use."
   []
   (reset! console-state initial-state))
+
+;;; CLI Handoff
+
+(defn launch-cli-resume
+  "Launch claude CLI to resume session, blocking until exit.
+   Returns process exit code.
+
+   The CLI is launched with inherited stdio so the user interacts
+   directly with the terminal. This function blocks until the CLI
+   process exits."
+  [session-id]
+  (let [proc (p/process ["claude" "--resume" session-id]
+                        {:inherit true})]
+    (:exit @proc)))
+
+(defn hand-to-cli
+  "Hand off from SDK to CLI for user interaction.
+
+   Transitions state machine through :needs-input to :running-cli,
+   launches the CLI with the current session, and handles the exit.
+
+   On CLI exit code 0: transitions back to :running-sdk
+   On non-zero exit: transitions to :error-recovery
+
+   Returns the new state map after CLI exits.
+
+   Throws if current state is not :running-sdk."
+  []
+  (let [current (:state @console-state)]
+    (when (not= :running-sdk current)
+      (throw (ex-info (str "hand-to-cli requires :running-sdk state, got " current)
+                      {:type :invalid-state
+                       :current-state current
+                       :required-state :running-sdk}))))
+  (transition! :needs-input)
+  (transition! :running-cli)
+  (let [session-id (:session-id @console-state)
+        exit-code (launch-cli-resume session-id)]
+    (if (zero? exit-code)
+      (transition! :running-sdk)
+      (transition! :error-recovery
+                   {:error {:type :cli-error
+                            :exit-code exit-code}}))))
