@@ -14,7 +14,8 @@
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.handoff :as handoff])
   (:import
-   [java.io File]))
+   [java.io File]
+   [java.time Instant]))
 
 (deftest valid-transitions-test
   (testing "valid-transitions"
@@ -621,17 +622,26 @@
           (console/launch-cli-resume "session-xyz")
           (is (= {:inherit true} @captured-opts)))))))
 
+(def mock-hook-status-completed
+  {:status :completed
+   :timestamp (Instant/parse "2024-01-15T10:30:00Z")})
+
+(def mock-hook-status-error
+  {:status :error
+   :timestamp (Instant/parse "2024-01-15T10:30:00Z")
+   :reason :tool-error})
+
 (deftest hand-to-cli-test
   ;; Tests hand-to-cli orchestrates state transitions and handles CLI exit.
   ;; Verifies:
   ;; - Transitions through :needs-input to :running-cli
-  ;; - Returns to :running-sdk on exit code 0
-  ;; - Transitions to :error-recovery on non-zero exit
+  ;; - Returns {:state <map> :cli-status <hook-status>}
+  ;; - Error recovery based on exit code, hook status, or missing hook
   ;; - Throws when not in :running-sdk state
   (testing "hand-to-cli"
     (testing "transitions through :needs-input to :running-cli"
-      (with-redefs [p/process (fn [_cmd _opts]
-                                (delay {:exit 0}))]
+      (with-redefs [p/process (fn [_cmd _opts] (delay {:exit 0}))
+                    handoff/read-hook-status (constantly mock-hook-status-completed)]
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
         (console/transition! :running-sdk {:session-id "sess-1"
@@ -643,41 +653,95 @@
           (is (some #(= :running-cli (:to %)) history)
               "should transition through :running-cli"))))
 
-    (testing "returns to :running-sdk on exit code 0"
-      (with-redefs [p/process (fn [_cmd _opts]
-                                (delay {:exit 0}))]
+    (testing "returns extended result with :state and :cli-status"
+      (with-redefs [p/process (fn [_cmd _opts] (delay {:exit 0}))
+                    handoff/read-hook-status (constantly mock-hook-status-completed)]
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
         (console/transition! :running-sdk {:session-id "sess-2"
                                            :current-task-id 76})
         (let [result (console/hand-to-cli)]
-          (is (= :running-sdk (:state result))
-              "should return to :running-sdk")
-          (is (= :running-sdk (console/current-state))
-              "current state should be :running-sdk"))))
+          (is (map? result)
+              "should return a map")
+          (is (contains? result :state)
+              "should contain :state key")
+          (is (contains? result :cli-status)
+              "should contain :cli-status key")
+          (is (map? (:state result))
+              ":state should be a map")
+          (is (= mock-hook-status-completed (:cli-status result))
+              ":cli-status should be the hook status"))))
 
-    (testing "transitions to :error-recovery on non-zero exit"
-      (with-redefs [p/process (fn [_cmd _opts]
-                                (delay {:exit 1}))]
+    (testing "returns to :running-sdk on exit code 0 with :completed hook status"
+      (with-redefs [p/process (fn [_cmd _opts] (delay {:exit 0}))
+                    handoff/read-hook-status (constantly mock-hook-status-completed)]
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
         (console/transition! :running-sdk {:session-id "sess-3"
                                            :current-task-id 77})
         (let [result (console/hand-to-cli)]
-          (is (= :error-recovery (:state result))
+          (is (= :running-sdk (get-in result [:state :state]))
+              "should return to :running-sdk")
+          (is (= :running-sdk (console/current-state))
+              "current state should be :running-sdk"))))
+
+    (testing "transitions to :error-recovery on non-zero exit code"
+      (with-redefs [p/process (fn [_cmd _opts] (delay {:exit 1}))
+                    handoff/read-hook-status (constantly mock-hook-status-completed)]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-4"
+                                           :current-task-id 78})
+        (let [result (console/hand-to-cli)]
+          (is (= :error-recovery (get-in result [:state :state]))
               "should transition to :error-recovery")
-          (is (= {:type :cli-error :exit-code 1} (:error result))
-              "should set error with exit code"))))
+          (is (= :cli-error (get-in result [:state :error :type]))
+              "error type should be :cli-error")
+          (is (= 1 (get-in result [:state :error :exit-code]))
+              "should include exit code"))))
+
+    (testing "transitions to :error-recovery on hook status :error"
+      (with-redefs [p/process (fn [_cmd _opts] (delay {:exit 0}))
+                    handoff/read-hook-status (constantly mock-hook-status-error)]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-5"
+                                           :current-task-id 79})
+        (let [result (console/hand-to-cli)]
+          (is (= :error-recovery (get-in result [:state :state]))
+              "should transition to :error-recovery")
+          (is (= :hook-error (get-in result [:state :error :type]))
+              "error type should be :hook-error")
+          (is (= mock-hook-status-error (get-in result [:state :error :hook-status]))
+              "should include hook status in error"))))
+
+    (testing "transitions to :error-recovery with :cli-killed when hook status is nil"
+      (with-redefs [p/process (fn [_cmd _opts] (delay {:exit 0}))
+                    handoff/read-hook-status (constantly nil)]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-6"
+                                           :current-task-id 80})
+        (let [result (console/hand-to-cli)]
+          (is (= :error-recovery (get-in result [:state :state]))
+              "should transition to :error-recovery")
+          (is (= :cli-killed (get-in result [:state :error :type]))
+              "error type should be :cli-killed")
+          (is (= :cli-killed (get-in result [:state :error :reason]))
+              "should include :cli-killed reason")
+          (is (nil? (:cli-status result))
+              ":cli-status should be nil"))))
 
     (testing "uses session-id from console-state"
       (let [captured-session (atom nil)]
         (with-redefs [p/process (fn [cmd _opts]
                                   (reset! captured-session (nth cmd 2))
-                                  (delay {:exit 0}))]
+                                  (delay {:exit 0}))
+                      handoff/read-hook-status (constantly mock-hook-status-completed)]
           (console/reset-state!)
           (console/transition! :selecting-task {:story-id 53})
           (console/transition! :running-sdk {:session-id "my-session-id"
-                                             :current-task-id 78})
+                                             :current-task-id 81})
           (console/hand-to-cli)
           (is (= "my-session-id" @captured-session)
               "should use session-id from state"))))

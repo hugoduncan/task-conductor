@@ -273,16 +273,50 @@
                         {:inherit true})]
     (:exit @proc)))
 
+(defn- determine-cli-result
+  "Determine the result state and error info based on exit code and hook status.
+   Returns {:next-state <keyword> :error <map-or-nil>}."
+  [exit-code hook-status]
+  (cond
+    ;; CLI exited with error
+    (not (zero? exit-code))
+    {:next-state :error-recovery
+     :error {:type :cli-error
+             :exit-code exit-code}}
+
+    ;; Hook status indicates error
+    (= :error (:status hook-status))
+    {:next-state :error-recovery
+     :error {:type :hook-error
+             :hook-status hook-status}}
+
+    ;; No hook status (user killed CLI or hook didn't run)
+    (nil? hook-status)
+    {:next-state :error-recovery
+     :error {:type :cli-killed
+             :reason :cli-killed}}
+
+    ;; Success - hook status is :completed or other non-error status
+    :else
+    {:next-state :running-sdk
+     :error nil}))
+
 (defn hand-to-cli
   "Hand off from SDK to CLI for user interaction.
 
    Transitions state machine through :needs-input to :running-cli,
    launches the CLI with the current session, and handles the exit.
 
-   On CLI exit code 0: transitions back to :running-sdk
-   On non-zero exit: transitions to :error-recovery
+   After CLI exits, reads hook status from the handoff file to determine
+   the outcome:
+   - Exit code 0 + hook status :completed → :running-sdk
+   - Exit code non-zero → :error-recovery
+   - Hook status :error → :error-recovery
+   - Missing hook status (user killed CLI) → :error-recovery with :cli-killed
 
-   Returns the new state map after CLI exits.
+   Returns a map with:
+   - :state - the new state map after transition
+   - :cli-status - the hook status read from the handoff file (or nil)
 
    Throws if current state is not :running-sdk."
   []
@@ -295,9 +329,11 @@
   (transition! :needs-input)
   (transition! :running-cli)
   (let [session-id (:session-id @console-state)
-        exit-code (launch-cli-resume session-id)]
-    (if (zero? exit-code)
-      (transition! :running-sdk)
-      (transition! :error-recovery
-                   {:error {:type :cli-error
-                            :exit-code exit-code}}))))
+        exit-code (launch-cli-resume session-id)
+        cli-status (handoff/read-hook-status)
+        {:keys [error]} (determine-cli-result exit-code cli-status)
+        new-state (if error
+                    (transition! :error-recovery {:error error})
+                    (transition! :running-sdk))]
+    {:state new-state
+     :cli-status cli-status}))
