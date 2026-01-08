@@ -1,6 +1,7 @@
 {:lint-as
  {task-conductor.claude-agent-sdk.core/with-session clojure.core/let
-  task-conductor.claude-agent-sdk.interface/with-session clojure.core/let}
+  task-conductor.claude-agent-sdk.interface/with-session clojure.core/let
+  task-conductor.agent-runner.console-test/with-temp-handoff clojure.core/with-open}
 
  :linters
  {:unresolved-namespace
