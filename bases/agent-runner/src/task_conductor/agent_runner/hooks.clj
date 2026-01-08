@@ -7,16 +7,19 @@
   (:require
    [clojure.data.json :as json]
    [clojure.java.io :as io]
-   [clojure.string :as str])
+   [clojure.string :as str]
+   [task-conductor.agent-runner.handoff :as handoff])
   (:import
    [java.nio.file Files LinkOption]
    [java.nio.file.attribute PosixFilePermission]))
 
 ;;; Constants
 
-(def hook-dir ".task-conductor/hooks")
+(def hook-dir
+  "Directory for hook scripts, under the handoff directory."
+  (str handoff/hook-handoff-dir "/hooks"))
+
 (def hook-filename "stop-hook.sh")
-(def handoff-filename "handoff.edn")
 (def settings-path ".claude/settings.local.json")
 
 ;;; Hook Generation
@@ -26,7 +29,7 @@
 
    The script:
    - Reads JSON input from stdin (provided by Claude Code)
-   - Writes HookStatus EDN to .task-conductor/handoff.edn
+   - Writes HookStatus EDN to the handoff file (path from handoff/hook-handoff-path)
    - Uses atomic write (temp file + mv) for safety
 
    Returns the script content as a string."
@@ -51,8 +54,8 @@
     "STATUS=\":completed\""
     ""
     "# Write HookStatus EDN to handoff file"
-    "HANDOFF_DIR=\".task-conductor\""
-    "HANDOFF_FILE=\"$HANDOFF_DIR/handoff.edn\""
+    (str "HANDOFF_DIR=\"" handoff/hook-handoff-dir "\"")
+    (str "HANDOFF_FILE=\"" handoff/hook-handoff-path "\"")
     "TEMP_FILE=\"$HANDOFF_DIR/.handoff.edn.tmp\""
     ""
     "# Ensure directory exists"

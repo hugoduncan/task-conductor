@@ -25,7 +25,18 @@
 ;;; Constants
 
 (def default-handoff-path ".task-conductor-handoff.edn")
-(def hook-handoff-path ".task-conductor/handoff.edn")
+
+(def hook-handoff-dir
+  "Directory containing hook-related files."
+  ".task-conductor")
+
+(def hook-handoff-filename
+  "Filename for hook status within the hook directory."
+  "handoff.edn")
+
+(def hook-handoff-path
+  "Full path to the hook handoff file. Single source of truth for hooks.clj."
+  (str hook-handoff-dir "/" hook-handoff-filename))
 
 ;;; Timestamp Utilities
 
