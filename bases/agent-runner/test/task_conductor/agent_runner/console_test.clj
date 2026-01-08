@@ -6,7 +6,10 @@
   ;; - transition function applies context and validates transitions
   ;; - invalid transitions throw informative errors
   ;; - handoff file integration writes state on relevant transitions
+  ;; - launch-cli-resume constructs correct command and returns exit code
+  ;; - hand-to-cli orchestrates state transitions and handles CLI exit
   (:require
+   [babashka.process :as p]
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.handoff :as handoff])
@@ -584,3 +587,112 @@
         (console/transition! :idle)
         (is (not (.exists (File. path)))
             "handoff file should not exist after :idle transition")))))
+
+;;; CLI Handoff Tests
+
+(deftest launch-cli-resume-test
+  ;; Tests launch-cli-resume constructs correct command and returns exit code.
+  ;; Uses with-redefs to mock babashka.process/process.
+  (testing "launch-cli-resume"
+    (testing "constructs correct command with session-id"
+      (let [captured-cmd (atom nil)]
+        (with-redefs [p/process (fn [cmd _opts]
+                                  (reset! captured-cmd cmd)
+                                  (delay {:exit 0}))]
+          (console/launch-cli-resume "test-session-123")
+          (is (= ["claude" "--resume" "test-session-123"]
+                 @captured-cmd)))))
+
+    (testing "returns exit code 0 on success"
+      (with-redefs [p/process (fn [_cmd _opts]
+                                (delay {:exit 0}))]
+        (is (= 0 (console/launch-cli-resume "session-abc")))))
+
+    (testing "returns non-zero exit code on failure"
+      (with-redefs [p/process (fn [_cmd _opts]
+                                (delay {:exit 1}))]
+        (is (= 1 (console/launch-cli-resume "session-def")))))
+
+    (testing "passes :inherit true for stdio inheritance"
+      (let [captured-opts (atom nil)]
+        (with-redefs [p/process (fn [_cmd opts]
+                                  (reset! captured-opts opts)
+                                  (delay {:exit 0}))]
+          (console/launch-cli-resume "session-xyz")
+          (is (= {:inherit true} @captured-opts)))))))
+
+(deftest hand-to-cli-test
+  ;; Tests hand-to-cli orchestrates state transitions and handles CLI exit.
+  ;; Verifies:
+  ;; - Transitions through :needs-input to :running-cli
+  ;; - Returns to :running-sdk on exit code 0
+  ;; - Transitions to :error-recovery on non-zero exit
+  ;; - Throws when not in :running-sdk state
+  (testing "hand-to-cli"
+    (testing "transitions through :needs-input to :running-cli"
+      (with-redefs [p/process (fn [_cmd _opts]
+                                (delay {:exit 0}))]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-1"
+                                           :current-task-id 75})
+        (console/hand-to-cli)
+        (let [history (console/state-history)]
+          (is (some #(= :needs-input (:to %)) history)
+              "should transition through :needs-input")
+          (is (some #(= :running-cli (:to %)) history)
+              "should transition through :running-cli"))))
+
+    (testing "returns to :running-sdk on exit code 0"
+      (with-redefs [p/process (fn [_cmd _opts]
+                                (delay {:exit 0}))]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-2"
+                                           :current-task-id 76})
+        (let [result (console/hand-to-cli)]
+          (is (= :running-sdk (:state result))
+              "should return to :running-sdk")
+          (is (= :running-sdk (console/current-state))
+              "current state should be :running-sdk"))))
+
+    (testing "transitions to :error-recovery on non-zero exit"
+      (with-redefs [p/process (fn [_cmd _opts]
+                                (delay {:exit 1}))]
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :running-sdk {:session-id "sess-3"
+                                           :current-task-id 77})
+        (let [result (console/hand-to-cli)]
+          (is (= :error-recovery (:state result))
+              "should transition to :error-recovery")
+          (is (= {:type :cli-error :exit-code 1} (:error result))
+              "should set error with exit code"))))
+
+    (testing "uses session-id from console-state"
+      (let [captured-session (atom nil)]
+        (with-redefs [p/process (fn [cmd _opts]
+                                  (reset! captured-session (nth cmd 2))
+                                  (delay {:exit 0}))]
+          (console/reset-state!)
+          (console/transition! :selecting-task {:story-id 53})
+          (console/transition! :running-sdk {:session-id "my-session-id"
+                                             :current-task-id 78})
+          (console/hand-to-cli)
+          (is (= "my-session-id" @captured-session)
+              "should use session-id from state"))))
+
+    (testing "throws when not in :running-sdk state"
+      (console/reset-state!)
+      (let [ex (try
+                 (console/hand-to-cli)
+                 nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+        (is (some? ex)
+            "should throw exception")
+        (is (= :invalid-state (:type (ex-data ex)))
+            "should have :invalid-state type")
+        (is (= :idle (:current-state (ex-data ex)))
+            "should include current state")
+        (is (= :running-sdk (:required-state (ex-data ex)))
+            "should include required state")))))
