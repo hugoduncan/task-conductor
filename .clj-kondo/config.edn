@@ -3,6 +3,10 @@
   task-conductor.claude-agent-sdk.interface/with-session clojure.core/let
   task-conductor.agent-runner.console-test/with-temp-handoff clojure.core/with-open}
 
+ :config-in-ns
+ {task-conductor.claude-agent-sdk.core-test
+  {:linters {:private-call {:level :off}}}}
+
  :linters
  {:unresolved-namespace
   {:exclude [task-conductor.claude-agent-sdk.core]}
