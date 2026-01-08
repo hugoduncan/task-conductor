@@ -14,12 +14,12 @@
   "Map of valid state transitions.
    Each key is a source state, value is set of valid target states."
   {:idle            #{:selecting-task}
-   :selecting-task  #{:running-sdk :story-complete}
+   :selecting-task  #{:running-sdk :story-complete :error-recovery}
    :running-sdk     #{:needs-input :task-complete :error-recovery}
-   :needs-input     #{:running-cli}
+   :needs-input     #{:running-cli :error-recovery}
    :running-cli     #{:running-sdk :error-recovery}
    :error-recovery  #{:selecting-task :idle}
-   :task-complete   #{:selecting-task :story-complete}
+   :task-complete   #{:selecting-task :story-complete :error-recovery}
    :story-complete  #{:idle}})
 
 (def all-states

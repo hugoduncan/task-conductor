@@ -31,9 +31,9 @@
           "should only allow transition to :selecting-task"))
 
     (testing "from :selecting-task"
-      (is (= #{:running-sdk :story-complete}
+      (is (= #{:running-sdk :story-complete :error-recovery}
              (get console/valid-transitions :selecting-task))
-          "should allow :running-sdk or :story-complete"))
+          "should allow :running-sdk, :story-complete, or :error-recovery"))
 
     (testing "from :running-sdk"
       (is (= #{:needs-input :task-complete :error-recovery}
@@ -41,9 +41,9 @@
           "should allow :needs-input, :task-complete, or :error-recovery"))
 
     (testing "from :needs-input"
-      (is (= #{:running-cli}
+      (is (= #{:running-cli :error-recovery}
              (get console/valid-transitions :needs-input))
-          "should only allow transition to :running-cli"))
+          "should allow :running-cli or :error-recovery"))
 
     (testing "from :running-cli"
       (is (= #{:running-sdk :error-recovery}
@@ -56,9 +56,9 @@
           "should allow :selecting-task or :idle"))
 
     (testing "from :task-complete"
-      (is (= #{:selecting-task :story-complete}
+      (is (= #{:selecting-task :story-complete :error-recovery}
              (get console/valid-transitions :task-complete))
-          "should allow :selecting-task or :story-complete"))
+          "should allow :selecting-task, :story-complete, or :error-recovery"))
 
     (testing "from :story-complete"
       (is (= #{:idle}
