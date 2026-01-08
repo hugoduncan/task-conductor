@@ -1,19 +1,24 @@
 #kaocha/v1
- {:tests [{:id           :unit
-           :source-paths ["bases/agent-runner/src"
+ {:kaocha.hooks/pre-run [task-conductor.kaocha-hooks/pre-run]
+  :kaocha/plugins [:kaocha.plugin/hooks]
+  :tests [{:id           :unit
+           :source-paths ["test-support"
+                          "bases/agent-runner/src"
                           "components/claude-agent-sdk/src"
                           "components/python-venv/src"]
            :test-paths   ["bases/agent-runner/test"
                           "components/claude-agent-sdk/test"]}
           {:id           :integration
-           :source-paths ["bases/agent-runner/src"
+           :source-paths ["test-support"
+                          "bases/agent-runner/src"
                           "components/claude-agent-sdk/src"
                           "components/python-venv/src"]
            :test-paths   ["bases/agent-runner/test-integration"
                           "components/claude-agent-sdk/test-integration"]}
           ;; Agent-runner specific tests (graceful skip when venv unavailable)
           {:id           :agent-runner-integration
-           :source-paths ["bases/agent-runner/src"
+           :source-paths ["test-support"
+                          "bases/agent-runner/src"
                           "components/claude-agent-sdk/src"
                           "components/python-venv/src"]
            :test-paths   ["bases/agent-runner/test-integration"]}]}
