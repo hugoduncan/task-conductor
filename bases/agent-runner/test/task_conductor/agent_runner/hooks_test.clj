@@ -7,6 +7,7 @@
   ;; - install-stop-hook creates executable file
   ;; - configure-claude-settings creates valid JSON structure
   ;; - ensure-hooks-installed is idempotent
+  ;; - Full hook flow: install → execute → read status
   (:require
    [clojure.data.json :as json]
    [clojure.edn :as edn]
@@ -14,6 +15,7 @@
    [clojure.java.shell :as shell]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [task-conductor.agent-runner.handoff :as handoff]
    [task-conductor.agent-runner.hooks :as hooks])
   (:import
    [java.nio.file Files LinkOption]
@@ -223,3 +225,52 @@
         (testing "returns true after configuration"
           (hooks/configure-claude-settings temp-dir)
           (is (true? (hooks/settings-configured? temp-dir))))))))
+
+;;; Integration Tests
+
+(deftest full-hook-flow-test
+  ;; Integration test exercising the complete hook workflow:
+  ;; ensure-hooks-installed → execute hook → read-hook-status
+  (testing "full hook flow"
+    (with-temp-dir
+      (fn [temp-dir]
+        (testing "install, execute, and read hook status"
+          (let [;; Step 1: Install hooks
+                install-result (hooks/ensure-hooks-installed temp-dir)
+                hook-path (:hook-path install-result)
+                ;; The hook writes to .task-conductor/handoff.edn
+                handoff-path (str temp-dir "/.task-conductor/handoff.edn")
+                ;; Simulate CLI input (JSON with session_id)
+                input-json "{\"session_id\": \"test-session\"}"]
+
+            (testing "ensure-hooks-installed creates hook file"
+              (is (string? hook-path))
+              (is (.exists (io/file hook-path)))
+              (is (file-executable? hook-path)))
+
+            (testing "ensure-hooks-installed configures settings"
+              (is (:settings-updated? install-result)))
+
+            ;; Step 2: Execute the installed hook script
+            (let [result (shell/sh "bash" hook-path
+                                   :in input-json
+                                   :dir temp-dir)]
+              (testing "hook script executes successfully"
+                (is (zero? (:exit result))
+                    (str "script failed: " (:err result))))
+
+              (testing "hook script creates handoff file"
+                (is (.exists (io/file handoff-path))
+                    "handoff.edn should be created")))
+
+            ;; Step 3: Read hook status via handoff/read-hook-status
+            (let [hook-status (handoff/read-hook-status handoff-path)]
+              (testing "read-hook-status returns valid HookStatus"
+                (is (some? hook-status)
+                    "read-hook-status should return non-nil")
+                (is (handoff/valid-hook-status? hook-status)
+                    "returned status should be valid"))
+
+              (testing "HookStatus has expected values"
+                (is (= :completed (:status hook-status)))
+                (is (inst? (:timestamp hook-status)))))))))))
