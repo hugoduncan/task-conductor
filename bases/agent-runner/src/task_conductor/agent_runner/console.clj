@@ -45,8 +45,11 @@
 
 (def ^:private states-using-pre-transition-values
   "States where handoff should use pre-transition values.
-   These states clear task/session fields during transition."
-  #{:task-complete :story-complete})
+   Derived from states that map to :completed status, since these
+   states clear task/session fields during transition."
+  (into #{} (keep (fn [[state status]]
+                    (when (= :completed status) state))
+                  state->handoff-status)))
 
 (defn- build-handoff-state
   "Build handoff state map from console states for writing.
