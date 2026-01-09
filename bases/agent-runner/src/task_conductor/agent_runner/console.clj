@@ -284,12 +284,15 @@
 (defn record-session!
   "Records a session entry to the :sessions vector.
    Takes a session-id, task-id, and optional timestamp (defaults to now).
+   Automatically includes the current story-id for filtering.
    Returns the updated sessions vector."
   ([session-id task-id]
    (record-session! session-id task-id (java.time.Instant/now)))
   ([session-id task-id timestamp]
-   (let [entry {:session-id session-id
+   (let [story-id (:story-id @console-state)
+         entry {:session-id session-id
                 :task-id task-id
+                :story-id story-id
                 :timestamp timestamp}]
      (swap! console-state update :sessions conj entry)
      (:sessions @console-state))))

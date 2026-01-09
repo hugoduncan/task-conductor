@@ -842,12 +842,20 @@
 
     (testing "creates entry with correct structure"
       (console/reset-state!)
+      (console/transition! :selecting-task {:story-id 53})
       (let [ts (Instant/parse "2024-01-15T10:30:00Z")]
         (console/record-session! "sess-abc" 99 ts)
         (let [entry (first (:sessions @console/console-state))]
           (is (= "sess-abc" (:session-id entry)))
           (is (= 99 (:task-id entry)))
+          (is (= 53 (:story-id entry)))
           (is (= ts (:timestamp entry))))))
+
+    (testing "includes nil story-id when not in a story"
+      (console/reset-state!)
+      (console/record-session! "sess-xyz" 100)
+      (let [entry (first (:sessions @console/console-state))]
+        (is (nil? (:story-id entry)))))
 
     (testing "generates timestamp when not provided"
       (console/reset-state!)

@@ -212,21 +212,17 @@
 (defn list-sessions
   "List sessions for the current story.
 
-   Retrieves all session entries from console state and filters by the
-   current story-id. The story-id is matched by checking which sessions
-   were recorded while the story was active.
+   Retrieves session entries from console state filtered by the current
+   story-id. Sessions are recorded with their associated story-id.
 
    Prints a formatted list with session-id, task-id, and timestamp.
 
    Returns the filtered sessions vector.
    Throws if no active story."
   []
-  ;; Sessions are recorded during task execution within a story.
-  ;; Since we don't store story-id on session entries, we return
-  ;; all sessions when a story is active. The outer loop will
-  ;; reset sessions when starting a new story.
   (let [story-id (validate-story-id)
-        sessions (:sessions @console/console-state)]
+        sessions (->> (:sessions @console/console-state)
+                      (filter #(= story-id (:story-id %))))]
     (println (str "Sessions for story " story-id ":"))
     (if (seq sessions)
       (doseq [[idx {:keys [session-id task-id timestamp]}]
@@ -234,4 +230,4 @@
         (println (str "  " (inc idx) ". " session-id
                       " (task " task-id ", " timestamp ")")))
       (println "  (none)"))
-    sessions))
+    (vec sessions)))

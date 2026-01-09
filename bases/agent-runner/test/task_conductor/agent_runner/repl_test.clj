@@ -438,13 +438,20 @@
           (is (vector? result))
           (is (empty? result))))
 
-      (testing "returns sessions from console state"
+      (testing "returns sessions for current story only"
         (console/reset-state!)
+        ;; Record sessions for story 42
+        (console/transition! :selecting-task {:story-id 42})
+        (console/record-session! "sess-other" 70)
+        ;; Transition to story 53 via abort + restart
+        (console/transition! :error-recovery {:error {:type :test}})
+        (console/transition! :idle)
         (console/transition! :selecting-task {:story-id 53})
         (console/record-session! "sess-1" 75)
         (console/record-session! "sess-2" 76)
         (let [result (repl/list-sessions)]
-          (is (= 2 (count result)))
+          (is (= 2 (count result))
+              "should return only sessions for story 53")
           (is (= "sess-1" (:session-id (first result))))
           (is (= "sess-2" (:session-id (second result))))))
 
