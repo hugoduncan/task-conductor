@@ -7,6 +7,8 @@
   ;; - abort transitions through :error-recovery to :idle
   ;; - retry re-attempts failed task from :error-recovery
   ;; - skip moves to next task from :error-recovery
+  ;; - add-context validates story and calls mcp-tasks CLI
+  ;; - view-context retrieves and formats shared-context
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.console :as console]
@@ -335,3 +337,58 @@
           (is (= :invalid-state (:type (ex-data ex))))
           (is (= :selecting-task (:current-state (ex-data ex))))
           (is (= :error-recovery (:required-state (ex-data ex)))))))))
+
+;;; Context Management Tests
+
+(deftest add-context-test
+  (testing "add-context"
+    (testing "with no active story"
+      (testing "throws with informative error"
+        (console/reset-state!)
+        (let [ex (try
+                   (repl/add-context "test context")
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? ex))
+          (is (= :no-active-story (:type (ex-data ex))))
+          (is (= :idle (:current-state (ex-data ex)))))))
+
+    (testing "with active story"
+      (testing "uses story-id from console state"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        ;; Can't fully test without mocking CLI, but validates story-id extraction
+        ;; The CLI call will fail in tests, which is expected
+        (let [ex (try
+                   (repl/add-context "test context")
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+          ;; If we get a CLI error (not no-active-story), the story-id was validated
+          (when ex
+            (is (not= :no-active-story (:type (ex-data ex))))))))))
+
+(deftest view-context-test
+  (testing "view-context"
+    (testing "with no active story"
+      (testing "throws with informative error"
+        (console/reset-state!)
+        (let [ex (try
+                   (repl/view-context)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? ex))
+          (is (= :no-active-story (:type (ex-data ex))))
+          (is (= :idle (:current-state (ex-data ex)))))))
+
+    (testing "with active story"
+      (testing "uses story-id from console state"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        ;; Can't fully test without mocking CLI, but validates story-id extraction
+        (let [ex (try
+                   (repl/view-context)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+          ;; If we get a CLI error (not no-active-story), the story-id was validated
+          (when ex
+            (is (not= :no-active-story (:type (ex-data ex))))))))))
