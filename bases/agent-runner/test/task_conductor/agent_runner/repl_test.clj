@@ -240,7 +240,25 @@
                                          :current-task-id 75})
       (repl/abort)
       (let [history (console/state-history)]
-        (is (>= (count history) 4))))))
+        (is (>= (count history) 4))))
+
+    (testing "clears the paused flag"
+      (testing "when paused and aborting from active state"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/set-paused!)
+        (is (true? (console/paused?)))
+        (repl/abort)
+        (is (false? (console/paused?))))
+
+      (testing "when paused and aborting from :story-complete"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/transition! :story-complete)
+        (console/set-paused!)
+        (is (true? (console/paused?)))
+        (repl/abort)
+        (is (false? (console/paused?)))))))
 
 ;;; retry Tests
 

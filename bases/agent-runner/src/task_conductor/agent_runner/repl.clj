@@ -87,12 +87,15 @@
         @console/console-state)
 
       (= :story-complete current)
-      (let [new-state (console/transition! :idle)]
-        (println "Aborted - returned to idle")
-        new-state)
+      (do
+        (console/clear-paused!)
+        (let [new-state (console/transition! :idle)]
+          (println "Aborted - returned to idle")
+          new-state))
 
       :else
       (do
+        (console/clear-paused!)
         (console/transition! :error-recovery {:error {:type :user-abort}})
         (let [new-state (console/transition! :idle)]
           (println "Aborted - returned to idle")
