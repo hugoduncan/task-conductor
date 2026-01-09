@@ -31,9 +31,9 @@
           "should only allow transition to :selecting-task"))
 
     (testing "from :selecting-task"
-      (is (= #{:running-sdk :story-complete}
+      (is (= #{:running-sdk :story-complete :error-recovery}
              (get console/valid-transitions :selecting-task))
-          "should allow :running-sdk or :story-complete"))
+          "should allow :running-sdk, :story-complete, or :error-recovery"))
 
     (testing "from :running-sdk"
       (is (= #{:needs-input :task-complete :error-recovery}
@@ -41,9 +41,9 @@
           "should allow :needs-input, :task-complete, or :error-recovery"))
 
     (testing "from :needs-input"
-      (is (= #{:running-cli}
+      (is (= #{:running-cli :error-recovery}
              (get console/valid-transitions :needs-input))
-          "should only allow transition to :running-cli"))
+          "should allow :running-cli or :error-recovery"))
 
     (testing "from :running-cli"
       (is (= #{:running-sdk :error-recovery}
@@ -51,14 +51,14 @@
           "should allow :running-sdk or :error-recovery"))
 
     (testing "from :error-recovery"
-      (is (= #{:selecting-task :idle}
+      (is (= #{:selecting-task :running-sdk :idle}
              (get console/valid-transitions :error-recovery))
-          "should allow :selecting-task or :idle"))
+          "should allow :selecting-task, :running-sdk, or :idle"))
 
     (testing "from :task-complete"
-      (is (= #{:selecting-task :story-complete}
+      (is (= #{:selecting-task :story-complete :error-recovery}
              (get console/valid-transitions :task-complete))
-          "should allow :selecting-task or :story-complete"))
+          "should allow :selecting-task, :story-complete, or :error-recovery"))
 
     (testing "from :story-complete"
       (is (= #{:idle}
@@ -760,3 +760,130 @@
             "should include current state")
         (is (= :running-sdk (:required-state (ex-data ex)))
             "should include required state")))))
+
+;;; Pause Control Tests
+
+(deftest paused?-test
+  ;; Tests the paused? predicate.
+  ;; Verifies it returns the current pause state from the console-state atom.
+  (testing "paused?"
+    (testing "returns false initially"
+      (console/reset-state!)
+      (is (false? (console/paused?))))
+
+    (testing "returns true after set-paused!"
+      (console/reset-state!)
+      (console/set-paused!)
+      (is (true? (console/paused?))))
+
+    (testing "returns false after clear-paused!"
+      (console/reset-state!)
+      (console/set-paused!)
+      (console/clear-paused!)
+      (is (false? (console/paused?))))))
+
+(deftest set-paused!-test
+  ;; Tests the set-paused! function.
+  ;; Verifies it sets :paused to true and returns true.
+  (testing "set-paused!"
+    (testing "sets :paused to true"
+      (console/reset-state!)
+      (console/set-paused!)
+      (is (true? (:paused @console/console-state))))
+
+    (testing "returns true"
+      (console/reset-state!)
+      (is (true? (console/set-paused!))))
+
+    (testing "is idempotent"
+      (console/reset-state!)
+      (console/set-paused!)
+      (console/set-paused!)
+      (is (true? (console/paused?))))))
+
+(deftest clear-paused!-test
+  ;; Tests the clear-paused! function.
+  ;; Verifies it sets :paused to false and returns false.
+  (testing "clear-paused!"
+    (testing "sets :paused to false"
+      (console/reset-state!)
+      (console/set-paused!)
+      (console/clear-paused!)
+      (is (false? (:paused @console/console-state))))
+
+    (testing "returns false"
+      (console/reset-state!)
+      (console/set-paused!)
+      (is (false? (console/clear-paused!))))
+
+    (testing "is idempotent"
+      (console/reset-state!)
+      (console/clear-paused!)
+      (console/clear-paused!)
+      (is (false? (console/paused?))))))
+
+;;; Session Tracking Tests
+
+(deftest record-session!-test
+  ;; Tests the record-session! function.
+  ;; Verifies session entries are appended to :sessions with correct structure.
+  (testing "record-session!"
+    (testing "appends session entry to :sessions"
+      (console/reset-state!)
+      (console/record-session! "sess-1" 42)
+      (is (= 1 (count (:sessions @console/console-state)))))
+
+    (testing "accumulates multiple sessions"
+      (console/reset-state!)
+      (console/record-session! "sess-1" 42)
+      (console/record-session! "sess-2" 43)
+      (console/record-session! "sess-3" 44)
+      (is (= 3 (count (:sessions @console/console-state)))))
+
+    (testing "creates entry with correct structure"
+      (console/reset-state!)
+      (console/transition! :selecting-task {:story-id 53})
+      (let [ts (Instant/parse "2024-01-15T10:30:00Z")]
+        (console/record-session! "sess-abc" 99 ts)
+        (let [entry (first (:sessions @console/console-state))]
+          (is (= "sess-abc" (:session-id entry)))
+          (is (= 99 (:task-id entry)))
+          (is (= 53 (:story-id entry)))
+          (is (= ts (:timestamp entry))))))
+
+    (testing "includes nil story-id when not in a story"
+      (console/reset-state!)
+      (console/record-session! "sess-xyz" 100)
+      (let [entry (first (:sessions @console/console-state))]
+        (is (nil? (:story-id entry)))))
+
+    (testing "generates timestamp when not provided"
+      (console/reset-state!)
+      (console/record-session! "sess-xyz" 100)
+      (let [entry (first (:sessions @console/console-state))]
+        (is (instance? Instant (:timestamp entry)))))
+
+    (testing "returns updated sessions vector"
+      (console/reset-state!)
+      (let [result (console/record-session! "sess-1" 42)]
+        (is (vector? result))
+        (is (= 1 (count result)))
+        (is (= "sess-1" (:session-id (first result))))))))
+
+(deftest reset-state!-clears-pause-and-sessions-test
+  ;; Tests that reset-state! clears the new :paused and :sessions fields.
+  (testing "reset-state!"
+    (testing "clears :paused flag"
+      (console/reset-state!)
+      (console/set-paused!)
+      (is (true? (console/paused?)))
+      (console/reset-state!)
+      (is (false? (console/paused?))))
+
+    (testing "clears :sessions vector"
+      (console/reset-state!)
+      (console/record-session! "sess-1" 42)
+      (console/record-session! "sess-2" 43)
+      (is (= 2 (count (:sessions @console/console-state))))
+      (console/reset-state!)
+      (is (= [] (:sessions @console/console-state))))))

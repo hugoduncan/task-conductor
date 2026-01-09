@@ -14,12 +14,12 @@
   "Map of valid state transitions.
    Each key is a source state, value is set of valid target states."
   {:idle            #{:selecting-task}
-   :selecting-task  #{:running-sdk :story-complete}
+   :selecting-task  #{:running-sdk :story-complete :error-recovery}
    :running-sdk     #{:needs-input :task-complete :error-recovery}
-   :needs-input     #{:running-cli}
+   :needs-input     #{:running-cli :error-recovery}
    :running-cli     #{:running-sdk :error-recovery}
-   :error-recovery  #{:selecting-task :idle}
-   :task-complete   #{:selecting-task :story-complete}
+   :error-recovery  #{:selecting-task :running-sdk :idle}
+   :task-complete   #{:selecting-task :story-complete :error-recovery}
    :story-complete  #{:idle}})
 
 (def all-states
@@ -99,7 +99,9 @@
    :current-task-id nil
    :session-id nil
    :error nil
-   :history []})
+   :history []
+   :paused false
+   :sessions []})
 
 (defn- validate-transition
   "Validates that a transition is legal. Throws ex-info if invalid."
@@ -257,6 +259,43 @@
    Clears history. For testing and dev use."
   []
   (reset! console-state initial-state))
+
+;;; Pause Control
+
+(defn paused?
+  "Returns true if execution is paused."
+  []
+  (:paused @console-state))
+
+(defn set-paused!
+  "Sets the paused flag to true."
+  []
+  (swap! console-state assoc :paused true)
+  true)
+
+(defn clear-paused!
+  "Sets the paused flag to false."
+  []
+  (swap! console-state assoc :paused false)
+  false)
+
+;;; Session Tracking
+
+(defn record-session!
+  "Records a session entry to the :sessions vector.
+   Takes a session-id, task-id, and optional timestamp (defaults to now).
+   Automatically includes the current story-id for filtering.
+   Returns the updated sessions vector."
+  ([session-id task-id]
+   (record-session! session-id task-id (java.time.Instant/now)))
+  ([session-id task-id timestamp]
+   (let [story-id (:story-id @console-state)
+         entry {:session-id session-id
+                :task-id task-id
+                :story-id story-id
+                :timestamp timestamp}]
+     (swap! console-state update :sessions conj entry)
+     (:sessions @console-state))))
 
 ;;; CLI Handoff
 
