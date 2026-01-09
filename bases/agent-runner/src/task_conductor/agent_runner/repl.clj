@@ -54,21 +54,21 @@
   "Set the pause flag.
 
    The outer loop checks this flag before starting the next task.
-   Returns true."
+   Returns the current state map."
   []
   (console/set-paused!)
   (println "Paused - execution will stop after current task completes")
-  true)
+  @console/console-state)
 
 (defn continue
   "Clear the pause flag.
 
    Allows the outer loop to resume on the next iteration.
-   Returns false."
+   Returns the current state map."
   []
   (console/clear-paused!)
   (println "Resumed - execution will continue")
-  false)
+  @console/console-state)
 
 (defn abort
   "Cancel execution and return to :idle state.

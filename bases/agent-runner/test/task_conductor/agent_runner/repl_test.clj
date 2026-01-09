@@ -124,9 +124,11 @@
       (repl/pause)
       (is (true? (console/paused?))))
 
-    (testing "returns true"
+    (testing "returns current state map"
       (console/reset-state!)
-      (is (true? (repl/pause))))
+      (let [result (repl/pause)]
+        (is (map? result))
+        (is (true? (:paused result)))))
 
     (testing "prints confirmation"
       (console/reset-state!)
@@ -143,10 +145,12 @@
       (repl/continue)
       (is (false? (console/paused?))))
 
-    (testing "returns false"
+    (testing "returns current state map"
       (console/reset-state!)
       (console/set-paused!)
-      (is (false? (repl/continue))))
+      (let [result (repl/continue)]
+        (is (map? result))
+        (is (false? (:paused result)))))
 
     (testing "prints confirmation"
       (console/reset-state!)
