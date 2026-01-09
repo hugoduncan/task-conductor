@@ -5,6 +5,8 @@
   ;; - status returns correct map and prints summary
   ;; - pause/continue set/clear the paused flag
   ;; - abort transitions through :error-recovery to :idle
+  ;; - retry re-attempts failed task from :error-recovery
+  ;; - skip moves to next task from :error-recovery
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.console :as console]
@@ -233,3 +235,103 @@
       (repl/abort)
       (let [history (console/state-history)]
         (is (>= (count history) 4))))))
+
+;;; retry Tests
+
+(defn- setup-error-recovery-state
+  "Helper to set up a state machine in :error-recovery with a task."
+  [story-id session-id task-id]
+  (console/reset-state!)
+  (console/transition! :selecting-task {:story-id story-id})
+  (console/transition! :running-sdk {:session-id session-id
+                                     :current-task-id task-id})
+  (console/transition! :error-recovery {:error {:type :test-error}}))
+
+(deftest retry-test
+  (testing "retry"
+    (testing "from :error-recovery state"
+      (testing "transitions to :running-sdk"
+        (setup-error-recovery-state 53 "sess-1" 75)
+        (repl/retry)
+        (is (= :running-sdk (console/current-state))))
+
+      (testing "preserves task-id"
+        (setup-error-recovery-state 53 "sess-1" 75)
+        (repl/retry)
+        (is (= 75 (:current-task-id @console/console-state))))
+
+      (testing "preserves session-id"
+        (setup-error-recovery-state 53 "sess-1" 75)
+        (repl/retry)
+        (is (= "sess-1" (:session-id @console/console-state))))
+
+      (testing "returns new state map"
+        (setup-error-recovery-state 53 "sess-1" 75)
+        (let [result (repl/retry)]
+          (is (map? result))
+          (is (= :running-sdk (:state result)))
+          (is (= 75 (:current-task-id result)))))
+
+      (testing "prints confirmation with task-id"
+        (setup-error-recovery-state 53 "sess-1" 75)
+        (let [output (with-out-str (repl/retry))]
+          (is (re-find #"Retrying task 75" output)))))
+
+    (testing "from non-error-recovery state"
+      (testing "throws with informative error"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (let [ex (try
+                   (repl/retry)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? ex))
+          (is (= :invalid-state (:type (ex-data ex))))
+          (is (= :selecting-task (:current-state (ex-data ex))))
+          (is (= :error-recovery (:required-state (ex-data ex)))))))))
+
+;;; skip Tests
+
+(deftest skip-test
+  (testing "skip"
+    (testing "from :error-recovery state"
+      (testing "transitions to :selecting-task"
+        (setup-error-recovery-state 53 "sess-1" 75)
+        (repl/skip)
+        (is (= :selecting-task (console/current-state))))
+
+      (testing "preserves current-task-id"
+        ;; task-id is preserved in state; it will be overwritten when
+        ;; the outer loop selects and starts the next task
+        (setup-error-recovery-state 53 "sess-1" 75)
+        (repl/skip)
+        (is (= 75 (:current-task-id @console/console-state))))
+
+      (testing "preserves story-id"
+        (setup-error-recovery-state 53 "sess-1" 75)
+        (repl/skip)
+        (is (= 53 (:story-id @console/console-state))))
+
+      (testing "returns new state map"
+        (setup-error-recovery-state 53 "sess-1" 75)
+        (let [result (repl/skip)]
+          (is (map? result))
+          (is (= :selecting-task (:state result)))))
+
+      (testing "prints confirmation with task-id"
+        (setup-error-recovery-state 53 "sess-1" 75)
+        (let [output (with-out-str (repl/skip))]
+          (is (re-find #"Skipped task 75" output)))))
+
+    (testing "from non-error-recovery state"
+      (testing "throws with informative error"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (let [ex (try
+                   (repl/skip)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? ex))
+          (is (= :invalid-state (:type (ex-data ex))))
+          (is (= :selecting-task (:current-state (ex-data ex))))
+          (is (= :error-recovery (:required-state (ex-data ex)))))))))

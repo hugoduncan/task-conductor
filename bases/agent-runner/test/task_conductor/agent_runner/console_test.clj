@@ -51,9 +51,9 @@
           "should allow :running-sdk or :error-recovery"))
 
     (testing "from :error-recovery"
-      (is (= #{:selecting-task :idle}
+      (is (= #{:selecting-task :running-sdk :idle}
              (get console/valid-transitions :error-recovery))
-          "should allow :selecting-task or :idle"))
+          "should allow :selecting-task, :running-sdk, or :idle"))
 
     (testing "from :task-complete"
       (is (= #{:selecting-task :story-complete :error-recovery}

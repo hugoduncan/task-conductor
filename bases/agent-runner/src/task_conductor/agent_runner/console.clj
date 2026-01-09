@@ -18,7 +18,7 @@
    :running-sdk     #{:needs-input :task-complete :error-recovery}
    :needs-input     #{:running-cli :error-recovery}
    :running-cli     #{:running-sdk :error-recovery}
-   :error-recovery  #{:selecting-task :idle}
+   :error-recovery  #{:selecting-task :running-sdk :idle}
    :task-complete   #{:selecting-task :story-complete :error-recovery}
    :story-complete  #{:idle}})
 

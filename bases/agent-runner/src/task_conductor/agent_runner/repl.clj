@@ -95,3 +95,47 @@
         (let [new-state (console/transition! :idle)]
           (println "Aborted - returned to idle")
           new-state)))))
+
+;;; Error Recovery Functions
+
+(defn retry
+  "Re-attempt the failed task.
+
+   Transitions from :error-recovery back to :running-sdk with the same task.
+   Throws if not in :error-recovery state.
+
+   Returns the new state map."
+  []
+  (let [current (console/current-state)]
+    (when (not= :error-recovery current)
+      (throw (ex-info (str "Cannot retry: console is " current ", expected :error-recovery")
+                      {:type :invalid-state
+                       :current-state current
+                       :required-state :error-recovery})))
+    (let [state @console/console-state
+          task-id (:current-task-id state)
+          session-id (:session-id state)
+          new-state (console/transition! :running-sdk {:session-id session-id
+                                                       :current-task-id task-id})]
+      (println (str "Retrying task " task-id))
+      new-state)))
+
+(defn skip
+  "Skip the failed task and move to the next.
+
+   Transitions from :error-recovery to :selecting-task.
+   Throws if not in :error-recovery state.
+
+   Returns the new state map."
+  []
+  (let [current (console/current-state)]
+    (when (not= :error-recovery current)
+      (throw (ex-info (str "Cannot skip: console is " current ", expected :error-recovery")
+                      {:type :invalid-state
+                       :current-state current
+                       :required-state :error-recovery})))
+    (let [state @console/console-state
+          task-id (:current-task-id state)
+          new-state (console/transition! :selecting-task)]
+      (println (str "Skipped task " task-id))
+      new-state)))
