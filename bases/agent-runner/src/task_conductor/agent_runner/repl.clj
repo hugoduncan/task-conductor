@@ -221,13 +221,12 @@
    Returns the filtered sessions vector.
    Throws if no active story."
   []
+  ;; Sessions are recorded during task execution within a story.
+  ;; Since we don't store story-id on session entries, we return
+  ;; all sessions when a story is active. The outer loop will
+  ;; reset sessions when starting a new story.
   (let [story-id (validate-story-id)
-        all-sessions (:sessions @console/console-state)
-        ;; Sessions are recorded during task execution within a story.
-        ;; Since we don't store story-id on session entries, we return
-        ;; all sessions when a story is active. The outer loop will
-        ;; reset sessions when starting a new story.
-        sessions all-sessions]
+        sessions (:sessions @console/console-state)]
     (println (str "Sessions for story " story-id ":"))
     (if (seq sessions)
       (doseq [[idx {:keys [session-id task-id timestamp]}]
