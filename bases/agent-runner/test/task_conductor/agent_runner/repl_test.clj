@@ -7,8 +7,9 @@
   ;; - abort transitions through :error-recovery to :idle
   ;; - retry re-attempts failed task from :error-recovery
   ;; - skip moves to next task from :error-recovery
-  ;; - add-context validates story and calls mcp-tasks CLI
-  ;; - view-context retrieves and formats shared-context
+  ;; - add-context validates story and calls mcp-tasks CLI with correct args
+  ;; - view-context retrieves and formats shared-context from mcp-tasks CLI
+  ;; - list-sessions filters sessions by current story-id
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.console :as console]
@@ -376,18 +377,36 @@
           (is (= :idle (:current-state (ex-data ex)))))))
 
     (testing "with active story"
-      (testing "uses story-id from console state"
+      (testing "calls mcp-tasks with correct arguments"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        ;; Can't fully test without mocking CLI, but validates story-id extraction
-        ;; The CLI call will fail in tests, which is expected
-        (let [ex (try
-                   (repl/add-context "test context")
-                   nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-          ;; If we get a CLI error (not no-active-story), the story-id was validated
-          (when ex
-            (is (not= :no-active-story (:type (ex-data ex))))))))))
+        (let [captured-args (atom nil)]
+          (with-redefs [repl/run-mcp-tasks
+                        (fn [& args]
+                          (reset! captured-args (vec args))
+                          {:success true})]
+            (repl/add-context "new context text")
+            (is (= ["update"
+                    "--task-id" "53"
+                    "--shared-context" "new context text"
+                    "--format" "edn"]
+                   @captured-args)))))
+
+      (testing "returns CLI result"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (with-redefs [repl/run-mcp-tasks
+                      (fn [& _args]
+                        {:task {:id 53 :shared-context ["ctx"]}})]
+          (let [result (repl/add-context "new context")]
+            (is (= {:task {:id 53 :shared-context ["ctx"]}} result)))))
+
+      (testing "prints confirmation with story-id"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (with-redefs [repl/run-mcp-tasks (fn [& _args] {})]
+          (let [output (with-out-str (repl/add-context "ctx"))]
+            (is (re-find #"Added context to story 53" output))))))))
 
 (deftest view-context-test
   (testing "view-context"
@@ -403,17 +422,53 @@
           (is (= :idle (:current-state (ex-data ex)))))))
 
     (testing "with active story"
-      (testing "uses story-id from console state"
+      (testing "calls mcp-tasks with correct arguments"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        ;; Can't fully test without mocking CLI, but validates story-id extraction
-        (let [ex (try
-                   (repl/view-context)
-                   nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-          ;; If we get a CLI error (not no-active-story), the story-id was validated
-          (when ex
-            (is (not= :no-active-story (:type (ex-data ex))))))))))
+        (let [captured-args (atom nil)]
+          (with-redefs [repl/run-mcp-tasks
+                        (fn [& args]
+                          (reset! captured-args (vec args))
+                          {:task {:shared-context []}})]
+            (repl/view-context)
+            (is (= ["show" "--task-id" "53" "--format" "edn"]
+                   @captured-args)))))
+
+      (testing "returns shared-context from CLI result"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (with-redefs [repl/run-mcp-tasks
+                      (fn [& _args]
+                        {:task {:shared-context ["ctx1" "ctx2"]}})]
+          (let [result (repl/view-context)]
+            (is (= ["ctx1" "ctx2"] result)))))
+
+      (testing "returns nil when shared-context absent"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (with-redefs [repl/run-mcp-tasks
+                      (fn [& _args] {:task {}})]
+          (let [result (repl/view-context)]
+            (is (nil? result)))))
+
+      (testing "prints numbered context entries"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (with-redefs [repl/run-mcp-tasks
+                      (fn [& _args]
+                        {:task {:shared-context ["first" "second"]}})]
+          (let [output (with-out-str (repl/view-context))]
+            (is (re-find #"Shared Context:" output))
+            (is (re-find #"1\. first" output))
+            (is (re-find #"2\. second" output)))))
+
+      (testing "prints (none) when context empty"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (with-redefs [repl/run-mcp-tasks
+                      (fn [& _args] {:task {:shared-context []}})]
+          (let [output (with-out-str (repl/view-context))]
+            (is (re-find #"\(none\)" output))))))))
 
 ;;; Session Tracking Tests
 
