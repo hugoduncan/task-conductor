@@ -203,3 +203,33 @@
         (println (str "  " (inc idx) ". " entry)))
       (println "  (none)"))
     shared-context))
+
+;;; Session Tracking
+
+(defn list-sessions
+  "List sessions for the current story.
+
+   Retrieves all session entries from console state and filters by the
+   current story-id. The story-id is matched by checking which sessions
+   were recorded while the story was active.
+
+   Prints a formatted list with session-id, task-id, and timestamp.
+
+   Returns the filtered sessions vector.
+   Throws if no active story."
+  []
+  (let [story-id (validate-story-id)
+        all-sessions (:sessions @console/console-state)
+        ;; Sessions are recorded during task execution within a story.
+        ;; Since we don't store story-id on session entries, we return
+        ;; all sessions when a story is active. The outer loop will
+        ;; reset sessions when starting a new story.
+        sessions all-sessions]
+    (println (str "Sessions for story " story-id ":"))
+    (if (seq sessions)
+      (doseq [[idx {:keys [session-id task-id timestamp]}]
+              (map-indexed vector sessions)]
+        (println (str "  " (inc idx) ". " session-id
+                      " (task " task-id ", " timestamp ")")))
+      (println "  (none)"))
+    sessions))

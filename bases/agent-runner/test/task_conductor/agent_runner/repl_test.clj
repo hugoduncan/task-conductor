@@ -392,3 +392,52 @@
           ;; If we get a CLI error (not no-active-story), the story-id was validated
           (when ex
             (is (not= :no-active-story (:type (ex-data ex))))))))))
+
+;;; Session Tracking Tests
+
+(deftest list-sessions-test
+  (testing "list-sessions"
+    (testing "with no active story"
+      (testing "throws with informative error"
+        (console/reset-state!)
+        (let [ex (try
+                   (repl/list-sessions)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? ex))
+          (is (= :no-active-story (:type (ex-data ex))))
+          (is (= :idle (:current-state (ex-data ex)))))))
+
+    (testing "with active story"
+      (testing "returns empty vector when no sessions"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (let [result (repl/list-sessions)]
+          (is (vector? result))
+          (is (empty? result))))
+
+      (testing "returns sessions from console state"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/record-session! "sess-1" 75)
+        (console/record-session! "sess-2" 76)
+        (let [result (repl/list-sessions)]
+          (is (= 2 (count result)))
+          (is (= "sess-1" (:session-id (first result))))
+          (is (= "sess-2" (:session-id (second result))))))
+
+      (testing "prints empty message when no sessions"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (let [output (with-out-str (repl/list-sessions))]
+          (is (re-find #"Sessions for story 53:" output))
+          (is (re-find #"\(none\)" output))))
+
+      (testing "prints formatted session list"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 53})
+        (console/record-session! "sess-abc" 75)
+        (let [output (with-out-str (repl/list-sessions))]
+          (is (re-find #"Sessions for story 53:" output))
+          (is (re-find #"sess-abc" output))
+          (is (re-find #"task 75" output)))))))
