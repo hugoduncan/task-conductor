@@ -4,6 +4,8 @@
   (:require
    [clojure.java.shell :as shell]
    [clojure.test :refer [deftest is testing]]
+   [task-conductor.agent-runner.console :as console]
+   [task-conductor.agent-runner.handoff :as handoff]
    [task-conductor.agent-runner.orchestrator :as orchestrator]))
 
 (deftest select-next-task-test
@@ -304,3 +306,145 @@
             (orchestrator/execute-task task-info)
             (is (= ["project"] (:setting-sources @captured-config))
                 "should use auto-discovery by default")))))))
+
+(defn- with-clean-console-state
+  "Helper to run body with clean console state and no handoff file I/O."
+  [f]
+  (console/reset-state!)
+  (try
+    (with-redefs [handoff/write-handoff-state (fn [& _] nil)]
+      (f))
+    (finally
+      (console/reset-state!))))
+
+(deftest execute-story-test
+  ;; Verifies story execution loop handles all outcomes:
+  ;; complete, paused, blocked, no-tasks, and error recovery.
+  (testing "execute-story"
+    (testing "when all tasks complete"
+      (testing "returns :complete outcome"
+        (with-clean-console-state
+          (fn []
+            (let [task-counter (atom 0)
+                  tasks [{:id 108 :parent-id 57 :worktree-path "/path"}
+                         {:id 109 :parent-id 57 :worktree-path "/path"}]]
+              (with-redefs [orchestrator/select-next-task
+                            (fn [_story-id]
+                              (let [n @task-counter]
+                                (if (< n (count tasks))
+                                  {:status :task-available
+                                   :task (nth tasks n)
+                                   :progress {:completed n
+                                              :total (count tasks)}}
+                                  {:status :all-complete
+                                   :progress {:completed (count tasks)
+                                              :total (count tasks)}})))
+                            orchestrator/run-sdk-session
+                            (fn [_config _prompt]
+                              (swap! task-counter inc)
+                              {:result {:messages []}
+                               :session-id (str "sess-" @task-counter)})]
+                (let [result (orchestrator/execute-story 57)]
+                  (is (= :complete (:outcome result))
+                      "should return :complete")
+                  (is (= {:completed 2 :total 2} (:progress result))
+                      "should include final progress")
+                  (is (= :story-complete (-> result :state :state))
+                      "should end in :story-complete state"))))))))
+
+    (testing "when paused during execution"
+      (testing "returns :paused outcome"
+        (with-clean-console-state
+          (fn []
+            (let [task {:id 108 :parent-id 57 :worktree-path "/path"}
+                  executed? (atom false)]
+              (with-redefs [orchestrator/select-next-task
+                            (fn [_story-id]
+                              {:status :task-available
+                               :task task
+                               :progress {:completed 0 :total 1}})
+                            orchestrator/run-sdk-session
+                            (fn [_config _prompt]
+                              (reset! executed? true)
+                              (console/set-paused!)
+                              {:result {:messages []}
+                               :session-id "sess-1"})]
+                (let [result (orchestrator/execute-story 57)]
+                  (is (= :paused (:outcome result))
+                      "should return :paused")
+                  (is @executed?
+                      "should have executed at least one task"))))))))
+
+    (testing "when all tasks are blocked"
+      (testing "returns :blocked outcome with blocker info"
+        (with-clean-console-state
+          (fn []
+            (let [blocked-tasks [{:id 109 :title "Blocked" :blocking-task-ids [108]}]]
+              (with-redefs [orchestrator/select-next-task
+                            (fn [_story-id]
+                              {:status :all-blocked
+                               :blocked-tasks blocked-tasks
+                               :progress {:completed 1 :total 2}})]
+                (let [result (orchestrator/execute-story 57)]
+                  (is (= :blocked (:outcome result))
+                      "should return :blocked")
+                  (is (= blocked-tasks (:blocked-tasks result))
+                      "should include blocked task info")
+                  (is (= {:completed 1 :total 2} (:progress result))
+                      "should include progress"))))))))
+
+    (testing "when story has no tasks"
+      (testing "returns :no-tasks outcome"
+        (with-clean-console-state
+          (fn []
+            (with-redefs [orchestrator/select-next-task
+                          (fn [_story-id]
+                            {:status :no-tasks})]
+              (let [result (orchestrator/execute-story 57)]
+                (is (= :no-tasks (:outcome result))
+                    "should return :no-tasks")))))))
+
+    (testing "when an exception occurs during execution"
+      (testing "returns :error outcome and transitions to error-recovery"
+        (with-clean-console-state
+          (fn []
+            (with-redefs [orchestrator/select-next-task
+                          (fn [_story-id]
+                            (throw (ex-info "Test error" {:test-data 42})))]
+              (let [result (orchestrator/execute-story 57)]
+                (is (= :error (:outcome result))
+                    "should return :error")
+                (is (= "Test error" (-> result :error :message))
+                    "should include error message")
+                (is (= {:test-data 42} (-> result :error :data))
+                    "should include ex-data")
+                (is (= :error-recovery (-> result :state :state))
+                    "should transition to :error-recovery")))))))
+
+    (testing "transitions through correct states"
+      (testing "goes idle → selecting-task → running-sdk → task-complete → selecting-task"
+        (with-clean-console-state
+          (fn []
+            (let [states (atom [])
+                  task {:id 108 :parent-id 57 :worktree-path "/path"}
+                  call-count (atom 0)]
+              (with-redefs [orchestrator/select-next-task
+                            (fn [_story-id]
+                              (swap! states conj (console/current-state))
+                              (if (zero? @call-count)
+                                (do (swap! call-count inc)
+                                    {:status :task-available
+                                     :task task
+                                     :progress {:completed 0 :total 1}})
+                                {:status :all-complete
+                                 :progress {:completed 1 :total 1}}))
+                            orchestrator/run-sdk-session
+                            (fn [_config _prompt]
+                              (swap! states conj (console/current-state))
+                              {:result {:messages []}
+                               :session-id "sess-1"})]
+                (orchestrator/execute-story 57)
+                (is (= :selecting-task (first @states))
+                    "should be in :selecting-task when selecting")
+                (is (= :running-sdk (second @states))
+                    "should be in :running-sdk when executing")))))))))

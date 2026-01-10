@@ -13,10 +13,8 @@
   (:require
    [clojure.edn :as edn]
    [clojure.java.shell :as shell]
+   [task-conductor.agent-runner.console :as console]
    [task-conductor.claude-agent-sdk.interface :as sdk]))
-
-;; NOTE: console and handoff namespaces will be added when implemented
-;; (see stories #53 and #54/55)
 
 ;;; CLI Integration
 
@@ -212,6 +210,109 @@
       :result result
       :handoff-requested? false})))
 
+;;; Story Execution Loop
+
+(defn- handle-task-execution
+  "Execute a single task and handle handoff if needed.
+   Returns the execution result from execute-task."
+  [task opts]
+  (let [task-info {:task-id (:id task)
+                   :parent-id (:parent-id task)
+                   :worktree-path (:worktree-path task)}
+        result (execute-task task-info opts)]
+    (console/record-session! (:session-id result) (:id task))
+    (when (:handoff-requested? result)
+      (console/hand-to-cli))
+    result))
+
+(defn- task-loop
+  "Main task selection and execution loop.
+   Runs until story complete, paused, blocked, or error.
+   Returns outcome map."
+  [story-id opts]
+  (loop []
+    (if (console/paused?)
+      {:outcome :paused
+       :state @console/console-state}
+      (let [{:keys [status task progress blocked-tasks]} (select-next-task story-id)]
+        (case status
+          :task-available
+          (do
+            (console/transition! :running-sdk
+                                 {:session-id nil
+                                  :current-task-id (:id task)})
+            (let [result (handle-task-execution task opts)]
+              ;; Update session-id directly after SDK returns
+              (swap! console/console-state assoc :session-id (:session-id result))
+              (console/transition! :task-complete)
+              (console/transition! :selecting-task))
+            (recur))
+
+          :all-blocked
+          {:outcome :blocked
+           :blocked-tasks blocked-tasks
+           :progress progress
+           :state @console/console-state}
+
+          :all-complete
+          (do
+            (console/transition! :story-complete)
+            {:outcome :complete
+             :progress progress
+             :state @console/console-state})
+
+          :no-tasks
+          {:outcome :no-tasks
+           :state @console/console-state})))))
+
+(defn execute-story
+  "Execute all tasks in a story sequentially.
+
+   Drives the main task execution loop: selects tasks, runs them in
+   isolated SDK sessions, and handles state transitions.
+
+   Arguments:
+   - story-id: The ID of the story to execute
+   - opts: Optional map of session configuration overrides
+
+   Returns a map with:
+   - :outcome - One of :complete, :paused, :blocked, :no-tasks, :error
+   - :progress - {:completed N :total M} (when applicable)
+   - :blocked-tasks - List of blocked task info (when :blocked)
+   - :error - Error details (when :error)
+   - :state - Final console state map
+
+   The function transitions the console state machine through:
+   :idle → :selecting-task → :running-sdk → :task-complete → loop
+
+   Each task runs in a fresh SDK session with MCP auto-discovery.
+   The loop checks the paused flag between iterations.
+
+   Example:
+     (execute-story 57)
+     ;; => {:outcome :complete
+     ;;     :progress {:completed 5 :total 5}
+     ;;     :state {...}}"
+  ([story-id]
+   (execute-story story-id {}))
+  ([story-id opts]
+   (try
+     (console/transition! :selecting-task {:story-id story-id})
+     (task-loop story-id opts)
+     (catch Exception e
+       (try
+         (console/transition! :error-recovery
+                              {:error {:type :exception
+                                       :message (ex-message e)
+                                       :data (ex-data e)}})
+         (catch Exception _
+           nil))
+       {:outcome :error
+        :error {:type :exception
+                :message (ex-message e)
+                :data (ex-data e)}
+        :state @console/console-state}))))
+
 (comment
   ;; Example: Query unblocked children of story 57
   (run-mcp-tasks "list" "--parent-id" "57" "--blocked" "false" "--limit" "1")
@@ -246,4 +347,10 @@
   ;;     :messages [...]
   ;;     :result {...}
   ;;     :handoff-requested? false}
+
+  ;; Example: Execute all tasks in a story
+  (execute-story 57)
+  ;; => {:outcome :complete
+  ;;     :progress {:completed 5 :total 5}
+  ;;     :state {...}}
   )
