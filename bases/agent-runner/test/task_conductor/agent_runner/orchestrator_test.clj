@@ -218,7 +218,18 @@
                       task-info
                       {:permission-mode "default"})]
           (is (= "default" (:permission-mode result))
-              "should use overridden permission-mode"))))))
+              "should use overridden permission-mode"))))
+
+    (testing "with nil worktree-path"
+      (testing "falls back to current directory"
+        (let [task-info {:task-id 110}
+              result (orchestrator/build-task-session-config task-info)]
+          (is (= (System/getProperty "user.dir") (:cwd result))
+              "should fall back to current working directory")
+          (is (= "bypassPermissions" (:permission-mode result))
+              "should still set default permission mode")
+          (is (= ["project"] (:setting-sources result))
+              "should still enable auto-discovery"))))))
 
 (deftest build-task-prompt-test
   ;; Verifies prompt construction for task execution.
@@ -326,8 +337,9 @@
         (with-clean-console-state
           (fn []
             (let [task-counter (atom 0)
-                  tasks [{:id 108 :parent-id 57 :worktree-path "/path"}
-                         {:id 109 :parent-id 57 :worktree-path "/path"}]]
+                  ;; Tasks from select-next-task don't include :worktree-path
+                  tasks [{:id 108 :parent-id 57}
+                         {:id 109 :parent-id 57}]]
               (with-redefs [orchestrator/select-next-task
                             (fn [_story-id]
                               (let [n @task-counter]
@@ -356,7 +368,7 @@
       (testing "returns :paused outcome"
         (with-clean-console-state
           (fn []
-            (let [task {:id 108 :parent-id 57 :worktree-path "/path"}
+            (let [task {:id 108 :parent-id 57}
                   executed? (atom false)]
               (with-redefs [orchestrator/select-next-task
                             (fn [_story-id]
@@ -426,7 +438,7 @@
         (with-clean-console-state
           (fn []
             (let [states (atom [])
-                  task {:id 108 :parent-id 57 :worktree-path "/path"}
+                  task {:id 108 :parent-id 57}
                   call-count (atom 0)]
               (with-redefs [orchestrator/select-next-task
                             (fn [_story-id]

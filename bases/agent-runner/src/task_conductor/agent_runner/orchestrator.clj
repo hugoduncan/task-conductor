@@ -123,7 +123,7 @@
 (defn build-task-session-config
   "Build SDK session options for executing a task.
 
-   Takes task-info (from work-on tool) and optional opts map.
+   Takes task-info and optional opts map.
    Returns a config map suitable for claude-agent-sdk/create-client.
 
    MCP server configuration:
@@ -133,7 +133,11 @@
 
    Default options (can be overridden via opts):
    - :permission-mode \"bypassPermissions\" - for automated execution
-   - :cwd - from task-info :worktree-path
+   - :cwd - from opts, task-info :worktree-path, or current directory
+
+   Note: Tasks from select-next-task don't include :worktree-path. When
+   not provided, falls back to the current working directory. The agent
+   session typically calls mcp-tasks work-on which sets up the worktree.
 
    Example:
      (build-task-session-config
@@ -143,7 +147,8 @@
    (build-task-session-config task-info {}))
   ([task-info opts]
    (let [cwd (or (:cwd opts)
-                 (:worktree-path task-info))
+                 (:worktree-path task-info)
+                 (System/getProperty "user.dir"))
          ;; Defaults for automated task execution
          defaults {:permission-mode "bypassPermissions"
                    :cwd cwd}
