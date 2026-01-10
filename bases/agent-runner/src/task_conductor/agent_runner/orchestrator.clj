@@ -12,7 +12,8 @@
    - Handle pause/resume and error recovery"
   (:require
    [clojure.edn :as edn]
-   [clojure.java.shell :as shell]))
+   [clojure.java.shell :as shell]
+   [task-conductor.claude-agent-sdk.interface :as sdk]))
 
 ;; NOTE: console and handoff namespaces will be added when implemented
 ;; (see stories #53 and #54/55)
@@ -154,6 +155,63 @@
                       {:setting-sources ["project"]})]
      (merge defaults mcp-config opts))))
 
+;;; Task Execution
+
+(defn- build-task-prompt
+  "Build the prompt string for executing a task.
+
+   Constructs a prompt that invokes the execute-story-child workflow
+   with the task's parent story ID. The agent will then use mcp-tasks
+   to find and execute the specific task."
+  [task-info]
+  (let [parent-id (:parent-id task-info)]
+    (format "/mcp-tasks:execute-story-child %d" parent-id)))
+
+(defn run-sdk-session
+  "Run an SDK session with the given config and prompt.
+
+   Extracted to enable testing via with-redefs. Creates a session,
+   sends the prompt, and returns the result with session-id.
+
+   Returns {:result <query-result> :session-id <string>}."
+  [session-config prompt]
+  (sdk/with-session [client session-config]
+    (sdk/session-query client prompt)))
+
+(defn execute-task
+  "Execute a task in a fresh Claude SDK session.
+
+   Creates an isolated session, injects the execute-story-child prompt
+   with the task's parent story ID, and runs until completion or handoff.
+
+   Arguments:
+   - task-info: Map from work-on tool with :task-id, :parent-id, :worktree-path
+   - opts: Optional session configuration overrides
+
+   Returns a map with:
+   - :session-id - Session identifier for later resumption
+   - :messages - Vector of parsed response messages
+   - :result - Final result message
+   - :handoff-requested? - True if CLI handoff was requested (not yet implemented)
+
+   The session uses MCP auto-discovery by default, so the agent has
+   access to mcp-tasks and other configured MCP servers.
+
+   Example:
+     (execute-task {:task-id 111
+                    :parent-id 57
+                    :worktree-path \"/path/to/worktree\"})"
+  ([task-info]
+   (execute-task task-info {}))
+  ([task-info opts]
+   (let [session-config (build-task-session-config task-info opts)
+         prompt (build-task-prompt task-info)
+         {:keys [result session-id]} (run-sdk-session session-config prompt)]
+     {:session-id session-id
+      :messages (:messages result)
+      :result result
+      :handoff-requested? false})))
+
 (comment
   ;; Example: Query unblocked children of story 57
   (run-mcp-tasks "list" "--parent-id" "57" "--blocked" "false" "--limit" "1")
@@ -178,4 +236,14 @@
   ;; => {:permission-mode "bypassPermissions"
   ;;     :cwd "/path/to/project"
   ;;     :mcp-servers {"mcp-tasks" {...}}}
+
+  ;; Example: Execute a task (requires SDK initialization)
+  ;; (sdk/initialize! {:venv-path ".venv"})
+  (execute-task {:task-id 111
+                 :parent-id 57
+                 :worktree-path "/path/to/worktree"})
+  ;; => {:session-id "abc-123"
+  ;;     :messages [...]
+  ;;     :result {...}
+  ;;     :handoff-requested? false}
   )

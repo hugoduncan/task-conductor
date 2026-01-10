@@ -1,6 +1,6 @@
 (ns task-conductor.agent-runner.orchestrator-test
-  ;; Tests task selection logic for story execution orchestration.
-  ;; Uses mocked CLI responses to test edge case handling.
+  ;; Tests task selection and execution logic for story orchestration.
+  ;; Uses mocked CLI and SDK responses to test edge case handling.
   (:require
    [clojure.java.shell :as shell]
    [clojure.test :refer [deftest is testing]]
@@ -217,3 +217,90 @@
                       {:permission-mode "default"})]
           (is (= "default" (:permission-mode result))
               "should use overridden permission-mode"))))))
+
+(deftest build-task-prompt-test
+  ;; Verifies prompt construction for task execution.
+  ;; The prompt should invoke execute-story-child with the parent story ID.
+  (testing "build-task-prompt"
+    (testing "formats prompt with parent-id"
+      (let [task-info {:task-id 111
+                       :parent-id 57
+                       :worktree-path "/path"}
+            result (#'orchestrator/build-task-prompt task-info)]
+        (is (= "/mcp-tasks:execute-story-child 57" result)
+            "should format prompt with parent story ID")))))
+
+(deftest execute-task-test
+  ;; Verifies task execution creates SDK session with correct config,
+  ;; runs the prompt, and returns session info.
+  (testing "execute-task"
+    (testing "calls run-sdk-session with correct config and prompt"
+      (let [captured-config (atom nil)
+            captured-prompt (atom nil)
+            mock-session-id "mock-session-123"
+            mock-messages [{:type :assistant-message :content "Done"}]
+            mock-result {:messages mock-messages}]
+        (with-redefs [orchestrator/run-sdk-session
+                      (fn [config prompt]
+                        (reset! captured-config config)
+                        (reset! captured-prompt prompt)
+                        {:result mock-result :session-id mock-session-id})]
+          (let [task-info {:task-id 111
+                           :parent-id 57
+                           :worktree-path "/path/to/worktree"}]
+            (orchestrator/execute-task task-info)
+            ;; Verify correct prompt was passed
+            (is (= "/mcp-tasks:execute-story-child 57" @captured-prompt)
+                "should pass correct prompt")
+            ;; Verify config has expected values
+            (is (= "/path/to/worktree" (:cwd @captured-config))
+                "should set cwd from worktree-path")
+            (is (= "bypassPermissions" (:permission-mode @captured-config))
+                "should use bypassPermissions")))))
+
+    (testing "returns result map with expected keys"
+      (let [mock-session-id "session-abc-123"
+            mock-messages [{:type :assistant-message
+                            :content "Task completed"}]
+            mock-result {:messages mock-messages}]
+        (with-redefs [orchestrator/run-sdk-session
+                      (fn [_config _prompt]
+                        {:result mock-result :session-id mock-session-id})]
+          (let [task-info {:task-id 111
+                           :parent-id 57
+                           :worktree-path "/path/to/worktree"}
+                result (orchestrator/execute-task task-info)]
+            (is (= mock-session-id (:session-id result))
+                "should include session-id")
+            (is (= mock-messages (:messages result))
+                "should include messages vector")
+            (is (= mock-result (:result result))
+                "should include result")
+            (is (= false (:handoff-requested? result))
+                "should set handoff-requested? to false")))))
+
+    (testing "passes opts to session config"
+      (let [captured-config (atom nil)]
+        (with-redefs [orchestrator/run-sdk-session
+                      (fn [config _prompt]
+                        (reset! captured-config config)
+                        {:result {:messages []} :session-id "sess"})]
+          (let [task-info {:task-id 111
+                           :parent-id 57
+                           :worktree-path "/path/to/worktree"}]
+            (orchestrator/execute-task task-info {:max-turns 100})
+            (is (= 100 (:max-turns @captured-config))
+                "should pass custom opts to session config")))))
+
+    (testing "uses 1-arity form correctly"
+      (let [captured-config (atom nil)]
+        (with-redefs [orchestrator/run-sdk-session
+                      (fn [config _prompt]
+                        (reset! captured-config config)
+                        {:result {:messages []} :session-id "sess"})]
+          (let [task-info {:task-id 111
+                           :parent-id 57
+                           :worktree-path "/path/to/worktree"}]
+            (orchestrator/execute-task task-info)
+            (is (= ["project"] (:setting-sources @captured-config))
+                "should use auto-discovery by default")))))))
