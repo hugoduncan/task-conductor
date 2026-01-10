@@ -5,8 +5,6 @@
    from the REPL. Each function prints human-readable output and returns
    data for programmatic use."
   (:require
-   [babashka.process :as p]
-   [clojure.edn :as edn]
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.orchestrator :as orchestrator]))
 
@@ -158,19 +156,6 @@
                        :current-state (console/current-state)})))
     story-id))
 
-(defn- run-mcp-tasks
-  "Run mcp-tasks CLI command and return parsed EDN result.
-   Throws on non-zero exit."
-  [& args]
-  (let [result (apply p/sh "mcp-tasks" args)]
-    (when (not= 0 (:exit result))
-      (throw (ex-info (str "mcp-tasks failed: " (:err result))
-                      {:type :cli-error
-                       :args args
-                       :exit-code (:exit result)
-                       :stderr (:err result)})))
-    (edn/read-string (:out result))))
-
 (defn add-context
   "Append text to the current story's shared-context.
 
@@ -181,10 +166,9 @@
    Throws if no active story or CLI call fails."
   [text]
   (let [story-id (validate-story-id)
-        result (run-mcp-tasks "update"
-                              "--task-id" (str story-id)
-                              "--shared-context" text
-                              "--format" "edn")]
+        result (orchestrator/run-mcp-tasks "update"
+                                           "--task-id" (str story-id)
+                                           "--shared-context" text)]
     (println (str "Added context to story " story-id))
     result))
 
@@ -197,9 +181,8 @@
    Throws if no active story or CLI call fails."
   []
   (let [story-id (validate-story-id)
-        result (run-mcp-tasks "show"
-                              "--task-id" (str story-id)
-                              "--format" "edn")
+        result (orchestrator/run-mcp-tasks "show"
+                                           "--task-id" (str story-id))
         shared-context (get-in result [:task :shared-context])]
     (println "Shared Context:")
     (if (seq shared-context)

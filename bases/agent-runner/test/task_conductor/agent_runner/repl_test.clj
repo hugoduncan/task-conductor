@@ -383,21 +383,20 @@
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
         (let [captured-args (atom nil)]
-          (with-redefs [repl/run-mcp-tasks
+          (with-redefs [orchestrator/run-mcp-tasks
                         (fn [& args]
                           (reset! captured-args (vec args))
                           {:success true})]
             (repl/add-context "new context text")
             (is (= ["update"
                     "--task-id" "53"
-                    "--shared-context" "new context text"
-                    "--format" "edn"]
+                    "--shared-context" "new context text"]
                    @captured-args)))))
 
       (testing "returns CLI result"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks
+        (with-redefs [orchestrator/run-mcp-tasks
                       (fn [& _args]
                         {:task {:id 53 :shared-context ["ctx"]}})]
           (let [result (repl/add-context "new context")]
@@ -406,7 +405,7 @@
       (testing "prints confirmation with story-id"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks (fn [& _args] {})]
+        (with-redefs [orchestrator/run-mcp-tasks (fn [& _args] {})]
           (let [output (with-out-str (repl/add-context "ctx"))]
             (is (re-find #"Added context to story 53" output))))))))
 
@@ -428,18 +427,18 @@
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
         (let [captured-args (atom nil)]
-          (with-redefs [repl/run-mcp-tasks
+          (with-redefs [orchestrator/run-mcp-tasks
                         (fn [& args]
                           (reset! captured-args (vec args))
                           {:task {:shared-context []}})]
             (repl/view-context)
-            (is (= ["show" "--task-id" "53" "--format" "edn"]
+            (is (= ["show" "--task-id" "53"]
                    @captured-args)))))
 
       (testing "returns shared-context from CLI result"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks
+        (with-redefs [orchestrator/run-mcp-tasks
                       (fn [& _args]
                         {:task {:shared-context ["ctx1" "ctx2"]}})]
           (let [result (repl/view-context)]
@@ -448,7 +447,7 @@
       (testing "returns nil when shared-context absent"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks
+        (with-redefs [orchestrator/run-mcp-tasks
                       (fn [& _args] {:task {}})]
           (let [result (repl/view-context)]
             (is (nil? result)))))
@@ -456,7 +455,7 @@
       (testing "prints numbered context entries"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks
+        (with-redefs [orchestrator/run-mcp-tasks
                       (fn [& _args]
                         {:task {:shared-context ["first" "second"]}})]
           (let [output (with-out-str (repl/view-context))]
@@ -467,7 +466,7 @@
       (testing "prints (none) when context empty"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks
+        (with-redefs [orchestrator/run-mcp-tasks
                       (fn [& _args] {:task {:shared-context []}})]
           (let [output (with-out-str (repl/view-context))]
             (is (re-find #"\(none\)" output))))))))
