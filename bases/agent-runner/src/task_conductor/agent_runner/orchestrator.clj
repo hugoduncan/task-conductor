@@ -46,9 +46,85 @@
                        :stderr err
                        :stdout out})))))
 
+;;; Task Selection
+
+(defn- query-unblocked-child
+  "Query mcp-tasks for first unblocked child of story-id."
+  [story-id]
+  (run-mcp-tasks "list"
+                 "--parent-id" (str story-id)
+                 "--blocked" "false"
+                 "--limit" "1"))
+
+(defn- query-all-children
+  "Query mcp-tasks for all children of story-id."
+  [story-id]
+  (run-mcp-tasks "list" "--parent-id" (str story-id)))
+
+(defn- build-progress
+  "Build progress map from metadata."
+  [{:keys [open-task-count completed-task-count]}]
+  {:completed completed-task-count
+   :total (+ open-task-count completed-task-count)})
+
+(defn- build-blocked-task-info
+  "Extract blocking info from a task for reporting."
+  [{:keys [id title blocking-task-ids]}]
+  {:id id
+   :title title
+   :blocking-task-ids blocking-task-ids})
+
+(defn select-next-task
+  "Select the next unblocked task from a story's children.
+
+   Returns a map with :status and additional keys based on status:
+
+   {:status :task-available :task <task-map> :progress {:completed N :total M}}
+   - A task is ready to execute
+
+   {:status :all-blocked :blocked-tasks [...] :progress {...}}
+   - All remaining tasks are blocked. :blocked-tasks contains
+     [{:id N :title \"...\" :blocking-task-ids [...]}, ...]
+
+   {:status :all-complete :progress {:completed N :total N}}
+   - All tasks have been completed
+
+   {:status :no-tasks}
+   - Story has no child tasks"
+  [story-id]
+  (let [{:keys [tasks metadata]} (query-unblocked-child story-id)]
+    (if (seq tasks)
+      ;; Found an unblocked task
+      {:status :task-available
+       :task (first tasks)
+       :progress (build-progress metadata)}
+      ;; No unblocked tasks - determine why
+      (let [{all-tasks :tasks
+             all-meta :metadata} (query-all-children story-id)
+            {:keys [open-task-count completed-task-count]} all-meta]
+        (cond
+          ;; Has open tasks but none unblocked = all blocked
+          (pos? open-task-count)
+          {:status :all-blocked
+           :blocked-tasks (mapv build-blocked-task-info
+                                (filter :is-blocked all-tasks))
+           :progress (build-progress all-meta)}
+
+          ;; No open tasks but some completed = all complete
+          (pos? completed-task-count)
+          {:status :all-complete
+           :progress (build-progress all-meta)}
+
+          ;; No tasks at all
+          :else
+          {:status :no-tasks})))))
+
 (comment
   ;; Example: Query unblocked children of story 57
   (run-mcp-tasks "list" "--parent-id" "57" "--blocked" "false" "--limit" "1")
 
   ;; Example: Show a specific task
-  (run-mcp-tasks "show" "108"))
+  (run-mcp-tasks "show" "108")
+
+  ;; Example: Select next task from story
+  (select-next-task 57))
