@@ -156,3 +156,64 @@
         (let [result (orchestrator/run-mcp-tasks "list")]
           (is (= {:tasks [] :metadata {:count 0}} result)
               "should parse EDN output"))))))
+
+(deftest build-task-session-config-test
+  ;; Verifies SDK session config construction for task execution.
+  ;; Tests MCP auto-discovery vs explicit config, and option merging.
+  (testing "build-task-session-config"
+    (testing "with minimal task-info"
+      (testing "uses auto-discovery and default permission mode"
+        (let [task-info {:worktree-path "/path/to/worktree"
+                         :task-id 110}
+              result (orchestrator/build-task-session-config task-info)]
+          (is (= "/path/to/worktree" (:cwd result))
+              "should set :cwd from worktree-path")
+          (is (= "bypassPermissions" (:permission-mode result))
+              "should default to bypassPermissions")
+          (is (= ["project"] (:setting-sources result))
+              "should enable project auto-discovery"))))
+
+    (testing "with explicit :mcp-servers option"
+      (testing "uses explicit config instead of auto-discovery"
+        (let [task-info {:worktree-path "/path/to/worktree"}
+              mcp-config {"mcp-tasks" {:command "mcp-tasks"
+                                       :args ["serve"]}}
+              result (orchestrator/build-task-session-config
+                      task-info
+                      {:mcp-servers mcp-config})]
+          (is (= mcp-config (:mcp-servers result))
+              "should include explicit mcp-servers")
+          (is (nil? (:setting-sources result))
+              "should not include setting-sources"))))
+
+    (testing "with custom options"
+      (testing "merges opts over defaults"
+        (let [task-info {:worktree-path "/path/to/worktree"}
+              result (orchestrator/build-task-session-config
+                      task-info
+                      {:max-turns 50
+                       :model "claude-sonnet-4"})]
+          (is (= 50 (:max-turns result))
+              "should include custom max-turns")
+          (is (= "claude-sonnet-4" (:model result))
+              "should include custom model")
+          (is (= "bypassPermissions" (:permission-mode result))
+              "should preserve default permission-mode"))))
+
+    (testing "with :cwd override in opts"
+      (testing "uses opts :cwd over task-info worktree-path"
+        (let [task-info {:worktree-path "/path/to/worktree"}
+              result (orchestrator/build-task-session-config
+                      task-info
+                      {:cwd "/custom/path"})]
+          (is (= "/custom/path" (:cwd result))
+              "should use :cwd from opts"))))
+
+    (testing "with permission-mode override"
+      (testing "allows overriding default permission-mode"
+        (let [task-info {:worktree-path "/path/to/worktree"}
+              result (orchestrator/build-task-session-config
+                      task-info
+                      {:permission-mode "default"})]
+          (is (= "default" (:permission-mode result))
+              "should use overridden permission-mode"))))))

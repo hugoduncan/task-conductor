@@ -119,6 +119,41 @@
           :else
           {:status :no-tasks})))))
 
+;;; Session Configuration
+
+(defn build-task-session-config
+  "Build SDK session options for executing a task.
+
+   Takes task-info (from work-on tool) and optional opts map.
+   Returns a config map suitable for claude-agent-sdk/create-client.
+
+   MCP server configuration:
+   - If :mcp-servers provided in opts → uses it directly
+   - Otherwise → enables auto-discovery via :setting-sources [\"project\"]
+     so SDK reads .mcp.json from :cwd
+
+   Default options (can be overridden via opts):
+   - :permission-mode \"bypassPermissions\" - for automated execution
+   - :cwd - from task-info :worktree-path
+
+   Example:
+     (build-task-session-config
+       {:worktree-path \"/path/to/worktree\" :task-id 110}
+       {:max-turns 50})"
+  ([task-info]
+   (build-task-session-config task-info {}))
+  ([task-info opts]
+   (let [cwd (or (:cwd opts)
+                 (:worktree-path task-info))
+         ;; Defaults for automated task execution
+         defaults {:permission-mode "bypassPermissions"
+                   :cwd cwd}
+         ;; Enable MCP auto-discovery unless explicit :mcp-servers provided
+         mcp-config (if (contains? opts :mcp-servers)
+                      {}
+                      {:setting-sources ["project"]})]
+     (merge defaults mcp-config opts))))
+
 (comment
   ;; Example: Query unblocked children of story 57
   (run-mcp-tasks "list" "--parent-id" "57" "--blocked" "false" "--limit" "1")
@@ -127,4 +162,20 @@
   (run-mcp-tasks "show" "108")
 
   ;; Example: Select next task from story
-  (select-next-task 57))
+  (select-next-task 57)
+
+  ;; Example: Build session config with auto-discovery
+  (build-task-session-config {:worktree-path "/path/to/project"})
+  ;; => {:permission-mode "bypassPermissions"
+  ;;     :cwd "/path/to/project"
+  ;;     :setting-sources ["project"]}
+
+  ;; Example: Build session config with explicit MCP servers
+  (build-task-session-config
+   {:worktree-path "/path/to/project"}
+   {:mcp-servers {"mcp-tasks" {:command "mcp-tasks"
+                               :args ["serve"]}}})
+  ;; => {:permission-mode "bypassPermissions"
+  ;;     :cwd "/path/to/project"
+  ;;     :mcp-servers {"mcp-tasks" {...}}}
+  )
