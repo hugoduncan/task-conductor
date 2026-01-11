@@ -61,10 +61,11 @@
       true
       (try
         (let [abs-venv (.getAbsolutePath (io/file venv-path))
-              abs-requirements (.getAbsolutePath (io/file requirements-path))]
+              abs-requirements (.getAbsolutePath (io/file requirements-path))
+              python-cmd (resolve-python-cmd opts)]
           (log "Creating Python venv at" abs-venv)
           (let [create-result (p/shell {:out :string :err :string :continue true}
-                                       "python3" "-m" "venv" abs-venv)]
+                                       python-cmd "-m" "venv" abs-venv)]
             (if (zero? (:exit create-result))
               (do
                 (log "Installing requirements from" abs-requirements)
