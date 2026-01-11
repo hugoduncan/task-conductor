@@ -37,10 +37,15 @@
    - :reason - string explaining the decision
    - :context - map for state machine transitions
 
-   The schema is open to allow extension by custom flow models."
+   The schema is open to allow extension by custom flow models.
+
+   Note: When :prompt is present, it must be a non-nil string. The :string
+   schema rejects nil - use absence of key rather than nil when prompt
+   is not needed. Malli's {:optional true} only controls key presence,
+   not nil acceptance."
   [:map {:closed false}
    [:action Action]
-   [:prompt {:optional true} :string]
+   [:prompt {:optional true} [:string {:min 1}]]
    [:reason {:optional true} :string]
    [:context {:optional true} :map]])
 
