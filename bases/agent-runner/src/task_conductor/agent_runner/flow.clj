@@ -8,6 +8,7 @@
    The FlowDecision schema defines the return contract for all flow model
    methods, specifying the next action and any associated data."
   (:require
+   [clojure.string :as str]
    [malli.core :as m]
    [malli.error :as me]))
 
@@ -136,6 +137,34 @@
 
      Returns FlowDecision with :action :continue-sdk and :prompt."))
 
+;;; Prompt Generation Helpers
+
+(defn build-resume-prompt
+  "Generate SDK prompt from CLI status and optional shared-context.
+
+   Arguments:
+   - cli-status: HookStatus map with :status and optional :reason/:question
+   - shared-context: Optional vector of context strings from previous tasks
+
+   Returns a string prompt instructing the SDK to continue the task,
+   incorporating CLI status information and any relevant context."
+  ([cli-status]
+   (build-resume-prompt cli-status nil))
+  ([cli-status shared-context]
+   (let [status (:status cli-status)
+         reason (or (:reason cli-status) (:question cli-status))
+         status-msg (if reason
+                      (format "CLI returned with status %s: %s"
+                              (name status) reason)
+                      (format "CLI returned with status %s"
+                              (name status)))
+         context-msg (when (seq shared-context)
+                       (str "\n\nContext from previous tasks:\n"
+                            (str/join "\n" shared-context)))]
+     (str status-msg
+          (or context-msg "")
+          "\n\nContinue the task."))))
+
 ;;; DefaultFlowModel Implementation
 
 (defn- query-next-task
@@ -156,16 +185,9 @@
       {:action :continue-sdk
        :prompt (format "/mcp-tasks:execute-story-child %d" parent-id)}))
 
-  (on-cli-return [_this cli-status _console-state]
-    ;; Simple resume prompt. Task #121 will add build-resume-prompt helper.
-    (let [status (:status cli-status)
-          reason (or (:reason cli-status) (:question cli-status))]
-      {:action :continue-sdk
-       :prompt (if reason
-                 (format "CLI returned with status %s: %s. Continue the task."
-                         (name status) reason)
-                 (format "CLI returned with status %s. Continue the task."
-                         (name status)))}))
+  (on-cli-return [_this cli-status console-state]
+    {:action :continue-sdk
+     :prompt (build-resume-prompt cli-status (:shared-context console-state))})
 
   (on-sdk-complete [_this _sdk-result _console-state]
     ;; Simple strategy: SDK completion means task is done.

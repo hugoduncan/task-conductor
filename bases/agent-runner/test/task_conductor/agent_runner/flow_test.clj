@@ -169,6 +169,56 @@
           (is (flow/valid-decision? {:action action})
               (str action " should be valid")))))))
 
+;;; Prompt Generation Helper Tests
+
+(deftest build-resume-prompt-test
+  (testing "build-resume-prompt"
+    (testing "with status only"
+      (let [result (flow/build-resume-prompt {:status :completed})]
+        (is (string? result))
+        (is (re-find #"CLI returned with status completed" result))
+        (is (re-find #"Continue the task\." result))))
+
+    (testing "with status and reason"
+      (let [result (flow/build-resume-prompt
+                    {:status :completed :reason "User approved"})]
+        (is (re-find #"CLI returned with status completed: User approved" result))
+        (is (re-find #"Continue the task\." result))))
+
+    (testing "with status and question (uses question as reason)"
+      (let [result (flow/build-resume-prompt
+                    {:status :needs-input :question "What next?"})]
+        (is (re-find #"CLI returned with status needs-input: What next\?" result))))
+
+    (testing "with shared-context (single item)"
+      (let [result (flow/build-resume-prompt
+                    {:status :completed}
+                    ["Previous task added feature X"])]
+        (is (re-find #"Context from previous tasks:" result))
+        (is (re-find #"Previous task added feature X" result))))
+
+    (testing "with shared-context (multiple items)"
+      (let [result (flow/build-resume-prompt
+                    {:status :completed}
+                    ["Item 1" "Item 2" "Item 3"])]
+        (is (re-find #"Context from previous tasks:" result))
+        (is (re-find #"Item 1" result))
+        (is (re-find #"Item 2" result))
+        (is (re-find #"Item 3" result))))
+
+    (testing "with empty shared-context (no context section)"
+      (let [result (flow/build-resume-prompt {:status :completed} [])]
+        (is (not (re-find #"Context from previous tasks:" result)))))
+
+    (testing "with nil shared-context (no context section)"
+      (let [result (flow/build-resume-prompt {:status :completed} nil)]
+        (is (not (re-find #"Context from previous tasks:" result)))))
+
+    (testing "single-arity version (no shared-context)"
+      (let [result (flow/build-resume-prompt {:status :completed})]
+        (is (re-find #"CLI returned with status completed" result))
+        (is (not (re-find #"Context from previous tasks:" result)))))))
+
 ;;; DefaultFlowModel Tests
 
 (defn mock-run-mcp-tasks
@@ -228,6 +278,15 @@
               result (flow/on-cli-return fm cli-status {})]
           (is (= :continue-sdk (:action result)))
           (is (re-find #"What next\?" (:prompt result)))))
+
+      (testing "includes shared-context from console-state"
+        (let [cli-status {:status :completed}
+              console-state {:shared-context ["Context item 1" "Context item 2"]}
+              result (flow/on-cli-return fm cli-status console-state)]
+          (is (= :continue-sdk (:action result)))
+          (is (re-find #"Context from previous tasks:" (:prompt result)))
+          (is (re-find #"Context item 1" (:prompt result)))
+          (is (re-find #"Context item 2" (:prompt result)))))
 
       (testing "returns valid FlowDecision"
         (let [result (flow/on-cli-return fm {:status :completed} {})]
