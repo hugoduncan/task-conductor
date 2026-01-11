@@ -43,6 +43,6 @@ jobs:
             ${{ runner.os }}-clojure-
 
       - name: Run tests
-        run: clojure -M:test
+        run: clojure -M:test :unit
         env:
           SKIP_INTEGRATION_TESTS: "1"
