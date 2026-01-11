@@ -12,6 +12,64 @@ bb kondo-config
 clj -M:dev:nrepl
 ```
 
+## Running
+
+### Python Environment
+
+```bash
+# Create virtual environment
+python -m venv .venv
+
+# Install Claude Agent SDK
+.venv/bin/pip install -r components/claude-agent-sdk/requirements.txt
+```
+
+### Story Execution
+
+From the REPL:
+
+```clojure
+;; Require the SDK and REPL namespaces
+(require '[task-conductor.claude-agent-sdk.interface :as sdk])
+(require '[task-conductor.agent-runner.repl :as repl])
+
+;; Initialize the Python SDK (required once per JVM session)
+(sdk/initialize! {:venv-path ".venv"})
+
+;; Execute a story
+(repl/run-story 123)
+```
+
+### Control Functions
+
+```clojure
+(repl/status)    ;; Check current state
+(repl/pause)     ;; Pause after current task completes
+(repl/continue)  ;; Resume paused execution
+(repl/abort)     ;; Cancel and return to idle
+```
+
+## Architecture
+
+```mermaid
+sequenceDiagram
+    participant User as User/REPL
+    participant Orch as Orchestrator
+    participant SDK as Claude Agent SDK
+    participant MCP as mcp-tasks CLI
+
+    User->>Orch: run-story(id)
+    loop Until story complete or blocked
+        Orch->>MCP: Get next task
+        MCP-->>Orch: Task details
+        Orch->>SDK: Create session
+        SDK->>MCP: Execute task
+        MCP-->>SDK: Task result
+        SDK-->>Orch: Session complete
+    end
+    Orch-->>User: Story result
+```
+
 ## Development
 
 ```bash
