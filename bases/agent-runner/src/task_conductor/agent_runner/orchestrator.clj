@@ -226,6 +226,9 @@
                    :worktree-path (:worktree-path task)}
         result (execute-task task-info opts)]
     (console/record-session! (:session-id result) (:id task))
+    ;; TODO: Implement handoff detection in execute-task once SDK supports
+    ;; detecting when agent requests CLI handoff (Story #54).
+    ;; Currently :handoff-requested? is always false.
     (when (:handoff-requested? result)
       (console/hand-to-cli))
     result))
