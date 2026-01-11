@@ -1,5 +1,6 @@
 (ns task-conductor.agent-runner.flow-test
-  ;; Tests for FlowDecision schema validation and FlowModel protocol.
+  ;; Tests for FlowDecision schema validation, FlowModel protocol,
+  ;; and DefaultFlowModel implementation.
   ;;
   ;; Contracts tested:
   ;; - FlowDecision schema validates required :action field
@@ -9,6 +10,10 @@
   ;; - validate-decision! throws on invalid, returns unchanged on valid
   ;; - validate-continue-sdk-prompt! enforces :prompt for :continue-sdk
   ;; - validate-decision-complete! combines schema and semantic validation
+  ;; - DefaultFlowModel.initial-prompt generates execute-story-child prompt
+  ;; - DefaultFlowModel.on-cli-return generates resume prompt from CLI status
+  ;; - DefaultFlowModel.on-sdk-complete returns :task-done
+  ;; - DefaultFlowModel.on-task-complete queries mcp-tasks and decides next action
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.flow :as flow]))
@@ -163,3 +168,120 @@
         (doseq [action expected]
           (is (flow/valid-decision? {:action action})
               (str action " should be valid")))))))
+
+;;; DefaultFlowModel Tests
+
+(defn mock-run-mcp-tasks
+  "Create a mock run-mcp-tasks-fn that returns the given response."
+  [response]
+  (fn [& _args] response))
+
+(defn mock-run-mcp-tasks-with-capture
+  "Create a mock that captures args and returns response."
+  [response captured-atom]
+  (fn [& args]
+    (reset! captured-atom (vec args))
+    response))
+
+(deftest default-flow-model-test
+  (testing "default-flow-model"
+    (testing "creates a DefaultFlowModel instance"
+      (let [fm (flow/default-flow-model (mock-run-mcp-tasks {}))]
+        (is (some? fm))
+        (is (satisfies? flow/FlowModel fm))))))
+
+(deftest initial-prompt-test
+  (testing "initial-prompt"
+    (testing "generates execute-story-child prompt with parent-id"
+      (let [fm (flow/default-flow-model (mock-run-mcp-tasks {}))
+            task-info {:id 120 :parent-id 91}
+            console-state {:story-id 91}
+            result (flow/initial-prompt fm task-info console-state)]
+        (is (= :continue-sdk (:action result)))
+        (is (= "/mcp-tasks:execute-story-child 91" (:prompt result)))))
+
+    (testing "returns valid FlowDecision"
+      (let [fm (flow/default-flow-model (mock-run-mcp-tasks {}))
+            result (flow/initial-prompt fm {:parent-id 57} {})]
+        (is (flow/valid-decision? result))
+        (is (nil? (flow/explain-decision result)))))))
+
+(deftest on-cli-return-test
+  (testing "on-cli-return"
+    (let [fm (flow/default-flow-model (mock-run-mcp-tasks {}))]
+
+      (testing "generates resume prompt with status"
+        (let [cli-status {:status :completed :timestamp "2025-01-01T00:00:00Z"}
+              result (flow/on-cli-return fm cli-status {})]
+          (is (= :continue-sdk (:action result)))
+          (is (re-find #"completed" (:prompt result)))
+          (is (re-find #"Continue the task" (:prompt result)))))
+
+      (testing "includes reason in prompt when present"
+        (let [cli-status {:status :completed :reason "User approved"}
+              result (flow/on-cli-return fm cli-status {})]
+          (is (= :continue-sdk (:action result)))
+          (is (re-find #"User approved" (:prompt result)))))
+
+      (testing "includes question in prompt when present"
+        (let [cli-status {:status :needs-input :question "What next?"}
+              result (flow/on-cli-return fm cli-status {})]
+          (is (= :continue-sdk (:action result)))
+          (is (re-find #"What next\?" (:prompt result)))))
+
+      (testing "returns valid FlowDecision"
+        (let [result (flow/on-cli-return fm {:status :completed} {})]
+          (is (flow/valid-decision? result)))))))
+
+(deftest on-sdk-complete-test
+  (testing "on-sdk-complete"
+    (let [fm (flow/default-flow-model (mock-run-mcp-tasks {}))]
+
+      (testing "returns :task-done action"
+        (let [sdk-result {:messages [] :result {}}
+              result (flow/on-sdk-complete fm sdk-result {})]
+          (is (= :task-done (:action result)))))
+
+      (testing "returns valid FlowDecision"
+        (let [result (flow/on-sdk-complete fm {} {})]
+          (is (flow/valid-decision? result)))))))
+
+(deftest on-task-complete-test
+  (testing "on-task-complete"
+    (testing "when next task is available"
+      (let [captured (atom nil)
+            mock-fn (mock-run-mcp-tasks-with-capture
+                     {:tasks [{:id 121 :title "Next task"}]}
+                     captured)
+            fm (flow/default-flow-model mock-fn)
+            console-state {:story-id 91}
+            result (flow/on-task-complete fm console-state)]
+
+        (testing "queries mcp-tasks with correct arguments"
+          (is (= ["list" "--parent-id" "91" "--blocked" "false" "--limit" "1"]
+                 @captured)))
+
+        (testing "returns :continue-sdk with prompt"
+          (is (= :continue-sdk (:action result)))
+          (is (= "/mcp-tasks:execute-story-child 91" (:prompt result))))))
+
+    (testing "when no more tasks available"
+      (let [fm (flow/default-flow-model
+                (mock-run-mcp-tasks {:tasks []}))
+            result (flow/on-task-complete fm {:story-id 91})]
+
+        (testing "returns :story-done"
+          (is (= :story-done (:action result))))
+
+        (testing "includes reason"
+          (is (some? (:reason result))))))
+
+    (testing "returns valid FlowDecision in both cases"
+      (let [fm-with-tasks (flow/default-flow-model
+                           (mock-run-mcp-tasks {:tasks [{:id 1}]}))
+            fm-no-tasks (flow/default-flow-model
+                         (mock-run-mcp-tasks {:tasks []}))]
+        (is (flow/valid-decision?
+             (flow/on-task-complete fm-with-tasks {:story-id 1})))
+        (is (flow/valid-decision?
+             (flow/on-task-complete fm-no-tasks {:story-id 1})))))))

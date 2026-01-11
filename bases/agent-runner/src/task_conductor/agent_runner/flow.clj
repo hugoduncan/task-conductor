@@ -135,3 +135,56 @@
      - console-state: Full console state map
 
      Returns FlowDecision with :action :continue-sdk and :prompt."))
+
+;;; DefaultFlowModel Implementation
+
+(defn- query-next-task
+  "Query mcp-tasks for next unblocked child of story.
+   Returns the first unblocked task or nil if none available."
+  [run-mcp-tasks-fn story-id]
+  (let [{:keys [tasks]} (run-mcp-tasks-fn "list"
+                                          "--parent-id" (str story-id)
+                                          "--blocked" "false"
+                                          "--limit" "1")]
+    (first tasks)))
+
+(defrecord DefaultFlowModel [run-mcp-tasks-fn]
+  FlowModel
+
+  (initial-prompt [_this task-info _console-state]
+    (let [parent-id (:parent-id task-info)]
+      {:action :continue-sdk
+       :prompt (format "/mcp-tasks:execute-story-child %d" parent-id)}))
+
+  (on-cli-return [_this cli-status _console-state]
+    ;; Simple resume prompt. Task #121 will add build-resume-prompt helper.
+    (let [status (:status cli-status)
+          reason (or (:reason cli-status) (:question cli-status))]
+      {:action :continue-sdk
+       :prompt (if reason
+                 (format "CLI returned with status %s: %s. Continue the task."
+                         (name status) reason)
+                 (format "CLI returned with status %s. Continue the task."
+                         (name status)))}))
+
+  (on-sdk-complete [_this _sdk-result _console-state]
+    ;; Simple strategy: SDK completion means task is done.
+    ;; No "needs input" detection in this implementation.
+    {:action :task-done})
+
+  (on-task-complete [_this console-state]
+    (let [story-id (:story-id console-state)
+          next-task (query-next-task run-mcp-tasks-fn story-id)]
+      (if next-task
+        {:action :continue-sdk
+         :prompt (format "/mcp-tasks:execute-story-child %d" story-id)}
+        {:action :story-done
+         :reason "All tasks complete"}))))
+
+(defn default-flow-model
+  "Create a DefaultFlowModel with the given mcp-tasks query function.
+
+   run-mcp-tasks-fn should have the signature of orchestrator/run-mcp-tasks:
+   (run-mcp-tasks-fn & args) -> parsed EDN result from mcp-tasks CLI."
+  [run-mcp-tasks-fn]
+  (->DefaultFlowModel run-mcp-tasks-fn))
