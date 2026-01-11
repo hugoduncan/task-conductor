@@ -49,6 +49,27 @@ From the REPL:
 (repl/abort)     ;; Cancel and return to idle
 ```
 
+## Architecture
+
+```mermaid
+sequenceDiagram
+    participant User as User/REPL
+    participant Orch as Orchestrator
+    participant SDK as Claude Agent SDK
+    participant MCP as mcp-tasks CLI
+
+    User->>Orch: run-story(id)
+    loop Until story complete or blocked
+        Orch->>MCP: Get next task
+        MCP-->>Orch: Task details
+        Orch->>SDK: Create session
+        SDK->>MCP: Execute task
+        MCP-->>SDK: Task result
+        SDK-->>Orch: Session complete
+    end
+    Orch-->>User: Story result
+```
+
 ## Development
 
 ```bash
