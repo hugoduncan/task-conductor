@@ -172,8 +172,9 @@
               "should set :cwd from worktree-path")
           (is (= "bypassPermissions" (:permission-mode result))
               "should default to bypassPermissions")
-          (is (= ["project"] (:setting-sources result))
-              "should enable project auto-discovery"))))
+          (is (= {"mcp-tasks" {:command "mcp-tasks-server"}}
+                 (:mcp-servers result))
+              "should configure mcp-tasks server"))))
 
     (testing "with explicit :mcp-servers option"
       (testing "uses explicit config instead of auto-discovery"
@@ -228,8 +229,9 @@
               "should fall back to current working directory")
           (is (= "bypassPermissions" (:permission-mode result))
               "should still set default permission mode")
-          (is (= ["project"] (:setting-sources result))
-              "should still enable auto-discovery"))))))
+          (is (= {"mcp-tasks" {:command "mcp-tasks-server"}}
+                 (:mcp-servers result))
+              "should configure mcp-tasks server"))))))
 
 (deftest build-task-prompt-test
   ;; Verifies prompt construction for task execution.
@@ -240,7 +242,7 @@
                        :parent-id 57
                        :worktree-path "/path"}
             result (#'orchestrator/build-task-prompt task-info)]
-        (is (= "/mcp-tasks:execute-story-child 57" result)
+        (is (= "/mcp-tasks:execute-story-child (MCP) 57" result)
             "should format prompt with parent story ID")))))
 
 (deftest execute-task-test
@@ -263,7 +265,7 @@
                            :worktree-path "/path/to/worktree"}]
             (orchestrator/execute-task task-info)
             ;; Verify correct prompt was passed
-            (is (= "/mcp-tasks:execute-story-child 57" @captured-prompt)
+            (is (= "/mcp-tasks:execute-story-child (MCP) 57" @captured-prompt)
                 "should pass correct prompt")
             ;; Verify config has expected values
             (is (= "/path/to/worktree" (:cwd @captured-config))
@@ -315,8 +317,9 @@
                            :parent-id 57
                            :worktree-path "/path/to/worktree"}]
             (orchestrator/execute-task task-info)
-            (is (= ["project"] (:setting-sources @captured-config))
-                "should use auto-discovery by default")))))))
+            (is (= {"mcp-tasks" {:command "mcp-tasks-server"}}
+                   (:mcp-servers @captured-config))
+                "should configure mcp-tasks server by default")))))))
 
 (defn- with-clean-console-state
   "Helper to run body with clean console state and no handoff file I/O."
