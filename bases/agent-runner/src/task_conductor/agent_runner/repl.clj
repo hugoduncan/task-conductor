@@ -5,9 +5,8 @@
    from the REPL. Each function prints human-readable output and returns
    data for programmatic use."
   (:require
-   [babashka.process :as p]
-   [clojure.edn :as edn]
-   [task-conductor.agent-runner.console :as console]))
+   [task-conductor.agent-runner.console :as console]
+   [task-conductor.agent-runner.orchestrator :as orchestrator]))
 
 ;;; Control Functions
 
@@ -157,19 +156,6 @@
                        :current-state (console/current-state)})))
     story-id))
 
-(defn- run-mcp-tasks
-  "Run mcp-tasks CLI command and return parsed EDN result.
-   Throws on non-zero exit."
-  [& args]
-  (let [result (apply p/sh "mcp-tasks" args)]
-    (when (not= 0 (:exit result))
-      (throw (ex-info (str "mcp-tasks failed: " (:err result))
-                      {:type :cli-error
-                       :args args
-                       :exit-code (:exit result)
-                       :stderr (:err result)})))
-    (edn/read-string (:out result))))
-
 (defn add-context
   "Append text to the current story's shared-context.
 
@@ -180,10 +166,9 @@
    Throws if no active story or CLI call fails."
   [text]
   (let [story-id (validate-story-id)
-        result (run-mcp-tasks "update"
-                              "--task-id" (str story-id)
-                              "--shared-context" text
-                              "--format" "edn")]
+        result (orchestrator/run-mcp-tasks "update"
+                                           "--task-id" (str story-id)
+                                           "--shared-context" text)]
     (println (str "Added context to story " story-id))
     result))
 
@@ -196,9 +181,8 @@
    Throws if no active story or CLI call fails."
   []
   (let [story-id (validate-story-id)
-        result (run-mcp-tasks "show"
-                              "--task-id" (str story-id)
-                              "--format" "edn")
+        result (orchestrator/run-mcp-tasks "show"
+                                           "--task-id" (str story-id))
         shared-context (get-in result [:task :shared-context])]
     (println "Shared Context:")
     (if (seq shared-context)
@@ -231,3 +215,61 @@
                       " (task " task-id ", " timestamp ")")))
       (println "  (none)"))
     (vec sessions)))
+
+;;; Story Execution
+
+(defn run-story
+  "Execute all tasks in a story with automated orchestration.
+
+   Creates fresh Claude SDK sessions for each task, running them
+   sequentially until the story is complete, paused, or blocked.
+
+   Validates that the console is in :idle state before starting.
+   Prints progress information and final outcome.
+
+   Arguments:
+   - story-id: The ID of the story to execute
+   - opts: Optional map of session configuration overrides
+
+   Returns the result map from orchestrator/execute-story with:
+   - :outcome - One of :complete, :paused, :blocked, :no-tasks, :error
+   - :progress - {:completed N :total M} (when applicable)
+   - :state - Final console state map
+
+   Throws if not in :idle state."
+  ([story-id]
+   (run-story story-id {}))
+  ([story-id opts]
+   (let [current (console/current-state)]
+     (when (not= :idle current)
+       (throw (ex-info (str "Cannot run story: console is " current ", expected :idle")
+                       {:type :invalid-state
+                        :current-state current
+                        :required-state :idle})))
+     (println (str "Running story " story-id "..."))
+     (let [result (orchestrator/execute-story story-id opts)]
+       (case (:outcome result)
+         :complete
+         (println (str "Story complete! ("
+                       (get-in result [:progress :completed])
+                       " tasks)"))
+
+         :paused
+         (println "Story paused - use (continue) then (run-story ...) to resume")
+
+         :blocked
+         (do
+           (println "Story blocked - all remaining tasks have dependencies:")
+           (doseq [{:keys [id title blocking-task-ids]}
+                   (:blocked-tasks result)]
+             (println (str "  Task " id ": " title))
+             (println (str "    Blocked by: " blocking-task-ids))))
+
+         :no-tasks
+         (println "Story has no child tasks - create tasks or refine the story")
+
+         :error
+         (do
+           (println "Story execution failed:")
+           (println (str "  " (get-in result [:error :message])))))
+       result))))

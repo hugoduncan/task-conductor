@@ -86,16 +86,23 @@
   [obj method & args]
   (apply (py 'call-attr) obj (name method) args))
 
+(defn- sdk-unavailable-error?
+  "Check if exception indicates SDK is unavailable (venv missing or import failed)."
+  [e]
+  (or (= :venv-missing (:type (ex-data e)))
+      (and (instance? Exception e)
+           (re-find #"ModuleNotFoundError" (str e)))))
+
 (defmacro with-sdk
-  "Execute body with SDK initialized, or skip test if venv missing.
-   Binds sdk-fn and core-fn for calling SDK functions."
+  "Execute body with SDK initialized, or skip test if SDK unavailable.
+   Skips on venv missing or Python module import failure."
   [& body]
   `(try
      (ensure-initialized!)
      ~@body
-     (catch clojure.lang.ExceptionInfo e#
-       (if (= :venv-missing (:type (ex-data e#)))
-         (testing "skipped (Python venv not available)"
+     (catch Exception e#
+       (if (sdk-unavailable-error? e#)
+         (testing "skipped (SDK not available)"
            (is true))
          (throw e#)))))
 

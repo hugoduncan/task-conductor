@@ -10,9 +10,11 @@
   ;; - add-context validates story and calls mcp-tasks CLI with correct args
   ;; - view-context retrieves and formats shared-context from mcp-tasks CLI
   ;; - list-sessions filters sessions by current story-id
+  ;; - run-story validates :idle state, calls orchestrator, prints output per outcome
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.console :as console]
+   [task-conductor.agent-runner.orchestrator :as orchestrator]
    [task-conductor.agent-runner.repl :as repl]))
 
 ;;; start-story Tests
@@ -381,21 +383,20 @@
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
         (let [captured-args (atom nil)]
-          (with-redefs [repl/run-mcp-tasks
+          (with-redefs [orchestrator/run-mcp-tasks
                         (fn [& args]
                           (reset! captured-args (vec args))
                           {:success true})]
             (repl/add-context "new context text")
             (is (= ["update"
                     "--task-id" "53"
-                    "--shared-context" "new context text"
-                    "--format" "edn"]
+                    "--shared-context" "new context text"]
                    @captured-args)))))
 
       (testing "returns CLI result"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks
+        (with-redefs [orchestrator/run-mcp-tasks
                       (fn [& _args]
                         {:task {:id 53 :shared-context ["ctx"]}})]
           (let [result (repl/add-context "new context")]
@@ -404,7 +405,7 @@
       (testing "prints confirmation with story-id"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks (fn [& _args] {})]
+        (with-redefs [orchestrator/run-mcp-tasks (fn [& _args] {})]
           (let [output (with-out-str (repl/add-context "ctx"))]
             (is (re-find #"Added context to story 53" output))))))))
 
@@ -426,18 +427,18 @@
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
         (let [captured-args (atom nil)]
-          (with-redefs [repl/run-mcp-tasks
+          (with-redefs [orchestrator/run-mcp-tasks
                         (fn [& args]
                           (reset! captured-args (vec args))
                           {:task {:shared-context []}})]
             (repl/view-context)
-            (is (= ["show" "--task-id" "53" "--format" "edn"]
+            (is (= ["show" "--task-id" "53"]
                    @captured-args)))))
 
       (testing "returns shared-context from CLI result"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks
+        (with-redefs [orchestrator/run-mcp-tasks
                       (fn [& _args]
                         {:task {:shared-context ["ctx1" "ctx2"]}})]
           (let [result (repl/view-context)]
@@ -446,7 +447,7 @@
       (testing "returns nil when shared-context absent"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks
+        (with-redefs [orchestrator/run-mcp-tasks
                       (fn [& _args] {:task {}})]
           (let [result (repl/view-context)]
             (is (nil? result)))))
@@ -454,7 +455,7 @@
       (testing "prints numbered context entries"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks
+        (with-redefs [orchestrator/run-mcp-tasks
                       (fn [& _args]
                         {:task {:shared-context ["first" "second"]}})]
           (let [output (with-out-str (repl/view-context))]
@@ -465,7 +466,7 @@
       (testing "prints (none) when context empty"
         (console/reset-state!)
         (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [repl/run-mcp-tasks
+        (with-redefs [orchestrator/run-mcp-tasks
                       (fn [& _args] {:task {:shared-context []}})]
           (let [output (with-out-str (repl/view-context))]
             (is (re-find #"\(none\)" output))))))))
@@ -525,3 +526,177 @@
           (is (re-find #"Sessions for story 53:" output))
           (is (re-find #"sess-abc" output))
           (is (re-find #"task 75" output)))))))
+
+;;; run-story Tests
+
+(deftest run-story-test
+  ;; Verifies run-story orchestrates story execution correctly.
+  ;; Tests all outcome paths and human-readable output.
+  (testing "run-story"
+    (testing "from non-idle state"
+      (testing "throws with informative error"
+        (console/reset-state!)
+        (console/transition! :selecting-task {:story-id 42})
+        (let [ex (try
+                   (repl/run-story 53)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? ex))
+          (is (= :invalid-state (:type (ex-data ex))))
+          (is (= :selecting-task (:current-state (ex-data ex))))
+          (is (= :idle (:required-state (ex-data ex)))))))
+
+    (testing "from :idle state"
+      (testing "with :complete outcome"
+        (testing "returns result from orchestrator"
+          (console/reset-state!)
+          (let [mock-result {:outcome :complete
+                             :progress {:completed 5 :total 5}
+                             :state {:state :story-complete}}]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id _opts] mock-result)]
+              (let [result (repl/run-story 53)]
+                (is (= :complete (:outcome result)))
+                (is (= {:completed 5 :total 5} (:progress result)))))))
+
+        (testing "prints completion message with task count"
+          (console/reset-state!)
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id _opts]
+                          {:outcome :complete
+                           :progress {:completed 5 :total 5}
+                           :state {:state :story-complete}})]
+            (let [output (with-out-str (repl/run-story 53))]
+              (is (re-find #"Story complete!" output))
+              (is (re-find #"5 tasks" output))))))
+
+      (testing "with :paused outcome"
+        (testing "returns result from orchestrator"
+          (console/reset-state!)
+          (let [mock-result {:outcome :paused
+                             :state {:state :selecting-task}}]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id _opts] mock-result)]
+              (let [result (repl/run-story 53)]
+                (is (= :paused (:outcome result)))))))
+
+        (testing "prints pause message"
+          (console/reset-state!)
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id _opts]
+                          {:outcome :paused
+                           :state {:state :selecting-task}})]
+            (let [output (with-out-str (repl/run-story 53))]
+              (is (re-find #"Story paused" output))
+              (is (re-find #"continue" output))))))
+
+      (testing "with :blocked outcome"
+        (testing "returns result from orchestrator"
+          (console/reset-state!)
+          (let [blocked-tasks [{:id 109
+                                :title "Blocked task"
+                                :blocking-task-ids [108]}]
+                mock-result {:outcome :blocked
+                             :blocked-tasks blocked-tasks
+                             :progress {:completed 1 :total 2}
+                             :state {:state :selecting-task}}]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id _opts] mock-result)]
+              (let [result (repl/run-story 53)]
+                (is (= :blocked (:outcome result)))
+                (is (= blocked-tasks (:blocked-tasks result)))))))
+
+        (testing "prints blocked tasks info"
+          (console/reset-state!)
+          (let [blocked-tasks [{:id 109
+                                :title "Blocked task"
+                                :blocking-task-ids [108]}]]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id _opts]
+                            {:outcome :blocked
+                             :blocked-tasks blocked-tasks
+                             :state {:state :selecting-task}})]
+              (let [output (with-out-str (repl/run-story 53))]
+                (is (re-find #"Story blocked" output))
+                (is (re-find #"Task 109" output))
+                (is (re-find #"Blocked task" output))
+                (is (re-find #"Blocked by:" output)))))))
+
+      (testing "with :no-tasks outcome"
+        (testing "returns result from orchestrator"
+          (console/reset-state!)
+          (let [mock-result {:outcome :no-tasks
+                             :state {:state :selecting-task}}]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id _opts] mock-result)]
+              (let [result (repl/run-story 53)]
+                (is (= :no-tasks (:outcome result)))))))
+
+        (testing "prints no tasks message"
+          (console/reset-state!)
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id _opts]
+                          {:outcome :no-tasks
+                           :state {:state :selecting-task}})]
+            (let [output (with-out-str (repl/run-story 53))]
+              (is (re-find #"no child tasks" output))))))
+
+      (testing "with :error outcome"
+        (testing "returns result from orchestrator"
+          (console/reset-state!)
+          (let [mock-result {:outcome :error
+                             :error {:type :exception
+                                     :message "Test error"}
+                             :state {:state :error-recovery}}]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id _opts] mock-result)]
+              (let [result (repl/run-story 53)]
+                (is (= :error (:outcome result)))
+                (is (= "Test error" (-> result :error :message)))))))
+
+        (testing "prints error message"
+          (console/reset-state!)
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id _opts]
+                          {:outcome :error
+                           :error {:type :exception
+                                   :message "Test error"}
+                           :state {:state :error-recovery}})]
+            (let [output (with-out-str (repl/run-story 53))]
+              (is (re-find #"execution failed" output))
+              (is (re-find #"Test error" output))))))
+
+      (testing "prints 'Running story' message"
+        (console/reset-state!)
+        (with-redefs [orchestrator/execute-story
+                      (fn [_story-id _opts]
+                        {:outcome :complete
+                         :progress {:completed 1 :total 1}
+                         :state {:state :story-complete}})]
+          (let [output (with-out-str (repl/run-story 53))]
+            (is (re-find #"Running story 53" output)))))
+
+      (testing "passes opts to orchestrator"
+        (console/reset-state!)
+        (let [captured-opts (atom nil)]
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id opts]
+                          (reset! captured-opts opts)
+                          {:outcome :complete
+                           :progress {:completed 1 :total 1}
+                           :state {:state :story-complete}})]
+            (repl/run-story 53 {:max-turns 100 :model "claude-sonnet-4"})
+            (is (= 100 (:max-turns @captured-opts)))
+            (is (= "claude-sonnet-4" (:model @captured-opts))))))
+
+      (testing "passes story-id to orchestrator"
+        (console/reset-state!)
+        (let [captured-story-id (atom nil)]
+          (with-redefs [orchestrator/execute-story
+                        (fn [story-id _opts]
+                          (reset! captured-story-id story-id)
+                          {:outcome :complete
+                           :progress {:completed 1 :total 1}
+                           :state {:state :story-complete}})]
+            (repl/run-story 57)
+            (is (= 57 @captured-story-id))))))))

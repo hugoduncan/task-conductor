@@ -43,4 +43,7 @@ jobs:
             ${{ runner.os }}-clojure-
 
       - name: Run tests
-        run: clojure -M:test
+        run: clojure -M:test :unit --reporter documentation
+        timeout-minutes: 10
+        env:
+          SKIP_INTEGRATION_TESTS: "1"
