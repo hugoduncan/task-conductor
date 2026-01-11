@@ -34,12 +34,36 @@
   (when path
     (.getAbsolutePath (io/file path))))
 
+(defn- add-venv-to-path!
+  "Add venv's site-packages to Python's sys.path if not already present."
+  [abs-venv]
+  (when abs-venv
+    (let [sys-module (py/import-module "sys")
+          sys-path #_{:clj-kondo/ignore [:unresolved-symbol]}
+          (py/py.- sys-module path)
+          venv-lib (io/file abs-venv "lib")
+          site-packages (when (.exists venv-lib)
+                          (->> (.listFiles venv-lib)
+                               (filter #(.isDirectory %))
+                               (map #(io/file % "site-packages"))
+                               (filter #(.exists %))
+                               first))
+          site-packages-path (when site-packages (.getAbsolutePath site-packages))
+          current-paths (set (py/as-list sys-path))]
+      (when (and site-packages-path
+                 (not (current-paths site-packages-path)))
+        #_{:clj-kondo/ignore [:unresolved-symbol]}
+        (py/py. sys-path insert 0 site-packages-path)))))
+
 (defn initialize!
   "Initialize Python interpreter and import Claude Agent SDK.
 
    Options:
    - :venv-path - Path to Python venv directory (e.g., \".venv\")
    - :python-executable - Explicit path to Python executable
+
+   If Python is already initialized by libpython-clj, adds the venv's
+   site-packages to sys.path instead of attempting to reinitialize.
 
    Returns true on success, throws on failure."
   ([]
@@ -49,10 +73,19 @@
      (let [abs-venv (abs-path venv-path)
            py-exe (or python-executable
                       (when abs-venv
-                        (str abs-venv "/bin/python")))]
-       (if py-exe
-         (py/initialize! :python-executable py-exe)
-         (py/initialize!))
+                        (str abs-venv "/bin/python")))
+           ;; Check if libpython-clj is already initialized
+           py-already-initialized? (try
+                                     (py/import-module "sys")
+                                     true
+                                     (catch Exception _ false))]
+       (if py-already-initialized?
+         ;; Python already initialized - add venv to path instead
+         (add-venv-to-path! abs-venv)
+         ;; Initialize with specified Python
+         (if py-exe
+           (py/initialize! :python-executable py-exe)
+           (py/initialize!)))
 
        ;; Import required modules
        (require-python 'asyncio)
