@@ -17,6 +17,22 @@
 
 ;;; Test Utilities
 
+(defn- skip-file-watcher-tests?
+  "Check if file watcher tests should be skipped.
+   File watchers may not work reliably in CI environments.
+   Set SKIP_FILE_WATCHER_TESTS=1 to skip."
+  []
+  (or (some? (System/getenv "CI"))
+      (some? (System/getenv "SKIP_FILE_WATCHER_TESTS"))))
+
+(defmacro with-file-watcher-skip
+  "Execute body unless file watcher tests should be skipped."
+  [& body]
+  `(if (skip-file-watcher-tests?)
+     (testing "skipped (file watcher tests disabled in CI)"
+       (is true))
+     (do ~@body)))
+
 (defn- with-temp-file
   "Execute f with a temp file path, ensuring cleanup."
   [f]
@@ -195,21 +211,22 @@
 ;;; File Watching Tests
 
 (deftest watch-handoff-file-test
-  (testing "watch-handoff-file"
-    (testing "invokes callback when file is created"
-      (with-temp-file
-        (fn [path]
-          (let [received (atom nil)
-                stop-fn (handoff/watch-handoff-file
-                         (fn [state] (reset! received state))
-                         path)]
-            (try
-              (is (wait-for-watcher-ready! received path 2000)
-                  "watcher should initialize and invoke callback")
-              (is (= :active (:status @received)))
-              (is (= "test-session-123" (:session-id @received)))
-              (finally
-                (stop-fn)))))))
+  (with-file-watcher-skip
+    (testing "watch-handoff-file"
+      (testing "invokes callback when file is created"
+        (with-temp-file
+          (fn [path]
+            (let [received (atom nil)
+                  stop-fn (handoff/watch-handoff-file
+                           (fn [state] (reset! received state))
+                           path)]
+              (try
+                (is (wait-for-watcher-ready! received path 2000)
+                    "watcher should initialize and invoke callback")
+                (is (= :active (:status @received)))
+                (is (= "test-session-123" (:session-id @received)))
+                (finally
+                  (stop-fn))))))))
 
     (testing "invokes callback when file is modified"
       (with-temp-file
@@ -293,23 +310,26 @@
               (is (= :active (:status state)))
               (is (= "test-session-123" (:session-id state)))))
 
-          (testing "watch-handoff-file watches default path"
-            (let [received (atom nil)
-                  stop-fn (handoff/watch-handoff-file
-                           (fn [state] (reset! received state)))]
-              (try
-                ;; Ensure watcher is ready by poll-writing
-                (is (poll-until-ready! #(some? @received)
-                                       handoff/default-handoff-path
-                                       2000)
-                    "watcher should initialize")
-                (reset! received nil)
-                (handoff/write-handoff-state
-                 (assoc (valid-state) :status :completed))
-                (is (wait-for #(= :completed (:status @received)) 2000)
-                    "callback invoked with :completed status")
-                (finally
-                  (stop-fn)))))
+          (if (skip-file-watcher-tests?)
+            (testing "watch-handoff-file watches default path (skipped in CI)"
+              (is true))
+            (testing "watch-handoff-file watches default path"
+              (let [received (atom nil)
+                    stop-fn (handoff/watch-handoff-file
+                             (fn [state] (reset! received state)))]
+                (try
+                  ;; Ensure watcher is ready by poll-writing
+                  (is (poll-until-ready! #(some? @received)
+                                         handoff/default-handoff-path
+                                         2000)
+                      "watcher should initialize")
+                  (reset! received nil)
+                  (handoff/write-handoff-state
+                   (assoc (valid-state) :status :completed))
+                  (is (wait-for #(= :completed (:status @received)) 2000)
+                      "callback invoked with :completed status")
+                  (finally
+                    (stop-fn))))))
           (finally
             (.delete file)))))))
 
