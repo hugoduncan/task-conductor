@@ -14,6 +14,7 @@
   ;; - DefaultFlowModel.on-cli-return generates resume prompt from CLI status
   ;; - DefaultFlowModel.on-sdk-complete returns :task-done
   ;; - DefaultFlowModel.on-task-complete queries mcp-tasks and decides next action
+  ;; - DefaultFlowModel.on-task-complete handles mcp-tasks errors and malformed responses
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.flow :as flow]))
@@ -372,4 +373,39 @@
                        (:reason result))))
 
         (testing "returns valid FlowDecision"
-          (is (flow/valid-decision? result)))))))
+          (is (flow/valid-decision? result)))))
+
+    (testing "when run-mcp-tasks-fn throws exception"
+      (let [fm (flow/default-flow-model
+                (fn [& _] (throw (ex-info "Network error" {}))))
+            result (try
+                     (flow/on-task-complete fm {:story-id 91})
+                     (catch Exception e
+                       {:caught-exception e}))]
+        (testing "exception propagates to caller"
+          (is (some? (:caught-exception result)))
+          (is (= "Network error"
+                 (.getMessage (:caught-exception result)))))))
+
+    (testing "when run-mcp-tasks-fn returns nil"
+      (let [fm (flow/default-flow-model (mock-run-mcp-tasks nil))
+            result (flow/on-task-complete fm {:story-id 91})]
+
+        (testing "returns :error action"
+          (is (= :error (:action result))))
+
+        (testing "includes format info in reason"
+          (is (re-find #"Unexpected mcp-tasks response format"
+                       (:reason result))))
+
+        (testing "returns valid FlowDecision"
+          (is (flow/valid-decision? result)))))
+
+    (testing "when :tasks is malformed (non-collection)"
+      (let [fm (flow/default-flow-model
+                (mock-run-mcp-tasks {:tasks "not-a-list"}))
+            result (flow/on-task-complete fm {:story-id 91})]
+        ;; (first "not-a-list") returns \n - current behavior returns :continue-sdk
+        ;; This tests current behavior; consider adding validation if undesired
+        (testing "treats first char as truthy task"
+          (is (= :continue-sdk (:action result))))))))
