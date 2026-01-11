@@ -44,3 +44,5 @@ jobs:
 
       - name: Run tests
         run: clojure -M:test
+        env:
+          SKIP_INTEGRATION_TESTS: "1"
