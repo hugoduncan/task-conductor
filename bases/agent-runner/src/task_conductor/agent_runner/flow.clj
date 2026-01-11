@@ -52,7 +52,9 @@
   (m/validate FlowDecision decision))
 
 (defn explain-decision
-  "Returns human-readable explanation of validation errors, or nil if valid."
+  "Returns a humanized error map for validation failures, or nil if valid.
+   The returned map has the same shape as the input with error messages at
+   failing paths (via malli.error/humanize)."
   [decision]
   (when-let [explanation (m/explain FlowDecision decision)]
     (me/humanize explanation)))
