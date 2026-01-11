@@ -7,7 +7,8 @@
                           "components/claude-agent-sdk/src"
                           "components/python-venv/src"]
            :test-paths   ["bases/agent-runner/test"
-                          "components/claude-agent-sdk/test"]}
+                          "components/claude-agent-sdk/test"
+                          "components/python-venv/test"]}
           {:id           :integration
            :source-paths ["test-support"
                           "bases/agent-runner/src"

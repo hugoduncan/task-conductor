@@ -4,6 +4,28 @@
    [babashka.process :as p]
    [clojure.java.io :as io]))
 
+(defn get-env
+  "Get an environment variable value. Wrapper for System/getenv to enable testing."
+  [name]
+  (System/getenv name))
+
+(defn resolve-python-cmd
+  "Resolve the Python command to use for creating venvs.
+
+   Precedence:
+   1. :python-cmd option value if provided
+   2. TASK_CONDUCTOR_PYTHON environment variable if set
+   3. \"python3\" as the default fallback
+
+   Arguments:
+   - opts - options map, may contain :python-cmd key
+
+   Returns the Python command string to use."
+  [opts]
+  (or (get opts :python-cmd)
+      (get-env "TASK_CONDUCTOR_PYTHON")
+      "python3"))
+
 (defn python-path
   "Get path to Python executable in venv."
   [venv-path]
