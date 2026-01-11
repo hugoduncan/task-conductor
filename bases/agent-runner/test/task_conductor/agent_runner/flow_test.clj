@@ -343,4 +343,33 @@
         (is (flow/valid-decision?
              (flow/on-task-complete fm-with-tasks {:story-id 1})))
         (is (flow/valid-decision?
-             (flow/on-task-complete fm-no-tasks {:story-id 1})))))))
+             (flow/on-task-complete fm-no-tasks {:story-id 1})))))
+
+    (testing "when mcp-tasks returns error"
+      (let [fm (flow/default-flow-model
+                (mock-run-mcp-tasks {:error "Connection failed"}))
+            result (flow/on-task-complete fm {:story-id 91})]
+
+        (testing "returns :error action"
+          (is (= :error (:action result))))
+
+        (testing "includes error message in reason"
+          (is (= "Connection failed" (:reason result))))
+
+        (testing "returns valid FlowDecision"
+          (is (flow/valid-decision? result)))))
+
+    (testing "when mcp-tasks returns unexpected format"
+      (let [fm (flow/default-flow-model
+                (mock-run-mcp-tasks {:unexpected "format"}))
+            result (flow/on-task-complete fm {:story-id 91})]
+
+        (testing "returns :error action"
+          (is (= :error (:action result))))
+
+        (testing "includes format info in reason"
+          (is (re-find #"Unexpected mcp-tasks response format"
+                       (:reason result))))
+
+        (testing "returns valid FlowDecision"
+          (is (flow/valid-decision? result)))))))

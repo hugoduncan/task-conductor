@@ -169,13 +169,25 @@
 
 (defn- query-next-task
   "Query mcp-tasks for next unblocked child of story.
-   Returns the first unblocked task or nil if none available."
+   Returns {:ok task} for success (task may be nil if none available),
+   or {:error message} on failure."
   [run-mcp-tasks-fn story-id]
-  (let [{:keys [tasks]} (run-mcp-tasks-fn "list"
-                                          "--parent-id" (str story-id)
-                                          "--blocked" "false"
-                                          "--limit" "1")]
-    (first tasks)))
+  (let [result (run-mcp-tasks-fn "list"
+                                 "--parent-id" (str story-id)
+                                 "--blocked" "false"
+                                 "--limit" "1")]
+    (cond
+      ;; Check for explicit error in response
+      (:error result)
+      {:error (:error result)}
+
+      ;; Valid response with tasks key
+      (contains? result :tasks)
+      {:ok (first (:tasks result))}
+
+      ;; Unexpected response format
+      :else
+      {:error (str "Unexpected mcp-tasks response format: " (pr-str result))})))
 
 (defrecord DefaultFlowModel [run-mcp-tasks-fn]
   FlowModel
@@ -196,10 +208,17 @@
 
   (on-task-complete [_this console-state]
     (let [story-id (:story-id console-state)
-          next-task (query-next-task run-mcp-tasks-fn story-id)]
-      (if next-task
+          result (query-next-task run-mcp-tasks-fn story-id)]
+      (cond
+        (:error result)
+        {:action :error
+         :reason (:error result)}
+
+        (:ok result)
         {:action :continue-sdk
          :prompt (format "/mcp-tasks:execute-story-child %d" story-id)}
+
+        :else
         {:action :story-done
          :reason "All tasks complete"}))))
 
