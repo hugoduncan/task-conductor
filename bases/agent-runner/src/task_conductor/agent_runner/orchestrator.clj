@@ -262,6 +262,48 @@
 
 ;;; Flow Model Story Execution
 
+(defn- derive-flow-decision
+  "Process on-sdk-complete result and return next action for the loop.
+   Handles transition to CLI, story completion, errors, and continuation.
+   Returns {:next-prompt prompt} or {:outcome ...}."
+  [decision]
+  (case (:action decision)
+    :continue-sdk
+    (do
+      (console/transition! :task-complete)
+      (console/transition! :selecting-task)
+      {:next-prompt (:prompt decision)})
+
+    :hand-to-cli
+    (do
+      (console/hand-to-cli)
+      {:outcome :handed-to-cli
+       :reason (:reason decision)
+       :state @console/console-state})
+
+    :story-done
+    (do
+      (console/transition! :story-complete)
+      {:outcome :complete
+       :reason (:reason decision)
+       :state @console/console-state})
+
+    :error
+    (do
+      (console/transition! :error-recovery
+                           {:error {:type :flow-error
+                                    :message (:reason decision)}})
+      {:outcome :error
+       :error {:type :flow-error
+               :message (:reason decision)}
+       :state @console/console-state})
+
+    ;; Default: treat as task-done, ask on-task-complete for next action
+    (do
+      (console/transition! :task-complete)
+      (console/transition! :selecting-task)
+      {:next-prompt nil})))
+
 (defn- run-sdk-with-prompt
   "Run SDK session with the given prompt and config.
    Returns {:session-id string :messages vector :result map}."
@@ -289,46 +331,9 @@
       (console/transition! :running-sdk {:session-id nil})
       (let [sdk-result (run-sdk-with-prompt (:prompt decision) opts)]
         (swap! console/console-state assoc :session-id (:session-id sdk-result))
-        ;; After SDK completes, ask flow model what to do next
         (let [next-decision (flow/on-sdk-complete flow-model sdk-result @console/console-state)]
           (println "[handle-flow-decision] on-sdk-complete returned:" (pr-str next-decision))
-          (case (:action next-decision)
-            :continue-sdk
-            ;; Flow model wants to continue with specific prompt
-            (do
-              (console/transition! :task-complete)
-              (console/transition! :selecting-task)
-              {:next-prompt (:prompt next-decision)})
-
-            :hand-to-cli
-            (do
-              (console/hand-to-cli)
-              {:outcome :handed-to-cli
-               :reason (:reason next-decision)
-               :state @console/console-state})
-
-            :story-done
-            (do
-              (console/transition! :story-complete)
-              {:outcome :complete
-               :reason (:reason next-decision)
-               :state @console/console-state})
-
-            :error
-            (do
-              (console/transition! :error-recovery
-                                   {:error {:type :flow-error
-                                            :message (:reason next-decision)}})
-              {:outcome :error
-               :error {:type :flow-error
-                       :message (:reason next-decision)}
-               :state @console/console-state})
-
-            ;; Default: treat as task-done, ask on-task-complete for next action
-            (do
-              (console/transition! :task-complete)
-              (console/transition! :selecting-task)
-              {:next-prompt nil})))))
+          (derive-flow-decision next-decision))))
 
     :hand-to-cli
     ;; Don't call console/hand-to-cli here - we haven't run SDK yet.
