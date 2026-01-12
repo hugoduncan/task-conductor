@@ -382,16 +382,17 @@
      :reason "Story complete - PR merged"}))
 
 (defn- derive-flow-decision
-  "Query story and children, derive state, return FlowDecision.
+  "Query story and children, derive state, return validated FlowDecision.
    Encapsulates the common pattern used by all StoryFlowModel methods."
   [run-mcp-tasks-fn story-id]
   (let [result (query-story-and-children run-mcp-tasks-fn story-id)]
-    (if (:error result)
-      {:action :error
-       :reason (:error result)}
-      (let [{:keys [story children]} (:ok result)
-            state (derive-story-state story children)]
-        (state->flow-decision state story-id)))))
+    (validate-decision-complete!
+     (if (:error result)
+       {:action :error
+        :reason (:error result)}
+       (let [{:keys [story children]} (:ok result)
+             state (derive-story-state story children)]
+         (state->flow-decision state story-id))))))
 
 (defrecord StoryFlowModel [run-mcp-tasks-fn story-id]
   FlowModel
