@@ -381,49 +381,32 @@
     {:action :story-done
      :reason "Story complete - PR merged"}))
 
+(defn- derive-flow-decision
+  "Query story and children, derive state, return FlowDecision.
+   Encapsulates the common pattern used by all StoryFlowModel methods."
+  [run-mcp-tasks-fn story-id]
+  (let [result (query-story-and-children run-mcp-tasks-fn story-id)]
+    (if (:error result)
+      {:action :error
+       :reason (:error result)}
+      (let [{:keys [story children]} (:ok result)
+            state (derive-story-state story children)]
+        (state->flow-decision state story-id)))))
+
 (defrecord StoryFlowModel [run-mcp-tasks-fn story-id]
   FlowModel
 
   (initial-prompt [_this _task-info _console-state]
-    (let [result (query-story-and-children run-mcp-tasks-fn story-id)]
-      (if (:error result)
-        {:action :error
-         :reason (:error result)}
-        (let [{:keys [story children]} (:ok result)
-              state (derive-story-state story children)]
-          (state->flow-decision state story-id)))))
+    (derive-flow-decision run-mcp-tasks-fn story-id))
 
   (on-cli-return [_this _cli-status _console-state]
-    ;; After CLI returns from manual-review or merge-pr, re-derive state.
-    ;; User may have set :ready-to-merge or :pr-merged? via CLI.
-    (let [result (query-story-and-children run-mcp-tasks-fn story-id)]
-      (if (:error result)
-        {:action :error
-         :reason (:error result)}
-        (let [{:keys [story children]} (:ok result)
-              state (derive-story-state story children)]
-          (state->flow-decision state story-id)))))
+    (derive-flow-decision run-mcp-tasks-fn story-id))
 
   (on-sdk-complete [_this _sdk-result _console-state]
-    (let [result (query-story-and-children run-mcp-tasks-fn story-id)]
-      (if (:error result)
-        {:action :error
-         :reason (:error result)}
-        (let [{:keys [story children]} (:ok result)
-              state (derive-story-state story children)]
-          (state->flow-decision state story-id)))))
+    (derive-flow-decision run-mcp-tasks-fn story-id))
 
   (on-task-complete [_this _console-state]
-    ;; After task completion, re-derive state to determine next action.
-    ;; May transition from :execute-tasks to :code-review if all tasks done,
-    ;; or back to :execute-tasks if CR: tasks were created.
-    (let [result (query-story-and-children run-mcp-tasks-fn story-id)]
-      (if (:error result)
-        {:action :error
-         :reason (:error result)}
-        (let [{:keys [story children]} (:ok result)
-              state (derive-story-state story children)]
-          (state->flow-decision state story-id))))))
+    (derive-flow-decision run-mcp-tasks-fn story-id)))
 
 (defn story-flow-model
   "Create a StoryFlowModel for state-driven story execution.
