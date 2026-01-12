@@ -636,7 +636,11 @@
               (with-redefs [orchestrator/run-sdk-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              {:result {:messages []} :session-id "sess-1"})
+                            console/hand-to-cli
+                            (fn []
+                              (swap! console/console-state assoc :state :running-cli)
+                              {:state @console/console-state})]
                 (let [result (orchestrator/execute-story-with-flow-model fm 42)]
                   (is (= "/mcp-tasks:create-story-pr 42"
                          (first @captured-prompts))
@@ -773,7 +777,11 @@
             (with-redefs [orchestrator/run-sdk-session
                           (fn [_config prompt]
                             (swap! captured-prompts conj prompt)
-                            {:result {:messages []} :session-id "sess-1"})]
+                            {:result {:messages []} :session-id "sess-1"})
+                          console/hand-to-cli
+                          (fn []
+                            (swap! console/console-state assoc :state :running-cli)
+                            {:state @console/console-state})]
               (let [result (orchestrator/execute-story-with-flow-model fm 42)]
                 ;; Should have called:
                 ;; 1. review-story-implementation (all complete, need review)
