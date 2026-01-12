@@ -18,11 +18,13 @@ clj -M:dev:nrepl
 
 ```bash
 # Create virtual environment
-python -m venv .venv
+python3 -m venv components/claude-agent-sdk/.venv
 
 # Install Claude Agent SDK
-.venv/bin/pip install -r components/claude-agent-sdk/requirements.txt
+components/claude-agent-sdk/.venv/bin/pip install -r components/claude-agent-sdk/requirements.txt
 ```
+
+Alternatively, running tests will auto-create the venv via kaocha hooks.
 
 ### Story Execution
 
@@ -34,7 +36,7 @@ From the REPL:
 (require '[task-conductor.agent-runner.repl :as repl])
 
 ;; Initialize the Python SDK (required once per JVM session)
-(sdk/initialize! {:venv-path ".venv"})
+(sdk/initialize! {:venv-path "components/claude-agent-sdk/.venv"})
 
 ;; Execute a story
 (repl/run-story 123)

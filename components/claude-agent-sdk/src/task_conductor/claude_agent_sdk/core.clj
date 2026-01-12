@@ -34,12 +34,36 @@
   (when path
     (.getAbsolutePath (io/file path))))
 
+(defn- add-venv-to-path!
+  "Add venv's site-packages to Python's sys.path if not already present."
+  [abs-venv]
+  (when abs-venv
+    (let [sys-module (py/import-module "sys")
+          sys-path #_{:clj-kondo/ignore [:unresolved-symbol]}
+          (py/py.- sys-module path)
+          venv-lib (io/file abs-venv "lib")
+          site-packages (when (.exists venv-lib)
+                          (->> (.listFiles venv-lib)
+                               (filter #(.isDirectory %))
+                               (map #(io/file % "site-packages"))
+                               (filter #(.exists %))
+                               first))
+          site-packages-path (when site-packages (.getAbsolutePath site-packages))
+          current-paths (set (py/as-list sys-path))]
+      (when (and site-packages-path
+                 (not (current-paths site-packages-path)))
+        #_{:clj-kondo/ignore [:unresolved-symbol]}
+        (py/py. sys-path insert 0 site-packages-path)))))
+
 (defn initialize!
   "Initialize Python interpreter and import Claude Agent SDK.
 
    Options:
    - :venv-path - Path to Python venv directory (e.g., \".venv\")
    - :python-executable - Explicit path to Python executable
+
+   If Python is already initialized by libpython-clj, adds the venv's
+   site-packages to sys.path instead of attempting to reinitialize.
 
    Returns true on success, throws on failure."
   ([]
@@ -49,10 +73,19 @@
      (let [abs-venv (abs-path venv-path)
            py-exe (or python-executable
                       (when abs-venv
-                        (str abs-venv "/bin/python")))]
-       (if py-exe
-         (py/initialize! :python-executable py-exe)
-         (py/initialize!))
+                        (str abs-venv "/bin/python")))
+           ;; Check if libpython-clj is already initialized
+           py-already-initialized? (try
+                                     (py/import-module "sys")
+                                     true
+                                     (catch Exception _ false))]
+       (if py-already-initialized?
+         ;; Python already initialized - add venv to path instead
+         (add-venv-to-path! abs-venv)
+         ;; Initialize with specified Python
+         (if py-exe
+           (py/initialize! :python-executable py-exe)
+           (py/initialize!)))
 
        ;; Import required modules
        (require-python 'asyncio)
@@ -391,13 +424,17 @@
   ([]
    (create-client nil))
   ([opts]
+   (println "[SDK create-client] Creating client with opts:" (pr-str opts))
    (ensure-initialized!)
    (let [sdk (:sdk @modules)
          client-class (py/get-attr sdk "ClaudeSDKClient")
+         _ (println "[SDK create-client] Got client-class, creating py-client")
          py-client (if opts
                      (client-class :options (make-options opts))
                      (client-class))
+         _ (println "[SDK create-client] py-client created, creating session-runner")
          session-runner (create-session-runner py-client)]
+     (println "[SDK create-client] session-runner created, returning ManagedClient")
      (->ManagedClient py-client session-runner))))
 
 (defn connect
@@ -421,20 +458,28 @@
      (connect client nil prompt-or-opts)
      (connect client prompt-or-opts nil)))
   ([client prompt opts]
+   (println "[SDK connect] Connecting client, prompt:" (some-> prompt (subs 0 (min 50 (count prompt)))) "...")
    (ensure-initialized!)
    (let [runner (get-session-runner client)
          timeout-s (ms->s (:timeout-ms opts))]
+     (println "[SDK connect] Got runner:" (boolean runner) "timeout-s:" timeout-s)
      (try
        (if runner
          ;; Use the session runner (keeps operations in same async task)
-         (py. runner connect prompt :timeout timeout-s)
+         (do
+           (println "[SDK connect] Calling runner.connect")
+           (py. runner connect prompt :timeout timeout-s))
          ;; Fallback for raw Python clients (legacy)
          (let [py-client (get-py-client client)]
+           (println "[SDK connect] Using legacy raw client connect")
            (run-async (if prompt
                         (py. py-client connect prompt)
                         (py. py-client connect)))))
+       (println "[SDK connect] Connection successful")
        client
        (catch Exception e
+         (println "[SDK connect] EXCEPTION:" (type e) (ex-message e))
+         (.printStackTrace e)
          ;; Clean up session runner to prevent thread leak
          (close-client client)
          (let [msg (ex-message e)]
@@ -463,18 +508,26 @@
   ([client]
    (disconnect client nil))
   ([client opts]
+   (println "[SDK disconnect] Disconnecting client")
    (ensure-initialized!)
    (let [runner (get-session-runner client)
          timeout-s (ms->s (:timeout-ms opts))]
+     (println "[SDK disconnect] Got runner:" (boolean runner) "timeout-s:" timeout-s)
      (try
        (if runner
          ;; Use the session runner (this also stops its background thread)
-         (py. runner disconnect :timeout timeout-s)
+         (do
+           (println "[SDK disconnect] Calling runner.disconnect")
+           (py. runner disconnect :timeout timeout-s))
          ;; Fallback for raw Python clients (legacy)
          (let [py-client (get-py-client client)]
+           (println "[SDK disconnect] Using legacy raw client disconnect")
            (run-async (py. py-client disconnect))))
+       (println "[SDK disconnect] Disconnect successful")
        nil
        (catch Exception e
+         (println "[SDK disconnect] EXCEPTION:" (type e) (ex-message e))
+         (.printStackTrace e)
          (let [msg (ex-message e)]
            (if (and msg (.contains msg "timed out"))
              (throw (ex-info "Disconnect operation timed out"
@@ -664,26 +717,33 @@
   ([client prompt]
    (query client prompt nil))
   ([client prompt opts]
+   (println "[SDK query] Querying with prompt:" (subs prompt 0 (min 50 (count prompt))) "...")
    (ensure-initialized!)
    (let [runner (get-session-runner client)
          timeout-s (ms->s (:timeout-ms opts))]
+     (println "[SDK query] Got runner:" (boolean runner) "timeout-s:" timeout-s)
      (try
-       (let [py-messages (if runner
+       (let [_ (println "[SDK query] Calling runner.query or coroutine")
+             py-messages (if runner
                            ;; Use session runner's query method
                            (py. runner query prompt :timeout timeout-s)
                            ;; Fallback for raw Python clients (legacy)
                            (let [py-client (get-py-client client)
                                  coroutine (make-query-and-receive-coroutine py-client prompt)]
                              (run-async coroutine)))
+             _ (println "[SDK query] Got py-messages, parsing")
              messages (mapv parse-message (py/as-list py-messages))
              ;; Extract session-id from the ResultMessage
              session-id (->> messages
                              (filter #(= :result-message (:type %)))
                              first
                              :session-id)]
+         (println "[SDK query] Query complete, session-id:" session-id "message-count:" (count messages))
          {:messages messages
           :session-id session-id})
        (catch Exception e
+         (println "[SDK query] EXCEPTION:" (type e) (ex-message e))
+         (.printStackTrace e)
          (let [msg (ex-message e)]
            (if (and msg (.contains msg "timed out"))
              (throw (ex-info "Query operation timed out"
@@ -737,8 +797,10 @@
   ([tracked-client prompt]
    (session-query tracked-client prompt nil))
   ([tracked-client prompt opts]
+   (println "[SDK session-query] Starting query, prompt:" (subs prompt 0 (min 50 (count prompt))) "...")
    (let [{:keys [client session-id-atom]} tracked-client
          result (query client prompt opts)]
+     (println "[SDK session-query] Query returned, session-id:" (:session-id result))
      (when-let [sid (:session-id result)]
        (reset! session-id-atom sid))
      result)))
@@ -769,21 +831,29 @@
        (session-query client \"Continue...\"))
      ;; => {:result {...} :session-id \"abc123\"}"
   [[client-sym opts] & body]
-  `(let [session-id-atom# (atom nil)
-         raw-client# (create-client ~opts)]
-     (try
-       (connect raw-client#)
-       (let [~client-sym (->TrackedClient raw-client# session-id-atom#)
-             result# (do ~@body)]
-         {:result result#
-          :session-id @session-id-atom#})
-       (catch Exception e#
-         (throw (ex-info "Session error"
-                         {:type :session-error
-                          :session-id @session-id-atom#}
-                         e#)))
-       (finally
-         (disconnect raw-client#)))))
+  `(let [session-id-atom# (atom nil)]
+     (println "[SDK with-session] Creating client with opts:" (pr-str ~opts))
+     (let [raw-client# (create-client ~opts)]
+       (try
+         (println "[SDK with-session] Connecting...")
+         (connect raw-client#)
+         (println "[SDK with-session] Connected, executing body")
+         (let [~client-sym (->TrackedClient raw-client# session-id-atom#)
+               result# (do ~@body)]
+           (println "[SDK with-session] Body complete, session-id:" @session-id-atom#)
+           {:result result#
+            :session-id @session-id-atom#})
+         (catch Exception e#
+           (println "[SDK with-session] EXCEPTION in body:" (type e#) (ex-message e#))
+           (.printStackTrace e#)
+           (throw (ex-info "Session error"
+                           {:type :session-error
+                            :session-id @session-id-atom#}
+                           e#)))
+         (finally
+           (println "[SDK with-session] Disconnecting...")
+           (disconnect raw-client#)
+           (println "[SDK with-session] Disconnected"))))))
 
 (defn resume-client
   "Create a client configured to resume a previous session.

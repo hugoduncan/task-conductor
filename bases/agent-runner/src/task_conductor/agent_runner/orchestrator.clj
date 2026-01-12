@@ -91,7 +91,9 @@
    {:status :no-tasks}
    - Story has no child tasks"
   [story-id]
+  (println "[select-next-task] Querying for story-id:" story-id)
   (let [{:keys [tasks metadata]} (query-unblocked-child story-id)]
+    (println "[select-next-task] Got tasks:" (count tasks) "metadata:" metadata)
     (if (seq tasks)
       ;; Found an unblocked task
       {:status :task-available
@@ -152,10 +154,10 @@
          ;; Defaults for automated task execution
          defaults {:permission-mode "bypassPermissions"
                    :cwd cwd}
-         ;; Enable MCP auto-discovery unless explicit :mcp-servers provided
+         ;; Configure MCP servers - explicit config or auto-discovery
          mcp-config (if (contains? opts :mcp-servers)
                       {}
-                      {:setting-sources ["project"]})]
+                      {:mcp-servers {"mcp-tasks" {:command "mcp-tasks-server"}}})]
      (merge defaults mcp-config opts))))
 
 ;;; Task Execution
@@ -168,7 +170,7 @@
    to find and execute the specific task."
   [task-info]
   (let [parent-id (:parent-id task-info)]
-    (format "/mcp-tasks:execute-story-child %d" parent-id)))
+    (format "/mcp-tasks:execute-story-child (MCP) %d" parent-id)))
 
 (defn run-sdk-session
   "Run an SDK session with the given config and prompt.
@@ -178,8 +180,13 @@
 
    Returns {:result <query-result> :session-id <string>}."
   [session-config prompt]
-  (sdk/with-session [client session-config]
-    (sdk/session-query client prompt)))
+  (println "[run-sdk-session] Creating session with config:" (pr-str session-config))
+  (println "[run-sdk-session] Prompt:" prompt)
+  (let [result (sdk/with-session [client session-config]
+                 (println "[run-sdk-session] Session created, sending query")
+                 (sdk/session-query client prompt))]
+    (println "[run-sdk-session] Session query complete, session-id:" (:session-id result))
+    result))
 
 (defn execute-task
   "Execute a task in a fresh Claude SDK session.
@@ -207,9 +214,23 @@
   ([task-info]
    (execute-task task-info {}))
   ([task-info opts]
+   (println "[execute-task] task-info:" task-info)
    (let [session-config (build-task-session-config task-info opts)
+         _ (println "[execute-task] Built session-config:" (pr-str session-config))
          prompt (build-task-prompt task-info)
+         _ (println "[execute-task] Built prompt:" prompt)
          {:keys [result session-id]} (run-sdk-session session-config prompt)]
+     (println "[execute-task] Got result, session-id:" session-id)
+     (println "[execute-task] Messages:" (count (:messages result)))
+     (doseq [msg (:messages result)]
+       (println "[execute-task] Message type:" (:type msg))
+       (when (= :assistant-message (:type msg))
+         (println "[execute-task] Assistant content:"
+                  (pr-str (take 3 (:content msg)))))
+       (when (= :result-message (:type msg))
+         (println "[execute-task] Result: is-error:" (:is-error msg)
+                  "num-turns:" (:num-turns msg)
+                  "result:" (:result msg))))
      {:session-id session-id
       :messages (:messages result)
       :result result
@@ -221,10 +242,13 @@
   "Execute a single task and handle handoff if needed.
    Returns the execution result from execute-task."
   [task opts]
+  (println "[handle-task-execution] Task:" (:id task) "parent:" (:parent-id task))
   (let [task-info {:task-id (:id task)
                    :parent-id (:parent-id task)
                    :worktree-path (:worktree-path task)}
+        _ (println "[handle-task-execution] Calling execute-task with:" task-info)
         result (execute-task task-info opts)]
+    (println "[handle-task-execution] execute-task returned session-id:" (:session-id result))
     (console/record-session! (:session-id result) (:id task))
     ;; TODO: Implement handoff detection in execute-task once SDK supports
     ;; detecting when agent requests CLI handoff (Story #54).
@@ -238,23 +262,28 @@
    Runs until story complete, paused, blocked, or error.
    Returns outcome map."
   [story-id opts]
-  (loop []
+  (println "[task-loop] Starting loop for story-id:" story-id)
+  (loop [iteration 0]
+    (println "[task-loop] Iteration:" iteration "paused?:" (console/paused?))
     (if (console/paused?)
       {:outcome :paused
        :state @console/console-state}
       (let [{:keys [status task progress blocked-tasks]} (select-next-task story-id)]
+        (println "[task-loop] select-next-task returned status:" status)
         (case status
           :task-available
           (do
+            (println "[task-loop] Running task:" (:id task) (:title task))
             (console/transition! :running-sdk
                                  {:session-id nil
                                   :current-task-id (:id task)})
             (let [result (handle-task-execution task opts)]
+              (println "[task-loop] Task execution complete, session-id:" (:session-id result))
               ;; Update session-id directly after SDK returns
               (swap! console/console-state assoc :session-id (:session-id result))
               (console/transition! :task-complete)
               (console/transition! :selecting-task))
-            (recur))
+            (recur (inc iteration)))
 
           :all-blocked
           {:outcome :blocked
@@ -304,17 +333,26 @@
   ([story-id]
    (execute-story story-id {}))
   ([story-id opts]
+   (println "[execute-story] Starting story-id:" story-id)
    (try
      (console/transition! :selecting-task {:story-id story-id})
-     (task-loop story-id opts)
+     (println "[execute-story] Transitioned to :selecting-task, calling task-loop")
+     (let [result (task-loop story-id opts)]
+       (println "[execute-story] task-loop returned:" (:outcome result))
+       result)
      (catch Exception e
+       (println "[execute-story] EXCEPTION caught:" (type e))
+       (println "[execute-story] ex-message:" (ex-message e))
+       (println "[execute-story] ex-data:" (ex-data e))
+       (println "[execute-story] stacktrace:")
+       (.printStackTrace e)
        (try
          (console/transition! :error-recovery
                               {:error {:type :exception
                                        :message (ex-message e)
                                        :data (ex-data e)}})
-         (catch Exception _
-           nil))
+         (catch Exception e2
+           (println "[execute-story] Failed to transition to error-recovery:" (ex-message e2))))
        {:outcome :error
         :error {:type :exception
                 :message (ex-message e)
