@@ -307,3 +307,119 @@
    (run-mcp-tasks-fn & args) -> parsed EDN result from mcp-tasks CLI."
   [run-mcp-tasks-fn]
   (->DefaultFlowModel run-mcp-tasks-fn))
+
+;;; StoryFlowModel Implementation
+
+(defn- query-story-and-children
+  "Query mcp-tasks for story and its children.
+   Returns {:ok {:story story :children children}} or {:error message}."
+  [run-mcp-tasks-fn story-id]
+  (let [story-result (run-mcp-tasks-fn "list"
+                                       "--task-id" (str story-id)
+                                       "--unique" "true")
+        children-result (run-mcp-tasks-fn "list"
+                                          "--parent-id" (str story-id))]
+    (cond
+      (:error story-result)
+      {:error (:error story-result)}
+
+      (:error children-result)
+      {:error (:error children-result)}
+
+      (not (contains? story-result :tasks))
+      {:error (str "Unexpected story response format: " (pr-str story-result))}
+
+      (not (contains? children-result :tasks))
+      {:error (str "Unexpected children response format: " (pr-str children-result))}
+
+      (empty? (:tasks story-result))
+      {:error (str "Story not found: " story-id)}
+
+      :else
+      {:ok {:story (first (:tasks story-result))
+            :children (:tasks children-result)}})))
+
+(defn state->flow-decision
+  "Map story state to FlowDecision. Pure function.
+
+   Arguments:
+   - state: StoryState keyword from derive-story-state
+   - story-id: Story task ID for prompt generation
+
+   Returns FlowDecision with appropriate :action and :prompt/:reason."
+  [state story-id]
+  (case state
+    :unrefined-story
+    {:action :continue-sdk
+     :prompt (format "/mcp-tasks:refine-task %d" story-id)}
+
+    :refined
+    {:action :continue-sdk
+     :prompt (format "/mcp-tasks:create-story-children %d" story-id)}
+
+    :execute-tasks
+    {:action :continue-sdk
+     :prompt (format "/mcp-tasks:execute-story-child %d" story-id)}
+
+    :code-review
+    {:action :continue-sdk
+     :prompt (format "/mcp-tasks:review-story-implementation %d" story-id)}
+
+    :create-pr
+    {:action :continue-sdk
+     :prompt (format "/mcp-tasks:create-story-pr %d" story-id)}
+
+    :manual-review
+    {:action :hand-to-cli
+     :reason "PR created and awaiting manual review"}
+
+    :merge-pr
+    {:action :hand-to-cli
+     :reason "PR approved and ready to merge"}
+
+    :story-complete
+    {:action :story-done
+     :reason "Story complete - PR merged"}))
+
+(defrecord StoryFlowModel [run-mcp-tasks-fn story-id]
+  FlowModel
+
+  (initial-prompt [_this _task-info _console-state]
+    (let [result (query-story-and-children run-mcp-tasks-fn story-id)]
+      (if (:error result)
+        {:action :error
+         :reason (:error result)}
+        (let [{:keys [story children]} (:ok result)
+              state (derive-story-state story children)]
+          (state->flow-decision state story-id)))))
+
+  (on-cli-return [_this _cli-status _console-state]
+    (throw (ex-info "on-cli-return not yet implemented for StoryFlowModel"
+                    {:type :not-implemented
+                     :method :on-cli-return})))
+
+  (on-sdk-complete [_this _sdk-result _console-state]
+    (let [result (query-story-and-children run-mcp-tasks-fn story-id)]
+      (if (:error result)
+        {:action :error
+         :reason (:error result)}
+        (let [{:keys [story children]} (:ok result)
+              state (derive-story-state story children)]
+          (state->flow-decision state story-id)))))
+
+  (on-task-complete [_this _console-state]
+    (throw (ex-info "on-task-complete not yet implemented for StoryFlowModel"
+                    {:type :not-implemented
+                     :method :on-task-complete}))))
+
+(defn story-flow-model
+  "Create a StoryFlowModel for state-driven story execution.
+
+   Arguments:
+   - run-mcp-tasks-fn: Function to query mcp-tasks CLI
+   - story-id: ID of the story task to execute
+
+   The model derives state from story fields and children, then returns
+   appropriate FlowDecisions for each lifecycle phase."
+  [run-mcp-tasks-fn story-id]
+  (->StoryFlowModel run-mcp-tasks-fn story-id))
