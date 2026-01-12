@@ -19,7 +19,164 @@
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.flow :as flow]))
 
-;;; Test Data
+;;; Story State Test Data
+
+(def unrefined-story
+  {:id 100 :type :story :status :open :meta {}})
+
+(def refined-story-no-children
+  {:id 100 :type :story :status :open :meta {:refined true}})
+
+(def story-with-open-children
+  {:id 100 :type :story :status :open :meta {:refined true}})
+
+(def open-child
+  {:id 101 :parent-id 100 :status :open})
+
+(def closed-child
+  {:id 102 :parent-id 100 :status :closed})
+
+(def story-all-complete
+  {:id 100 :type :story :status :open :meta {:refined true}})
+
+(def story-code-reviewed
+  {:id 100 :type :story :status :open
+   :meta {:refined true :code-reviewed "2025-01-01T00:00:00Z"}})
+
+(def story-with-pr
+  {:id 100 :type :story :status :open
+   :meta {:refined true :code-reviewed "2025-01-01T00:00:00Z" :pr-num 42}})
+
+(def story-ready-to-merge
+  {:id 100 :type :story :status :open
+   :meta {:refined true :code-reviewed "2025-01-01T00:00:00Z"
+          :pr-num 42 :ready-to-merge true}})
+
+(def story-merged
+  {:id 100 :type :story :status :closed
+   :meta {:refined true :code-reviewed "2025-01-01T00:00:00Z"
+          :pr-num 42 :pr-merged? true}})
+
+;;; derive-story-state Tests
+
+(deftest derive-story-state-test
+  ;; Tests derive-story-state for all state derivation rules.
+  ;; Contracts tested:
+  ;; - Returns :unrefined-story when meta lacks :refined
+  ;; - Returns :refined when refined but no children
+  ;; - Returns :execute-tasks when incomplete children exist
+  ;; - Returns :code-review when all children complete, no :code-reviewed
+  ;; - Returns :create-pr when code-reviewed, all complete, no :pr-num
+  ;; - Returns :manual-review when :pr-num present
+  ;; - Returns :merge-pr when :ready-to-merge set
+  ;; - Returns :story-complete when :pr-merged? true
+  ;; - Precedence is honored when multiple conditions could match
+  (testing "derive-story-state"
+    (testing "returns :unrefined-story"
+      (testing "when meta has no :refined key"
+        (is (= :unrefined-story
+               (flow/derive-story-state unrefined-story []))))
+
+      (testing "when meta is nil"
+        (is (= :unrefined-story
+               (flow/derive-story-state {:id 1} []))))
+
+      (testing "when :refined is false"
+        (is (= :unrefined-story
+               (flow/derive-story-state {:id 1 :meta {:refined false}} [])))))
+
+    (testing "returns :refined"
+      (testing "when refined but no children"
+        (is (= :refined
+               (flow/derive-story-state refined-story-no-children [])))))
+
+    (testing "returns :execute-tasks"
+      (testing "when has open children"
+        (is (= :execute-tasks
+               (flow/derive-story-state story-with-open-children [open-child]))))
+
+      (testing "when has mix of open and closed children"
+        (is (= :execute-tasks
+               (flow/derive-story-state story-with-open-children
+                                        [open-child closed-child]))))
+
+      (testing "when not all children closed"
+        (is (= :execute-tasks
+               (flow/derive-story-state
+                story-with-open-children
+                [{:id 1 :status :in-progress}])))))
+
+    (testing "returns :code-review"
+      (testing "when all children closed and no :code-reviewed"
+        (is (= :code-review
+               (flow/derive-story-state story-all-complete [closed-child]))))
+
+      (testing "when multiple children all closed"
+        (is (= :code-review
+               (flow/derive-story-state
+                story-all-complete
+                [{:id 1 :status :closed}
+                 {:id 2 :status :closed}
+                 {:id 3 :status :closed}])))))
+
+    (testing "returns :create-pr"
+      (testing "when code-reviewed and all children complete"
+        (is (= :create-pr
+               (flow/derive-story-state story-code-reviewed [closed-child])))))
+
+    (testing "returns :manual-review"
+      (testing "when :pr-num present"
+        (is (= :manual-review
+               (flow/derive-story-state story-with-pr [closed-child])))))
+
+    (testing "returns :merge-pr"
+      (testing "when :ready-to-merge set"
+        (is (= :merge-pr
+               (flow/derive-story-state story-ready-to-merge [closed-child])))))
+
+    (testing "returns :story-complete"
+      (testing "when :pr-merged? true"
+        (is (= :story-complete
+               (flow/derive-story-state story-merged [closed-child])))))
+
+    (testing "precedence"
+      (testing ":story-complete takes precedence over :merge-pr"
+        (let [story {:id 1 :meta {:pr-merged? true :ready-to-merge true}}]
+          (is (= :story-complete
+                 (flow/derive-story-state story [closed-child])))))
+
+      (testing ":merge-pr takes precedence over :manual-review"
+        (let [story {:id 1 :meta {:ready-to-merge true :pr-num 42}}]
+          (is (= :merge-pr
+                 (flow/derive-story-state story [closed-child])))))
+
+      (testing ":manual-review takes precedence over :create-pr"
+        (let [story {:id 1 :meta {:pr-num 42 :code-reviewed "ts"}}]
+          (is (= :manual-review
+                 (flow/derive-story-state story [closed-child])))))
+
+      (testing ":create-pr takes precedence over :code-review"
+        (let [story {:id 1 :meta {:code-reviewed "ts" :refined true}}]
+          (is (= :create-pr
+                 (flow/derive-story-state story [closed-child])))))
+
+      (testing ":code-review takes precedence over :execute-tasks"
+        ;; If all complete, not in execute state
+        (let [story {:id 1 :meta {:refined true}}]
+          (is (= :code-review
+                 (flow/derive-story-state story [closed-child])))))
+
+      (testing ":execute-tasks takes precedence over :refined"
+        (let [story {:id 1 :meta {:refined true}}]
+          (is (= :execute-tasks
+                 (flow/derive-story-state story [open-child])))))
+
+      (testing ":refined takes precedence over :unrefined-story"
+        (let [story {:id 1 :meta {:refined true}}]
+          (is (= :refined
+                 (flow/derive-story-state story []))))))))
+
+;;; FlowDecision Test Data
 
 (def valid-decision
   {:action :task-done})

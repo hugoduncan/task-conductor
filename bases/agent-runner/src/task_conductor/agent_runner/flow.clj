@@ -12,6 +12,77 @@
    [malli.core :as m]
    [malli.error :as me]))
 
+;;; Story State
+
+(def StoryState
+  "Story state keywords derived from task fields and child tasks.
+   States are computed, not stored, following the flow:
+   unrefined → refined → execute-tasks ⟷ code-review → create-pr →
+   manual-review → merge-pr → story-complete"
+  [:enum :unrefined-story :refined :execute-tasks :code-review
+   :create-pr :manual-review :merge-pr :story-complete])
+
+(defn derive-story-state
+  "Derive story state from story task and its children. Pure function.
+
+   Arguments:
+   - story: Story task map with :meta, :status
+   - children: Collection of child task maps (may be empty)
+
+   Returns one of the StoryState keywords.
+
+   Precedence (evaluated in order):
+   1. Story closed with :pr-merged? true → :story-complete
+   2. :ready-to-merge in meta → :merge-pr
+   3. Has :pr-num → :manual-review
+   4. Has :code-reviewed, all tasks complete, no :pr-num → :create-pr
+   5. All tasks complete, no :code-reviewed → :code-review
+   6. Has incomplete child tasks → :execute-tasks
+   7. Has refined: true but no children → :refined
+   8. No refined: true → :unrefined-story"
+  [story children]
+  (let [meta-map (or (:meta story) {})
+        refined? (get meta-map :refined)
+        code-reviewed (get meta-map :code-reviewed)
+        pr-num (get meta-map :pr-num)
+        pr-merged? (get meta-map :pr-merged?)
+        ready-to-merge (get meta-map :ready-to-merge)
+        has-children? (seq children)
+        all-complete? (and has-children?
+                           (every? #(= :closed (:status %)) children))]
+    (cond
+      ;; Precedence 1: PR merged
+      pr-merged?
+      :story-complete
+
+      ;; Precedence 2: Ready to merge (user signals via CLI)
+      ready-to-merge
+      :merge-pr
+
+      ;; Precedence 3: Has PR number, waiting for manual review
+      pr-num
+      :manual-review
+
+      ;; Precedence 4: Code reviewed, all complete, need PR
+      (and code-reviewed all-complete? (not pr-num))
+      :create-pr
+
+      ;; Precedence 5: All complete, need code review
+      (and all-complete? (not code-reviewed))
+      :code-review
+
+      ;; Precedence 6: Has incomplete children, execute tasks
+      (and has-children? (not all-complete?))
+      :execute-tasks
+
+      ;; Precedence 7: Refined but no children yet
+      (and refined? (not has-children?))
+      :refined
+
+      ;; Precedence 8: Not refined
+      :else
+      :unrefined-story)))
+
 ;;; FlowDecision Schema
 
 (def Action
