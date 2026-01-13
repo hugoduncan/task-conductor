@@ -19,7 +19,164 @@
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.flow :as flow]))
 
-;;; Test Data
+;;; Story State Test Data
+
+(def unrefined-story
+  {:id 100 :type :story :status :open :meta {}})
+
+(def refined-story-no-children
+  {:id 100 :type :story :status :open :meta {:refined true}})
+
+(def story-with-open-children
+  {:id 100 :type :story :status :open :meta {:refined true}})
+
+(def open-child
+  {:id 101 :parent-id 100 :status :open})
+
+(def closed-child
+  {:id 102 :parent-id 100 :status :closed})
+
+(def story-all-complete
+  {:id 100 :type :story :status :open :meta {:refined true}})
+
+(def story-code-reviewed
+  {:id 100 :type :story :status :open
+   :meta {:refined true :code-reviewed "2025-01-01T00:00:00Z"}})
+
+(def story-with-pr
+  {:id 100 :type :story :status :open
+   :meta {:refined true :code-reviewed "2025-01-01T00:00:00Z" :pr-num 42}})
+
+(def story-ready-to-merge
+  {:id 100 :type :story :status :open
+   :meta {:refined true :code-reviewed "2025-01-01T00:00:00Z"
+          :pr-num 42 :ready-to-merge true}})
+
+(def story-merged
+  {:id 100 :type :story :status :closed
+   :meta {:refined true :code-reviewed "2025-01-01T00:00:00Z"
+          :pr-num 42 :pr-merged? true}})
+
+;;; derive-story-state Tests
+
+(deftest derive-story-state-test
+  ;; Tests derive-story-state for all state derivation rules.
+  ;; Contracts tested:
+  ;; - Returns :unrefined-story when meta lacks :refined
+  ;; - Returns :refined when refined but no children
+  ;; - Returns :execute-tasks when incomplete children exist
+  ;; - Returns :code-review when all children complete, no :code-reviewed
+  ;; - Returns :create-pr when code-reviewed, all complete, no :pr-num
+  ;; - Returns :manual-review when :pr-num present
+  ;; - Returns :merge-pr when :ready-to-merge set
+  ;; - Returns :story-complete when :pr-merged? true
+  ;; - Precedence is honored when multiple conditions could match
+  (testing "derive-story-state"
+    (testing "returns :unrefined-story"
+      (testing "when meta has no :refined key"
+        (is (= :unrefined-story
+               (flow/derive-story-state unrefined-story []))))
+
+      (testing "when meta is nil"
+        (is (= :unrefined-story
+               (flow/derive-story-state {:id 1} []))))
+
+      (testing "when :refined is false"
+        (is (= :unrefined-story
+               (flow/derive-story-state {:id 1 :meta {:refined false}} [])))))
+
+    (testing "returns :refined"
+      (testing "when refined but no children"
+        (is (= :refined
+               (flow/derive-story-state refined-story-no-children [])))))
+
+    (testing "returns :execute-tasks"
+      (testing "when has open children"
+        (is (= :execute-tasks
+               (flow/derive-story-state story-with-open-children [open-child]))))
+
+      (testing "when has mix of open and closed children"
+        (is (= :execute-tasks
+               (flow/derive-story-state story-with-open-children
+                                        [open-child closed-child]))))
+
+      (testing "when not all children closed"
+        (is (= :execute-tasks
+               (flow/derive-story-state
+                story-with-open-children
+                [{:id 1 :status :in-progress}])))))
+
+    (testing "returns :code-review"
+      (testing "when all children closed and no :code-reviewed"
+        (is (= :code-review
+               (flow/derive-story-state story-all-complete [closed-child]))))
+
+      (testing "when multiple children all closed"
+        (is (= :code-review
+               (flow/derive-story-state
+                story-all-complete
+                [{:id 1 :status :closed}
+                 {:id 2 :status :closed}
+                 {:id 3 :status :closed}])))))
+
+    (testing "returns :create-pr"
+      (testing "when code-reviewed and all children complete"
+        (is (= :create-pr
+               (flow/derive-story-state story-code-reviewed [closed-child])))))
+
+    (testing "returns :manual-review"
+      (testing "when :pr-num present"
+        (is (= :manual-review
+               (flow/derive-story-state story-with-pr [closed-child])))))
+
+    (testing "returns :merge-pr"
+      (testing "when :ready-to-merge set"
+        (is (= :merge-pr
+               (flow/derive-story-state story-ready-to-merge [closed-child])))))
+
+    (testing "returns :story-complete"
+      (testing "when :pr-merged? true"
+        (is (= :story-complete
+               (flow/derive-story-state story-merged [closed-child])))))
+
+    (testing "precedence"
+      (testing ":story-complete takes precedence over :merge-pr"
+        (let [story {:id 1 :meta {:pr-merged? true :ready-to-merge true}}]
+          (is (= :story-complete
+                 (flow/derive-story-state story [closed-child])))))
+
+      (testing ":merge-pr takes precedence over :manual-review"
+        (let [story {:id 1 :meta {:ready-to-merge true :pr-num 42}}]
+          (is (= :merge-pr
+                 (flow/derive-story-state story [closed-child])))))
+
+      (testing ":manual-review takes precedence over :create-pr"
+        (let [story {:id 1 :meta {:pr-num 42 :code-reviewed "ts"}}]
+          (is (= :manual-review
+                 (flow/derive-story-state story [closed-child])))))
+
+      (testing ":create-pr takes precedence over :code-review"
+        (let [story {:id 1 :meta {:code-reviewed "ts" :refined true}}]
+          (is (= :create-pr
+                 (flow/derive-story-state story [closed-child])))))
+
+      (testing ":code-review takes precedence over :execute-tasks"
+        ;; If all complete, not in execute state
+        (let [story {:id 1 :meta {:refined true}}]
+          (is (= :code-review
+                 (flow/derive-story-state story [closed-child])))))
+
+      (testing ":execute-tasks takes precedence over :refined"
+        (let [story {:id 1 :meta {:refined true}}]
+          (is (= :execute-tasks
+                 (flow/derive-story-state story [open-child])))))
+
+      (testing ":refined takes precedence over :unrefined-story"
+        (let [story {:id 1 :meta {:refined true}}]
+          (is (= :refined
+                 (flow/derive-story-state story []))))))))
+
+;;; FlowDecision Test Data
 
 (def valid-decision
   {:action :task-done})
@@ -409,3 +566,378 @@
         ;; This tests current behavior; consider adding validation if undesired
         (testing "treats first char as truthy task"
           (is (= :continue-sdk (:action result))))))))
+
+;;; StoryFlowModel Tests
+
+(deftest state->flow-decision-test
+  ;; Tests state->flow-decision mapping for all StoryState values.
+  ;; Contracts tested:
+  ;; - Each state maps to the correct action type
+  ;; - SDK-continuing states have appropriate MCP workflow prompts
+  ;; - CLI-handoff states have descriptive reasons
+  ;; - story-done state indicates completion
+  (testing "state->flow-decision"
+    (testing "for :unrefined-story"
+      (testing "returns :continue-sdk with refine-task prompt"
+        (let [result (flow/state->flow-decision :unrefined-story 42)]
+          (is (= :continue-sdk (:action result)))
+          (is (= "/mcp-tasks:refine-task 42" (:prompt result))))))
+
+    (testing "for :refined"
+      (testing "returns :continue-sdk with create-story-children prompt"
+        (let [result (flow/state->flow-decision :refined 42)]
+          (is (= :continue-sdk (:action result)))
+          (is (= "/mcp-tasks:create-story-children 42" (:prompt result))))))
+
+    (testing "for :execute-tasks"
+      (testing "returns :continue-sdk with execute-story-child prompt"
+        (let [result (flow/state->flow-decision :execute-tasks 42)]
+          (is (= :continue-sdk (:action result)))
+          (is (= "/mcp-tasks:execute-story-child 42" (:prompt result))))))
+
+    (testing "for :code-review"
+      (testing "returns :continue-sdk with review-story-implementation prompt"
+        (let [result (flow/state->flow-decision :code-review 42)]
+          (is (= :continue-sdk (:action result)))
+          (is (= "/mcp-tasks:review-story-implementation 42" (:prompt result))))))
+
+    (testing "for :create-pr"
+      (testing "returns :continue-sdk with create-story-pr prompt"
+        (let [result (flow/state->flow-decision :create-pr 42)]
+          (is (= :continue-sdk (:action result)))
+          (is (= "/mcp-tasks:create-story-pr 42" (:prompt result))))))
+
+    (testing "for :manual-review"
+      (testing "returns :hand-to-cli with reason"
+        (let [result (flow/state->flow-decision :manual-review 42)]
+          (is (= :hand-to-cli (:action result)))
+          (is (string? (:reason result)))
+          (is (nil? (:prompt result))))))
+
+    (testing "for :merge-pr"
+      (testing "returns :hand-to-cli with reason"
+        (let [result (flow/state->flow-decision :merge-pr 42)]
+          (is (= :hand-to-cli (:action result)))
+          (is (string? (:reason result)))
+          (is (nil? (:prompt result))))))
+
+    (testing "for :story-complete"
+      (testing "returns :story-done with reason"
+        (let [result (flow/state->flow-decision :story-complete 42)]
+          (is (= :story-done (:action result)))
+          (is (string? (:reason result)))
+          (is (nil? (:prompt result))))))
+
+    (testing "all decisions are valid FlowDecisions"
+      (doseq [state [:unrefined-story :refined :execute-tasks :code-review
+                     :create-pr :manual-review :merge-pr :story-complete]]
+        (let [result (flow/state->flow-decision state 99)]
+          (is (flow/valid-decision? result)
+              (str "Decision for " state " should be valid")))))))
+
+(defn mock-story-query
+  "Create mock that returns story and children based on call type."
+  [story children]
+  (fn [_cmd & args]
+    (let [args-vec (vec args)]
+      (cond
+        (some #{"--unique"} args-vec)
+        {:tasks [story]}
+
+        (some #{"--parent-id"} args-vec)
+        {:tasks children}
+
+        :else
+        {:error "Unexpected query"}))))
+
+(deftest story-flow-model-constructor-test
+  (testing "story-flow-model"
+    (testing "creates a StoryFlowModel instance"
+      (let [fm (flow/story-flow-model (fn [& _] {}) 42)]
+        (is (some? fm))
+        (is (satisfies? flow/FlowModel fm))))))
+
+(deftest story-flow-model-initial-prompt-test
+  ;; Tests StoryFlowModel.initial-prompt for all story states.
+  ;; Contracts tested:
+  ;; - Queries mcp-tasks for story and children
+  ;; - Derives state and returns appropriate FlowDecision
+  ;; - Handles query errors gracefully
+  (testing "StoryFlowModel initial-prompt"
+    (testing "for unrefined story"
+      (let [story {:id 42 :meta {}}
+            fm (flow/story-flow-model (mock-story-query story []) 42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :continue-sdk (:action result)))
+        (is (= "/mcp-tasks:refine-task 42" (:prompt result)))))
+
+    (testing "for refined story without children"
+      (let [story {:id 42 :meta {:refined true}}
+            fm (flow/story-flow-model (mock-story-query story []) 42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :continue-sdk (:action result)))
+        (is (= "/mcp-tasks:create-story-children 42" (:prompt result)))))
+
+    (testing "for story with incomplete children"
+      (let [story {:id 42 :meta {:refined true}}
+            children [{:id 101 :status :open}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :continue-sdk (:action result)))
+        (is (= "/mcp-tasks:execute-story-child 42" (:prompt result)))))
+
+    (testing "for story with all children complete (needs code review)"
+      (let [story {:id 42 :meta {:refined true}}
+            children [{:id 101 :status :closed}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :continue-sdk (:action result)))
+        (is (= "/mcp-tasks:review-story-implementation 42" (:prompt result)))))
+
+    (testing "for story with code review complete (needs PR)"
+      (let [story {:id 42 :meta {:refined true :code-reviewed "2025-01-01"}}
+            children [{:id 101 :status :closed}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :continue-sdk (:action result)))
+        (is (= "/mcp-tasks:create-story-pr 42" (:prompt result)))))
+
+    (testing "for story with PR (manual review)"
+      (let [story {:id 42 :meta {:refined true :code-reviewed "ts" :pr-num 123}}
+            children [{:id 101 :status :closed}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :hand-to-cli (:action result)))
+        (is (some? (:reason result)))))
+
+    (testing "for story ready to merge"
+      (let [story {:id 42 :meta {:refined true :code-reviewed "ts"
+                                 :pr-num 123 :ready-to-merge true}}
+            children [{:id 101 :status :closed}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :hand-to-cli (:action result)))))
+
+    (testing "for completed story"
+      (let [story {:id 42 :meta {:refined true :code-reviewed "ts"
+                                 :pr-num 123 :pr-merged? true}}
+            children [{:id 101 :status :closed}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :story-done (:action result)))))
+
+    (testing "when story query fails"
+      (let [fm (flow/story-flow-model
+                (fn [& _] {:error "Connection failed"})
+                42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :error (:action result)))
+        (is (= "Connection failed" (:reason result)))))
+
+    (testing "when story not found"
+      (let [fm (flow/story-flow-model
+                (fn [_cmd & args]
+                  (if (some #{"--unique"} args)
+                    {:tasks []}
+                    {:tasks []}))
+                42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :error (:action result)))
+        (is (re-find #"Story not found" (:reason result)))))
+
+    (testing "when response format is unexpected"
+      (let [fm (flow/story-flow-model
+                (fn [& _] {:unexpected "format"})
+                42)
+            result (flow/initial-prompt fm {} {})]
+        (is (= :error (:action result)))
+        (is (re-find #"Unexpected.*response format" (:reason result)))))))
+
+(deftest story-flow-model-on-sdk-complete-test
+  ;; Tests StoryFlowModel.on-sdk-complete for state transitions.
+  ;; Contracts tested:
+  ;; - Re-queries mcp-tasks to get current state
+  ;; - Returns FlowDecision based on derived state
+  ;; - Handles query errors
+  (testing "StoryFlowModel on-sdk-complete"
+    (testing "re-derives state and returns appropriate decision"
+      (let [story {:id 42 :meta {:refined true}}
+            children [{:id 101 :status :open}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/on-sdk-complete fm {} {})]
+        (is (= :continue-sdk (:action result)))
+        (is (= "/mcp-tasks:execute-story-child 42" (:prompt result)))))
+
+    (testing "transitions to code-review when tasks complete"
+      (let [story {:id 42 :meta {:refined true}}
+            children [{:id 101 :status :closed}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/on-sdk-complete fm {} {})]
+        (is (= :continue-sdk (:action result)))
+        (is (= "/mcp-tasks:review-story-implementation 42" (:prompt result)))))
+
+    (testing "returns :story-done when story complete"
+      (let [story {:id 42 :meta {:pr-merged? true}}
+            children [{:id 101 :status :closed}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/on-sdk-complete fm {} {})]
+        (is (= :story-done (:action result)))))
+
+    (testing "returns :hand-to-cli for manual-review state"
+      (let [story {:id 42 :meta {:refined true :code-reviewed "ts" :pr-num 99}}
+            children [{:id 101 :status :closed}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/on-sdk-complete fm {} {})]
+        (is (= :hand-to-cli (:action result)))))
+
+    (testing "handles query errors"
+      (let [fm (flow/story-flow-model
+                (fn [& _] {:error "Query failed"})
+                42)
+            result (flow/on-sdk-complete fm {} {})]
+        (is (= :error (:action result)))
+        (is (= "Query failed" (:reason result)))))
+
+    (testing "returns valid FlowDecision for all outcomes"
+      (doseq [[desc story children]
+              [["unrefined" {:id 1 :meta {}} []]
+               ["refined" {:id 1 :meta {:refined true}} []]
+               ["execute" {:id 1 :meta {:refined true}} [{:status :open}]]
+               ["review" {:id 1 :meta {:refined true}} [{:status :closed}]]
+               ["create-pr" {:id 1 :meta {:refined true :code-reviewed "ts"}}
+                [{:status :closed}]]
+               ["manual" {:id 1 :meta {:refined true :code-reviewed "ts" :pr-num 1}}
+                [{:status :closed}]]
+               ["merge" {:id 1 :meta {:ready-to-merge true :pr-num 1}}
+                [{:status :closed}]]
+               ["complete" {:id 1 :meta {:pr-merged? true}} [{:status :closed}]]]]
+        (let [fm (flow/story-flow-model (mock-story-query story children) 1)
+              result (flow/on-sdk-complete fm {} {})]
+          (is (flow/valid-decision? result)
+              (str "Decision for " desc " should be valid")))))))
+
+(deftest story-flow-model-on-cli-return-test
+  ;; Tests StoryFlowModel.on-cli-return for CLI handoff state transitions.
+  ;; Contracts tested:
+  ;; - Re-queries mcp-tasks to get current state after CLI returns
+  ;; - Returns FlowDecision based on derived state
+  ;; - Handles resume from :manual-review state
+  ;; - Handles resume from :merge-pr state
+  ;; - Handles query errors
+  (testing "StoryFlowModel on-cli-return"
+    (testing "after returning from manual-review state"
+      (testing "when user sets ready-to-merge, returns :hand-to-cli for merge"
+        (let [story {:id 42 :meta {:refined true :code-reviewed "ts"
+                                   :pr-num 123 :ready-to-merge true}}
+              children [{:id 101 :status :closed}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-cli-return fm {:status :completed} {})]
+          (is (= :hand-to-cli (:action result)))
+          (is (re-find #"merge" (:reason result)))))
+
+      (testing "when PR remains in manual-review, returns :hand-to-cli"
+        (let [story {:id 42 :meta {:refined true :code-reviewed "ts" :pr-num 123}}
+              children [{:id 101 :status :closed}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-cli-return fm {:status :completed} {})]
+          (is (= :hand-to-cli (:action result)))
+          (is (re-find #"manual review" (:reason result))))))
+
+    (testing "after returning from merge-pr state"
+      (testing "when PR is merged, returns :story-done"
+        (let [story {:id 42 :meta {:refined true :code-reviewed "ts"
+                                   :pr-num 123 :pr-merged? true}}
+              children [{:id 101 :status :closed}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-cli-return fm {:status :completed} {})]
+          (is (= :story-done (:action result)))))
+
+      (testing "when PR not yet merged, returns :hand-to-cli for merge"
+        (let [story {:id 42 :meta {:refined true :code-reviewed "ts"
+                                   :pr-num 123 :ready-to-merge true}}
+              children [{:id 101 :status :closed}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-cli-return fm {:status :completed} {})]
+          (is (= :hand-to-cli (:action result))))))
+
+    (testing "handles query errors"
+      (let [fm (flow/story-flow-model
+                (fn [& _] {:error "Connection failed"})
+                42)
+            result (flow/on-cli-return fm {:status :completed} {})]
+        (is (= :error (:action result)))
+        (is (= "Connection failed" (:reason result)))))
+
+    (testing "returns valid FlowDecision"
+      (let [story {:id 42 :meta {:pr-merged? true}}
+            children [{:id 101 :status :closed}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/on-cli-return fm {:status :completed} {})]
+        (is (flow/valid-decision? result))))))
+
+(deftest story-flow-model-on-task-complete-test
+  ;; Tests StoryFlowModel.on-task-complete for task completion transitions.
+  ;; Contracts tested:
+  ;; - Re-queries mcp-tasks to get current state after task completes
+  ;; - Returns FlowDecision based on derived state
+  ;; - Transitions to :code-review when all tasks complete
+  ;; - Returns to :execute-tasks when CR: tasks are created
+  ;; - Handles query errors
+  (testing "StoryFlowModel on-task-complete"
+    (testing "state re-derivation after task completion"
+      (testing "continues with execute-story-child when tasks remain"
+        (let [story {:id 42 :meta {:refined true}}
+              children [{:id 101 :status :closed} {:id 102 :status :open}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-task-complete fm {})]
+          (is (= :continue-sdk (:action result)))
+          (is (= "/mcp-tasks:execute-story-child 42" (:prompt result)))))
+
+      (testing "transitions to code-review when all tasks complete"
+        (let [story {:id 42 :meta {:refined true}}
+              children [{:id 101 :status :closed}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-task-complete fm {})]
+          (is (= :continue-sdk (:action result)))
+          (is (= "/mcp-tasks:review-story-implementation 42" (:prompt result))))))
+
+    (testing "transitions back to execute-tasks when CR: tasks created"
+      ;; After code review, if CR: tasks are created, state goes back to execute-tasks
+      (let [story {:id 42 :meta {:refined true :code-reviewed "2025-01-01"}}
+            ;; One CR: task is open after review
+            children [{:id 101 :status :closed} {:id 102 :status :open}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/on-task-complete fm {})]
+        (is (= :continue-sdk (:action result)))
+        (is (= "/mcp-tasks:execute-story-child 42" (:prompt result)))))
+
+    (testing "transitions to create-pr when code-reviewed and all complete"
+      (let [story {:id 42 :meta {:refined true :code-reviewed "2025-01-01"}}
+            children [{:id 101 :status :closed}]
+            fm (flow/story-flow-model (mock-story-query story children) 42)
+            result (flow/on-task-complete fm {})]
+        (is (= :continue-sdk (:action result)))
+        (is (= "/mcp-tasks:create-story-pr 42" (:prompt result)))))
+
+    (testing "handles query errors"
+      (let [fm (flow/story-flow-model
+                (fn [& _] {:error "Query failed"})
+                42)
+            result (flow/on-task-complete fm {})]
+        (is (= :error (:action result)))
+        (is (= "Query failed" (:reason result)))))
+
+    (testing "returns valid FlowDecision for all outcomes"
+      (doseq [[desc story children]
+              [["tasks-remain" {:id 1 :meta {:refined true}}
+                [{:status :closed} {:status :open}]]
+               ["all-complete" {:id 1 :meta {:refined true}}
+                [{:status :closed}]]
+               ["cr-tasks-created" {:id 1 :meta {:refined true :code-reviewed "ts"}}
+                [{:status :closed} {:status :open}]]
+               ["ready-for-pr" {:id 1 :meta {:refined true :code-reviewed "ts"}}
+                [{:status :closed}]]]]
+        (let [fm (flow/story-flow-model (mock-story-query story children) 1)
+              result (flow/on-task-complete fm {})]
+          (is (flow/valid-decision? result)
+              (str "Decision for " desc " should be valid")))))))
