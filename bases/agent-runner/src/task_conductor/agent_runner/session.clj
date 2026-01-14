@@ -55,6 +55,33 @@
       :messages []
       :result response})))
 
+(defn run-cli-session
+  "Run a CLI session with the given config and prompt.
+
+   Creates a new session via CLI (ensuring Claude Code's system prompt,
+   CLAUDE.md context, and MCP tools), sends the prompt, and returns the
+   result with session-id.
+
+   This is the CLI equivalent of sdk/with-session for new sessions.
+
+   Config options:
+   - :cwd - working directory for Claude (default: current directory)
+   - :timeout-ms - timeout for CLI operation (default: 120000ms)
+
+   Returns {:result {:messages [] :response <cli-response>} :session-id <string>}.
+
+   Note: CLI sessions don't return message history, so :messages is empty."
+  [session-config prompt]
+  (let [working-dir (or (:cwd session-config) (System/getProperty "user.dir"))
+        timeout-ms (:timeout-ms session-config)
+        cli-opts (cond-> {:working-dir working-dir
+                          :prompt prompt}
+                   timeout-ms (assoc :timeout-ms timeout-ms))
+        {:keys [session-id response]} (cli/create-session-via-cli cli-opts)]
+    {:result {:messages []
+              :response response}
+     :session-id session-id}))
+
 (defn resume-session
   "Resume a previous session and run a follow-up prompt.
 

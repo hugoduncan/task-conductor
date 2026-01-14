@@ -17,7 +17,7 @@
    [clojure.java.shell :as shell]
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.flow :as flow]
-   [task-conductor.claude-agent-sdk.interface :as sdk]))
+   [task-conductor.agent-runner.session :as session]))
 
 ;;; CLI Integration
 
@@ -126,19 +126,14 @@
 ;;; Session Configuration
 
 (defn build-task-session-config
-  "Build SDK session options for executing a task.
+  "Build session options for executing a task via CLI.
 
-   Takes task-info and optional opts map.
-   Returns a config map suitable for claude-agent-sdk/create-client.
+   Takes task-info and optional opts map. Returns a config map used by
+   run-cli-session. CLI sessions read CLAUDE.md and .mcp.json from :cwd.
 
-   MCP server configuration:
-   - If :mcp-servers provided in opts → uses it directly
-   - Otherwise → enables auto-discovery via :setting-sources [\"project\"]
-     so SDK reads .mcp.json from :cwd
-
-   Default options (can be overridden via opts):
-   - :permission-mode \"bypassPermissions\" - for automated execution
+   Options used by CLI:
    - :cwd - from opts, task-info :worktree-path, or current directory
+   - :timeout-ms - CLI timeout (default: 120000ms)
 
    Note: Tasks from select-next-task don't include :worktree-path. When
    not provided, falls back to the current working directory. The agent
@@ -147,21 +142,14 @@
    Example:
      (build-task-session-config
        {:worktree-path \"/path/to/worktree\" :task-id 110}
-       {:max-turns 50})"
+       {:timeout-ms 180000})"
   ([task-info]
    (build-task-session-config task-info {}))
   ([task-info opts]
    (let [cwd (or (:cwd opts)
                  (:worktree-path task-info)
-                 (System/getProperty "user.dir"))
-         ;; Defaults for automated task execution
-         defaults {:permission-mode "bypassPermissions"
-                   :cwd cwd}
-         ;; Configure MCP servers - explicit config or auto-discovery
-         mcp-config (if (contains? opts :mcp-servers)
-                      {}
-                      {:mcp-servers {"mcp-tasks" {:command "mcp-tasks-server"}}})]
-     (merge defaults mcp-config opts))))
+                 (System/getProperty "user.dir"))]
+     (merge {:cwd cwd} opts))))
 
 ;;; Task Execution
 
@@ -175,26 +163,28 @@
   (let [parent-id (:parent-id task-info)]
     (format "/mcp-tasks:execute-story-child (MCP) %d" parent-id)))
 
-(defn run-sdk-session
-  "Run an SDK session with the given config and prompt.
+(defn run-cli-session
+  "Run a CLI session with the given config and prompt.
 
-   Extracted to enable testing via with-redefs. Creates a session,
-   sends the prompt, and returns the result with session-id.
+   Creates a new session via CLI (ensuring Claude Code's system prompt,
+   CLAUDE.md context, and MCP tools), sends the prompt, and returns
+   the result with session-id.
 
-   Returns {:result <query-result> :session-id <string>}."
+   Extracted to enable testing via with-redefs.
+
+   Returns {:result {:messages [] :response <cli-response>} :session-id <string>}."
   [session-config prompt]
-  (println "[run-sdk-session] Creating session with config:" (pr-str session-config))
-  (println "[run-sdk-session] Prompt:" prompt)
-  (let [result (sdk/with-session [client session-config]
-                 (println "[run-sdk-session] Session created, sending query")
-                 (sdk/session-query client prompt))]
-    (println "[run-sdk-session] Session query complete, session-id:" (:session-id result))
+  (println "[run-cli-session] Creating CLI session with config:" (pr-str session-config))
+  (println "[run-cli-session] Prompt:" prompt)
+  (let [result (session/run-cli-session session-config prompt)]
+    (println "[run-cli-session] Session complete, session-id:" (:session-id result))
     result))
 
 (defn execute-task
-  "Execute a task in a fresh Claude SDK session.
+  "Execute a task in a fresh Claude CLI session.
 
-   Creates an isolated session, injects the execute-story-child prompt
+   Creates an isolated session via CLI (ensuring Claude Code's system prompt,
+   CLAUDE.md context, and MCP tools), injects the execute-story-child prompt
    with the task's parent story ID, and runs until completion or handoff.
 
    Arguments:
@@ -222,7 +212,7 @@
          _ (println "[execute-task] Built session-config:" (pr-str session-config))
          prompt (build-task-prompt task-info)
          _ (println "[execute-task] Built prompt:" prompt)
-         {:keys [result session-id]} (run-sdk-session session-config prompt)]
+         {:keys [result session-id]} (run-cli-session session-config prompt)]
      (println "[execute-task] Got result, session-id:" session-id)
      (println "[execute-task] Messages:" (count (:messages result)))
      (doseq [msg (:messages result)]
@@ -304,15 +294,15 @@
       (console/transition! :selecting-task)
       {:next-prompt nil})))
 
-(defn- run-sdk-with-prompt
-  "Run SDK session with the given prompt and config.
+(defn- run-cli-with-prompt
+  "Run CLI session with the given prompt and config.
    Returns {:session-id string :messages vector :result map}."
   [prompt opts]
   (let [cwd (or (:cwd opts) (System/getProperty "user.dir"))
         session-config (build-task-session-config {:worktree-path cwd} opts)]
-    (println "[run-sdk-with-prompt] Running SDK with prompt:" prompt)
-    (let [{:keys [result session-id]} (run-sdk-session session-config prompt)]
-      (println "[run-sdk-with-prompt] SDK complete, session-id:" session-id)
+    (println "[run-cli-with-prompt] Running CLI with prompt:" prompt)
+    (let [{:keys [result session-id]} (run-cli-session session-config prompt)]
+      (println "[run-cli-with-prompt] CLI complete, session-id:" session-id)
       {:session-id session-id
        :messages (:messages result)
        :result result})))
@@ -329,7 +319,7 @@
     :continue-sdk
     (do
       (console/transition! :running-sdk {:session-id nil})
-      (let [sdk-result (run-sdk-with-prompt (:prompt decision) opts)]
+      (let [sdk-result (run-cli-with-prompt (:prompt decision) opts)]
         (swap! console/console-state assoc :session-id (:session-id sdk-result))
         (let [next-decision (flow/on-sdk-complete flow-model sdk-result @console/console-state)]
           (println "[handle-flow-decision] on-sdk-complete returned:" (pr-str next-decision))

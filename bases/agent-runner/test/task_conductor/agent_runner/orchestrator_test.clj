@@ -1,6 +1,6 @@
 (ns task-conductor.agent-runner.orchestrator-test
   ;; Tests task selection and execution logic for story orchestration.
-  ;; Uses mocked CLI and SDK responses to test edge case handling.
+  ;; Uses mocked CLI responses to test edge case handling.
   ;; Also tests flow model integration for state-driven execution.
   (:require
    [clojure.java.shell :as shell]
@@ -162,48 +162,27 @@
               "should parse EDN output"))))))
 
 (deftest build-task-session-config-test
-  ;; Verifies SDK session config construction for task execution.
-  ;; Tests MCP auto-discovery vs explicit config, and option merging.
+  ;; Verifies CLI session config construction for task execution.
+  ;; Tests :cwd resolution and option merging.
   (testing "build-task-session-config"
     (testing "with minimal task-info"
-      (testing "uses auto-discovery and default permission mode"
+      (testing "sets :cwd from worktree-path"
         (let [task-info {:worktree-path "/path/to/worktree"
                          :task-id 110}
               result (orchestrator/build-task-session-config task-info)]
           (is (= "/path/to/worktree" (:cwd result))
-              "should set :cwd from worktree-path")
-          (is (= "bypassPermissions" (:permission-mode result))
-              "should default to bypassPermissions")
-          (is (= {"mcp-tasks" {:command "mcp-tasks-server"}}
-                 (:mcp-servers result))
-              "should configure mcp-tasks server"))))
-
-    (testing "with explicit :mcp-servers option"
-      (testing "uses explicit config instead of auto-discovery"
-        (let [task-info {:worktree-path "/path/to/worktree"}
-              mcp-config {"mcp-tasks" {:command "mcp-tasks"
-                                       :args ["serve"]}}
-              result (orchestrator/build-task-session-config
-                      task-info
-                      {:mcp-servers mcp-config})]
-          (is (= mcp-config (:mcp-servers result))
-              "should include explicit mcp-servers")
-          (is (nil? (:setting-sources result))
-              "should not include setting-sources"))))
+              "should set :cwd from worktree-path"))))
 
     (testing "with custom options"
       (testing "merges opts over defaults"
         (let [task-info {:worktree-path "/path/to/worktree"}
               result (orchestrator/build-task-session-config
                       task-info
-                      {:max-turns 50
-                       :model "claude-sonnet-4"})]
-          (is (= 50 (:max-turns result))
-              "should include custom max-turns")
-          (is (= "claude-sonnet-4" (:model result))
-              "should include custom model")
-          (is (= "bypassPermissions" (:permission-mode result))
-              "should preserve default permission-mode"))))
+                      {:timeout-ms 180000})]
+          (is (= "/path/to/worktree" (:cwd result))
+              "should set :cwd from worktree-path")
+          (is (= 180000 (:timeout-ms result))
+              "should include custom timeout-ms"))))
 
     (testing "with :cwd override in opts"
       (testing "uses opts :cwd over task-info worktree-path"
@@ -214,26 +193,12 @@
           (is (= "/custom/path" (:cwd result))
               "should use :cwd from opts"))))
 
-    (testing "with permission-mode override"
-      (testing "allows overriding default permission-mode"
-        (let [task-info {:worktree-path "/path/to/worktree"}
-              result (orchestrator/build-task-session-config
-                      task-info
-                      {:permission-mode "default"})]
-          (is (= "default" (:permission-mode result))
-              "should use overridden permission-mode"))))
-
     (testing "with nil worktree-path"
       (testing "falls back to current directory"
         (let [task-info {:task-id 110}
               result (orchestrator/build-task-session-config task-info)]
           (is (= (System/getProperty "user.dir") (:cwd result))
-              "should fall back to current working directory")
-          (is (= "bypassPermissions" (:permission-mode result))
-              "should still set default permission mode")
-          (is (= {"mcp-tasks" {:command "mcp-tasks-server"}}
-                 (:mcp-servers result))
-              "should configure mcp-tasks server"))))))
+              "should fall back to current working directory"))))))
 
 (deftest build-task-prompt-test
   ;; Verifies prompt construction for task execution.
@@ -248,16 +213,16 @@
             "should format prompt with parent story ID")))))
 
 (deftest execute-task-test
-  ;; Verifies task execution creates SDK session with correct config,
+  ;; Verifies task execution creates CLI session with correct config,
   ;; runs the prompt, and returns session info.
   (testing "execute-task"
-    (testing "calls run-sdk-session with correct config and prompt"
+    (testing "calls run-cli-session with correct config and prompt"
       (let [captured-config (atom nil)
             captured-prompt (atom nil)
             mock-session-id "mock-session-123"
             mock-messages [{:type :assistant-message :content "Done"}]
             mock-result {:messages mock-messages}]
-        (with-redefs [orchestrator/run-sdk-session
+        (with-redefs [orchestrator/run-cli-session
                       (fn [config prompt]
                         (reset! captured-config config)
                         (reset! captured-prompt prompt)
@@ -271,16 +236,14 @@
                 "should pass correct prompt")
             ;; Verify config has expected values
             (is (= "/path/to/worktree" (:cwd @captured-config))
-                "should set cwd from worktree-path")
-            (is (= "bypassPermissions" (:permission-mode @captured-config))
-                "should use bypassPermissions")))))
+                "should set cwd from worktree-path")))))
 
     (testing "returns result map with expected keys"
       (let [mock-session-id "session-abc-123"
             mock-messages [{:type :assistant-message
                             :content "Task completed"}]
             mock-result {:messages mock-messages}]
-        (with-redefs [orchestrator/run-sdk-session
+        (with-redefs [orchestrator/run-cli-session
                       (fn [_config _prompt]
                         {:result mock-result :session-id mock-session-id})]
           (let [task-info {:task-id 111
@@ -298,20 +261,20 @@
 
     (testing "passes opts to session config"
       (let [captured-config (atom nil)]
-        (with-redefs [orchestrator/run-sdk-session
+        (with-redefs [orchestrator/run-cli-session
                       (fn [config _prompt]
                         (reset! captured-config config)
                         {:result {:messages []} :session-id "sess"})]
           (let [task-info {:task-id 111
                            :parent-id 57
                            :worktree-path "/path/to/worktree"}]
-            (orchestrator/execute-task task-info {:max-turns 100})
-            (is (= 100 (:max-turns @captured-config))
+            (orchestrator/execute-task task-info {:timeout-ms 180000})
+            (is (= 180000 (:timeout-ms @captured-config))
                 "should pass custom opts to session config")))))
 
     (testing "uses 1-arity form correctly"
       (let [captured-config (atom nil)]
-        (with-redefs [orchestrator/run-sdk-session
+        (with-redefs [orchestrator/run-cli-session
                       (fn [config _prompt]
                         (reset! captured-config config)
                         {:result {:messages []} :session-id "sess"})]
@@ -319,9 +282,8 @@
                            :parent-id 57
                            :worktree-path "/path/to/worktree"}]
             (orchestrator/execute-task task-info)
-            (is (= {"mcp-tasks" {:command "mcp-tasks-server"}}
-                   (:mcp-servers @captured-config))
-                "should configure mcp-tasks server by default")))))))
+            (is (= "/path/to/worktree" (:cwd @captured-config))
+                "should set cwd from worktree-path")))))))
 
 (defn- with-clean-console-state
   "Helper to run body with clean console state and no handoff file I/O."
@@ -356,7 +318,7 @@
                                   {:status :all-complete
                                    :progress {:completed (count tasks)
                                               :total (count tasks)}})))
-                            orchestrator/run-sdk-session
+                            orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (swap! task-counter inc)
                               {:result {:messages []}
@@ -380,7 +342,7 @@
                               {:status :task-available
                                :task task
                                :progress {:completed 0 :total 1}})
-                            orchestrator/run-sdk-session
+                            orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (reset! executed? true)
                               (console/set-paused!)
@@ -455,7 +417,7 @@
                                      :progress {:completed 0 :total 1}})
                                 {:status :all-complete
                                  :progress {:completed 1 :total 1}}))
-                            orchestrator/run-sdk-session
+                            orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (swap! states conj (console/current-state))
                               {:result {:messages []}
@@ -523,7 +485,7 @@
                            :children [{:id 101 :status :closed}]}]
                   mock-fn (mock-story-query-fn states call-counter)
                   fm (flow/story-flow-model mock-fn 42)]
-              (with-redefs [orchestrator/run-sdk-session
+              (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
                               {:result {:messages []} :session-id "sess-1"})]
@@ -552,7 +514,7 @@
                            :children [{:id 101 :status :closed}]}]
                   mock-fn (mock-story-query-fn states call-counter)
                   fm (flow/story-flow-model mock-fn 42)]
-              (with-redefs [orchestrator/run-sdk-session
+              (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
                               {:result {:messages []} :session-id "sess-1"})]
@@ -581,7 +543,7 @@
                            :children [{:id 101 :status :closed}]}]
                   mock-fn (mock-story-query-fn states call-counter)
                   fm (flow/story-flow-model mock-fn 42)]
-              (with-redefs [orchestrator/run-sdk-session
+              (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
                               {:result {:messages []} :session-id "sess-1"})]
@@ -608,7 +570,7 @@
                            :children [{:id 101 :status :closed}]}]
                   mock-fn (mock-story-query-fn states call-counter)
                   fm (flow/story-flow-model mock-fn 42)]
-              (with-redefs [orchestrator/run-sdk-session
+              (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
                               {:result {:messages []} :session-id "sess-1"})]
@@ -633,7 +595,7 @@
                            :children [{:id 101 :status :closed}]}]
                   mock-fn (mock-story-query-fn states call-counter)
                   fm (flow/story-flow-model mock-fn 42)]
-              (with-redefs [orchestrator/run-sdk-session
+              (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
                               {:result {:messages []} :session-id "sess-1"})
@@ -661,7 +623,7 @@
                   mock-fn (mock-story-query-fn [{:story story :children children}]
                                                (atom 0))
                   fm (flow/story-flow-model mock-fn 42)]
-              (with-redefs [orchestrator/run-sdk-session
+              (with-redefs [orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (reset! sdk-called? true)
                               {:result {:messages []} :session-id "sess-1"})]
@@ -713,7 +675,7 @@
                   mock-fn (mock-story-query-fn [{:story story :children children}]
                                                (atom 0))
                   fm (flow/story-flow-model mock-fn 42)]
-              (with-redefs [orchestrator/run-sdk-session
+              (with-redefs [orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (console/set-paused!)
                               {:result {:messages []} :session-id "sess-1"})]
@@ -774,7 +736,7 @@
                                     {:id 102 :status :closed}]}]
                 mock-fn (mock-story-query-fn states call-counter)
                 fm (flow/story-flow-model mock-fn 42)]
-            (with-redefs [orchestrator/run-sdk-session
+            (with-redefs [orchestrator/run-cli-session
                           (fn [_config prompt]
                             (swap! captured-prompts conj prompt)
                             {:result {:messages []} :session-id "sess-1"})
