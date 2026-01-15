@@ -576,29 +576,23 @@
   ;; Example: Select next task from story
   (select-next-task 57)
 
-  ;; Example: Build session config with auto-discovery
+  ;; Example: Build CLI session config
   (build-task-session-config {:worktree-path "/path/to/project"})
-  ;; => {:permission-mode "bypassPermissions"
-  ;;     :cwd "/path/to/project"
-  ;;     :setting-sources ["project"]}
+  ;; => {:cwd "/path/to/project"}
 
-  ;; Example: Build session config with explicit MCP servers
+  ;; Example: Build CLI session config with custom timeout
   (build-task-session-config
    {:worktree-path "/path/to/project"}
-   {:mcp-servers {"mcp-tasks" {:command "mcp-tasks"
-                               :args ["serve"]}}})
-  ;; => {:permission-mode "bypassPermissions"
-  ;;     :cwd "/path/to/project"
-  ;;     :mcp-servers {"mcp-tasks" {...}}}
+   {:timeout-ms 180000})
+  ;; => {:cwd "/path/to/project"
+  ;;     :timeout-ms 180000}
 
-  ;; Example: Execute a task (requires SDK initialization)
-  ;; (sdk/initialize! {:venv-path ".venv"})
+  ;; Example: Execute a task (uses CLI for session creation)
   (execute-task {:task-id 111
                  :parent-id 57
                  :worktree-path "/path/to/worktree"})
   ;; => {:session-id "abc-123"
-  ;;     :messages [...]
-  ;;     :result {...}
+  ;;     :result {:response <cli-json>}
   ;;     :handoff-requested? false}
 
   ;; Example: Execute all tasks in a story (legacy mode)
