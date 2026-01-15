@@ -273,7 +273,7 @@
   (initial-prompt [_this task-info _console-state]
     (let [parent-id (:parent-id task-info)]
       {:action :continue-sdk
-       :prompt (format "/mcp-tasks:execute-story-child %d" parent-id)}))
+       :prompt (format "/mcp-tasks:execute-story-child (MCP) %d" parent-id)}))
 
   (on-cli-return [_this cli-status console-state]
     {:action :continue-sdk
@@ -294,7 +294,7 @@
 
         (:ok result)
         {:action :continue-sdk
-         :prompt (format "/mcp-tasks:execute-story-child %d" story-id)}
+         :prompt (format "/mcp-tasks:execute-story-child (MCP) %d" story-id)}
 
         :else
         {:action :story-done
@@ -316,7 +316,8 @@
   [run-mcp-tasks-fn story-id]
   (let [story-result (run-mcp-tasks-fn "list"
                                        "--task-id" (str story-id)
-                                       "--unique" "true")
+                                       "--unique" "true"
+                                       "--limit" "1")
         children-result (run-mcp-tasks-fn "list"
                                           "--parent-id" (str story-id))]
     (cond
@@ -351,23 +352,23 @@
   (case state
     :unrefined-story
     {:action :continue-sdk
-     :prompt (format "/mcp-tasks:refine-task %d" story-id)}
+     :prompt (format "/mcp-tasks:refine-task (MCP) %d" story-id)}
 
     :refined
     {:action :continue-sdk
-     :prompt (format "/mcp-tasks:create-story-children %d" story-id)}
+     :prompt (format "/mcp-tasks:create-story-children (MCP) %d" story-id)}
 
     :execute-tasks
     {:action :continue-sdk
-     :prompt (format "/mcp-tasks:execute-story-child %d" story-id)}
+     :prompt (format "/mcp-tasks:execute-story-child (MCP) %d" story-id)}
 
     :code-review
     {:action :continue-sdk
-     :prompt (format "/mcp-tasks:review-story-implementation %d" story-id)}
+     :prompt (format "/mcp-tasks:review-story-implementation (MCP) %d" story-id)}
 
     :create-pr
     {:action :continue-sdk
-     :prompt (format "/mcp-tasks:create-story-pr %d" story-id)}
+     :prompt (format "/mcp-tasks:create-story-pr (MCP) %d" story-id)}
 
     :manual-review
     {:action :hand-to-cli

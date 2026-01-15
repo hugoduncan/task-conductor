@@ -6,6 +6,7 @@
    data for programmatic use."
   (:require
    [task-conductor.agent-runner.console :as console]
+   [task-conductor.agent-runner.flow :as flow]
    [task-conductor.agent-runner.orchestrator :as orchestrator]))
 
 ;;; Control Functions
@@ -221,8 +222,10 @@
 (defn run-story
   "Execute all tasks in a story with automated orchestration.
 
-   Creates fresh Claude SDK sessions for each task, running them
-   sequentially until the story is complete, paused, or blocked.
+   Uses the StoryFlowModel by default, which auto-refines unrefined stories
+   and creates child tasks as needed. Creates fresh Claude SDK sessions for
+   each task, running them sequentially until the story is complete, paused,
+   or blocked.
 
    Validates that the console is in :idle state before starting.
    Prints progress information and final outcome.
@@ -230,6 +233,7 @@
    Arguments:
    - story-id: The ID of the story to execute
    - opts: Optional map of session configuration overrides
+     - :flow-model - Custom flow model (defaults to StoryFlowModel)
 
    Returns the result map from orchestrator/execute-story with:
    - :outcome - One of :complete, :paused, :blocked, :no-tasks, :error
@@ -247,7 +251,11 @@
                         :current-state current
                         :required-state :idle})))
      (println (str "Running story " story-id "..."))
-     (let [result (orchestrator/execute-story story-id opts)]
+     (let [opts (if (:flow-model opts)
+                  opts
+                  (assoc opts :flow-model
+                         (flow/story-flow-model orchestrator/run-mcp-tasks story-id)))
+           result (orchestrator/execute-story story-id opts)]
        (case (:outcome result)
          :complete
          (println (str "Story complete! ("

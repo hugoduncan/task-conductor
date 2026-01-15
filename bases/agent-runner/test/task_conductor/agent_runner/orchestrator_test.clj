@@ -494,7 +494,7 @@
                               (swap! captured-prompts conj prompt)
                               {:result {:messages []} :session-id "sess-1"})]
                 (orchestrator/execute-story-with-flow-model fm 42)
-                (is (= "/mcp-tasks:refine-task 42" (first @captured-prompts))
+                (is (= "/mcp-tasks:refine-task (MCP) 42" (first @captured-prompts))
                     "should invoke SDK with refine-task prompt")))))))
 
     (testing "when story is refined without children"
@@ -523,7 +523,7 @@
                               (swap! captured-prompts conj prompt)
                               {:result {:messages []} :session-id "sess-1"})]
                 (orchestrator/execute-story-with-flow-model fm 42)
-                (is (= "/mcp-tasks:create-story-children 42"
+                (is (= "/mcp-tasks:create-story-children (MCP) 42"
                        (first @captured-prompts))
                     "should invoke SDK with create-story-children")))))))
 
@@ -552,7 +552,7 @@
                               (swap! captured-prompts conj prompt)
                               {:result {:messages []} :session-id "sess-1"})]
                 (orchestrator/execute-story-with-flow-model fm 42)
-                (is (= "/mcp-tasks:execute-story-child 42"
+                (is (= "/mcp-tasks:execute-story-child (MCP) 42"
                        (first @captured-prompts))
                     "should invoke SDK with execute-story-child")))))))
 
@@ -579,7 +579,7 @@
                               (swap! captured-prompts conj prompt)
                               {:result {:messages []} :session-id "sess-1"})]
                 (orchestrator/execute-story-with-flow-model fm 42)
-                (is (= "/mcp-tasks:review-story-implementation 42"
+                (is (= "/mcp-tasks:review-story-implementation (MCP) 42"
                        (first @captured-prompts))
                     "should invoke SDK with review-story-implementation")))))))
 
@@ -608,7 +608,7 @@
                               (swap! console/console-state assoc :state :running-cli)
                               {:state @console/console-state})]
                 (let [result (orchestrator/execute-story-with-flow-model fm 42)]
-                  (is (= "/mcp-tasks:create-story-pr 42"
+                  (is (= "/mcp-tasks:create-story-pr (MCP) 42"
                          (first @captured-prompts))
                       "should invoke SDK with create-story-pr")
                   (is (= :handed-to-cli (:outcome result))
@@ -753,13 +753,13 @@
                 ;; 1. review-story-implementation (all complete, need review)
                 ;; 2. execute-story-child (CR task created)
                 ;; 3. create-story-pr (all complete again, code-reviewed)
-                (is (= "/mcp-tasks:review-story-implementation 42"
+                (is (= "/mcp-tasks:review-story-implementation (MCP) 42"
                        (first @captured-prompts))
                     "should start with code review")
-                (is (= "/mcp-tasks:execute-story-child 42"
+                (is (= "/mcp-tasks:execute-story-child (MCP) 42"
                        (second @captured-prompts))
                     "should execute CR task after review")
-                (is (= "/mcp-tasks:create-story-pr 42"
+                (is (= "/mcp-tasks:create-story-pr (MCP) 42"
                        (nth @captured-prompts 2))
                     "should create PR after CR tasks complete")
                 (is (= :handed-to-cli (:outcome result))

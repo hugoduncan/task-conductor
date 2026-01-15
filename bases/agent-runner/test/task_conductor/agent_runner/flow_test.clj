@@ -406,7 +406,7 @@
             console-state {:story-id 91}
             result (flow/initial-prompt fm task-info console-state)]
         (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:execute-story-child 91" (:prompt result)))))
+        (is (= "/mcp-tasks:execute-story-child (MCP) 91" (:prompt result)))))
 
     (testing "returns valid FlowDecision"
       (let [fm (flow/default-flow-model (mock-run-mcp-tasks {}))
@@ -480,7 +480,7 @@
 
         (testing "returns :continue-sdk with prompt"
           (is (= :continue-sdk (:action result)))
-          (is (= "/mcp-tasks:execute-story-child 91" (:prompt result))))))
+          (is (= "/mcp-tasks:execute-story-child (MCP) 91" (:prompt result))))))
 
     (testing "when no more tasks available"
       (let [fm (flow/default-flow-model
@@ -581,31 +581,31 @@
       (testing "returns :continue-sdk with refine-task prompt"
         (let [result (flow/state->flow-decision :unrefined-story 42)]
           (is (= :continue-sdk (:action result)))
-          (is (= "/mcp-tasks:refine-task 42" (:prompt result))))))
+          (is (= "/mcp-tasks:refine-task (MCP) 42" (:prompt result))))))
 
     (testing "for :refined"
       (testing "returns :continue-sdk with create-story-children prompt"
         (let [result (flow/state->flow-decision :refined 42)]
           (is (= :continue-sdk (:action result)))
-          (is (= "/mcp-tasks:create-story-children 42" (:prompt result))))))
+          (is (= "/mcp-tasks:create-story-children (MCP) 42" (:prompt result))))))
 
     (testing "for :execute-tasks"
       (testing "returns :continue-sdk with execute-story-child prompt"
         (let [result (flow/state->flow-decision :execute-tasks 42)]
           (is (= :continue-sdk (:action result)))
-          (is (= "/mcp-tasks:execute-story-child 42" (:prompt result))))))
+          (is (= "/mcp-tasks:execute-story-child (MCP) 42" (:prompt result))))))
 
     (testing "for :code-review"
       (testing "returns :continue-sdk with review-story-implementation prompt"
         (let [result (flow/state->flow-decision :code-review 42)]
           (is (= :continue-sdk (:action result)))
-          (is (= "/mcp-tasks:review-story-implementation 42" (:prompt result))))))
+          (is (= "/mcp-tasks:review-story-implementation (MCP) 42" (:prompt result))))))
 
     (testing "for :create-pr"
       (testing "returns :continue-sdk with create-story-pr prompt"
         (let [result (flow/state->flow-decision :create-pr 42)]
           (is (= :continue-sdk (:action result)))
-          (is (= "/mcp-tasks:create-story-pr 42" (:prompt result))))))
+          (is (= "/mcp-tasks:create-story-pr (MCP) 42" (:prompt result))))))
 
     (testing "for :manual-review"
       (testing "returns :hand-to-cli with reason"
@@ -669,14 +669,14 @@
             fm (flow/story-flow-model (mock-story-query story []) 42)
             result (flow/initial-prompt fm {} {})]
         (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:refine-task 42" (:prompt result)))))
+        (is (= "/mcp-tasks:refine-task (MCP) 42" (:prompt result)))))
 
     (testing "for refined story without children"
       (let [story {:id 42 :meta {:refined true}}
             fm (flow/story-flow-model (mock-story-query story []) 42)
             result (flow/initial-prompt fm {} {})]
         (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:create-story-children 42" (:prompt result)))))
+        (is (= "/mcp-tasks:create-story-children (MCP) 42" (:prompt result)))))
 
     (testing "for story with incomplete children"
       (let [story {:id 42 :meta {:refined true}}
@@ -684,7 +684,7 @@
             fm (flow/story-flow-model (mock-story-query story children) 42)
             result (flow/initial-prompt fm {} {})]
         (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:execute-story-child 42" (:prompt result)))))
+        (is (= "/mcp-tasks:execute-story-child (MCP) 42" (:prompt result)))))
 
     (testing "for story with all children complete (needs code review)"
       (let [story {:id 42 :meta {:refined true}}
@@ -692,7 +692,7 @@
             fm (flow/story-flow-model (mock-story-query story children) 42)
             result (flow/initial-prompt fm {} {})]
         (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:review-story-implementation 42" (:prompt result)))))
+        (is (= "/mcp-tasks:review-story-implementation (MCP) 42" (:prompt result)))))
 
     (testing "for story with code review complete (needs PR)"
       (let [story {:id 42 :meta {:refined true :code-reviewed "2025-01-01"}}
@@ -700,7 +700,7 @@
             fm (flow/story-flow-model (mock-story-query story children) 42)
             result (flow/initial-prompt fm {} {})]
         (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:create-story-pr 42" (:prompt result)))))
+        (is (= "/mcp-tasks:create-story-pr (MCP) 42" (:prompt result)))))
 
     (testing "for story with PR (manual review)"
       (let [story {:id 42 :meta {:refined true :code-reviewed "ts" :pr-num 123}}
@@ -766,7 +766,7 @@
             fm (flow/story-flow-model (mock-story-query story children) 42)
             result (flow/on-sdk-complete fm {} {})]
         (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:execute-story-child 42" (:prompt result)))))
+        (is (= "/mcp-tasks:execute-story-child (MCP) 42" (:prompt result)))))
 
     (testing "transitions to code-review when tasks complete"
       (let [story {:id 42 :meta {:refined true}}
@@ -774,7 +774,7 @@
             fm (flow/story-flow-model (mock-story-query story children) 42)
             result (flow/on-sdk-complete fm {} {})]
         (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:review-story-implementation 42" (:prompt result)))))
+        (is (= "/mcp-tasks:review-story-implementation (MCP) 42" (:prompt result)))))
 
     (testing "returns :story-done when story complete"
       (let [story {:id 42 :meta {:pr-merged? true}}
@@ -891,7 +891,7 @@
               fm (flow/story-flow-model (mock-story-query story children) 42)
               result (flow/on-task-complete fm {})]
           (is (= :continue-sdk (:action result)))
-          (is (= "/mcp-tasks:execute-story-child 42" (:prompt result)))))
+          (is (= "/mcp-tasks:execute-story-child (MCP) 42" (:prompt result)))))
 
       (testing "transitions to code-review when all tasks complete"
         (let [story {:id 42 :meta {:refined true}}
@@ -899,7 +899,7 @@
               fm (flow/story-flow-model (mock-story-query story children) 42)
               result (flow/on-task-complete fm {})]
           (is (= :continue-sdk (:action result)))
-          (is (= "/mcp-tasks:review-story-implementation 42" (:prompt result))))))
+          (is (= "/mcp-tasks:review-story-implementation (MCP) 42" (:prompt result))))))
 
     (testing "transitions back to execute-tasks when CR: tasks created"
       ;; After code review, if CR: tasks are created, state goes back to execute-tasks
@@ -909,7 +909,7 @@
             fm (flow/story-flow-model (mock-story-query story children) 42)
             result (flow/on-task-complete fm {})]
         (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:execute-story-child 42" (:prompt result)))))
+        (is (= "/mcp-tasks:execute-story-child (MCP) 42" (:prompt result)))))
 
     (testing "transitions to create-pr when code-reviewed and all complete"
       (let [story {:id 42 :meta {:refined true :code-reviewed "2025-01-01"}}
@@ -917,7 +917,7 @@
             fm (flow/story-flow-model (mock-story-query story children) 42)
             result (flow/on-task-complete fm {})]
         (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:create-story-pr 42" (:prompt result)))))
+        (is (= "/mcp-tasks:create-story-pr (MCP) 42" (:prompt result)))))
 
     (testing "handles query errors"
       (let [fm (flow/story-flow-model
