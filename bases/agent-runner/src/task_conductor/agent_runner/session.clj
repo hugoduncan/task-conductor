@@ -12,40 +12,82 @@
    The session-id is the key identifier that enables hand-off between
    different clients (SDK or CLI)."
   (:require
+   [task-conductor.agent-runner.cli :as cli]
    [task-conductor.claude-agent-sdk.interface :as sdk]))
 
 ;;; Session Lifecycle Functions
 
+(defn- build-cli-opts
+  "Build CLI options map from session config/opts and prompt.
+  Handles :cwd/:working-dir normalization and :timeout-ms."
+  [opts prompt]
+  (let [working-dir (or (:cwd opts)
+                        (:working-dir opts)
+                        (System/getProperty "user.dir"))
+        timeout-ms (:timeout-ms opts)]
+    (cond-> {:working-dir working-dir
+             :prompt prompt}
+      timeout-ms (assoc :timeout-ms timeout-ms))))
+
 (defn run-and-capture-session
   "Run a prompt and capture the session-id for later resumption.
 
-   Executes a single prompt in a new session and returns both the
-   response and the session-id that can be used for resumption.
+   Executes a single prompt in a new session via the CLI, ensuring
+   the session has Claude Code's system prompt, CLAUDE.md context,
+   and MCP tools.
 
-   Options map supports all claude-agent-sdk options, commonly:
-   - :model - model to use (defaults to SDK default)
-   - :permission-mode - \"bypassPermissions\" for non-interactive use
-   - :max-turns - limit turns (default: 1 for single response)
+   Options:
+   - :cwd - working directory for Claude (default: current directory)
+   - :timeout-ms - timeout for CLI operation (default: 120000ms)
 
    Returns a map with:
    - :session-id - the session identifier for resumption
-   - :messages - vector of response messages
-   - :result - the last message result (convenience)
+   - :messages - empty vector (CLI doesn't return message history)
+   - :result - the parsed JSON response from CLI
+
+   Throws ex-info on failure with :type key:
+   - :cli/timeout - process exceeded timeout
+   - :cli/non-zero-exit - process exited with non-zero code
+   - :cli/parse-error - failed to parse JSON output
+   - :cli/missing-session-id - response lacks session_id field
 
    Example:
-     (run-and-capture-session \"Remember: X=42\" {:max-turns 1})
-     ;; => {:session-id \"abc-123\" :messages [...] :result {...}}"
+     (run-and-capture-session \"Remember: X=42\" {:cwd \"/project\"})
+     ;; => {:session-id \"abc-123\" :messages [] :result {...}}"
   ([prompt]
    (run-and-capture-session prompt {}))
   ([prompt opts]
-   (let [default-opts {:max-turns 1
-                       :permission-mode "bypassPermissions"}
-         merged-opts (merge default-opts opts)
-         {:keys [result session-id]} (sdk/with-session [client merged-opts]
-                                       (sdk/session-query client prompt))]
+   (let [{:keys [session-id response]} (cli/create-session-via-cli
+                                        (build-cli-opts opts prompt))]
      {:session-id session-id
-      :messages (:messages result)
-      :result result})))
+      :messages []
+      :result response})))
+
+(defn run-cli-session
+  "Run a CLI session with the given config and prompt.
+
+   Creates a new session via CLI (ensuring Claude Code's system prompt,
+   CLAUDE.md context, and MCP tools), sends the prompt, and returns the
+   result with session-id.
+
+   This is the CLI equivalent of sdk/with-session for new sessions.
+
+   Config options:
+   - :cwd - working directory for Claude (default: current directory)
+   - :timeout-ms - timeout for CLI operation (default: 120000ms)
+
+   Returns a map with:
+   - :session-id - the session identifier for resumption
+   - :messages - empty vector (CLI doesn't return message history)
+   - :result - the parsed JSON response from CLI
+
+   Note: CLI sessions don't return message history, so :messages is empty."
+  [session-config prompt]
+  (let [{:keys [session-id response]} (cli/create-session-via-cli
+                                       (build-cli-opts session-config prompt))]
+    {:session-id session-id
+     :messages []
+     :result response}))
 
 (defn resume-session
   "Resume a previous session and run a follow-up prompt.
