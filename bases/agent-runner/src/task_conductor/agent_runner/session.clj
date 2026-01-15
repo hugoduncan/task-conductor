@@ -17,6 +17,18 @@
 
 ;;; Session Lifecycle Functions
 
+(defn- build-cli-opts
+  "Build CLI options map from session config/opts and prompt.
+  Handles :cwd/:working-dir normalization and :timeout-ms."
+  [opts prompt]
+  (let [working-dir (or (:cwd opts)
+                        (:working-dir opts)
+                        (System/getProperty "user.dir"))
+        timeout-ms (:timeout-ms opts)]
+    (cond-> {:working-dir working-dir
+             :prompt prompt}
+      timeout-ms (assoc :timeout-ms timeout-ms))))
+
 (defn run-and-capture-session
   "Run a prompt and capture the session-id for later resumption.
 
@@ -45,12 +57,8 @@
   ([prompt]
    (run-and-capture-session prompt {}))
   ([prompt opts]
-   (let [working-dir (or (:cwd opts) (System/getProperty "user.dir"))
-         timeout-ms (:timeout-ms opts)
-         cli-opts (cond-> {:working-dir working-dir
-                           :prompt prompt}
-                    timeout-ms (assoc :timeout-ms timeout-ms))
-         {:keys [session-id response]} (cli/create-session-via-cli cli-opts)]
+   (let [{:keys [session-id response]} (cli/create-session-via-cli
+                                        (build-cli-opts opts prompt))]
      {:session-id session-id
       :messages []
       :result response})))
@@ -72,12 +80,8 @@
 
    Note: CLI sessions don't return message history, so :messages is empty."
   [session-config prompt]
-  (let [working-dir (or (:cwd session-config) (System/getProperty "user.dir"))
-        timeout-ms (:timeout-ms session-config)
-        cli-opts (cond-> {:working-dir working-dir
-                          :prompt prompt}
-                   timeout-ms (assoc :timeout-ms timeout-ms))
-        {:keys [session-id response]} (cli/create-session-via-cli cli-opts)]
+  (let [{:keys [session-id response]} (cli/create-session-via-cli
+                                       (build-cli-opts session-config prompt))]
     {:result {:messages []
               :response response}
      :session-id session-id}))
