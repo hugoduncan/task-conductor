@@ -76,15 +76,18 @@
    - :cwd - working directory for Claude (default: current directory)
    - :timeout-ms - timeout for CLI operation (default: 120000ms)
 
-   Returns {:result {:messages [] :response <cli-response>} :session-id <string>}.
+   Returns a map with:
+   - :session-id - the session identifier for resumption
+   - :messages - empty vector (CLI doesn't return message history)
+   - :result - the parsed JSON response from CLI
 
    Note: CLI sessions don't return message history, so :messages is empty."
   [session-config prompt]
   (let [{:keys [session-id response]} (cli/create-session-via-cli
                                        (build-cli-opts session-config prompt))]
-    {:result {:messages []
-              :response response}
-     :session-id session-id}))
+    {:session-id session-id
+     :messages []
+     :result response}))
 
 (defn resume-session
   "Resume a previous session and run a follow-up prompt.

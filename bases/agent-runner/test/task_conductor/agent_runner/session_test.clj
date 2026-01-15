@@ -145,10 +145,10 @@
                                   :result "Done!"}})]
         (let [result (session/run-cli-session {:cwd "/test"} "Hello")]
           (is (= "cli-session-456" (:session-id result)))
-          (is (= [] (get-in result [:result :messages])))
+          (is (= [] (:messages result)))
           (is (= {:session_id "cli-session-456"
                   :result "Done!"}
-                 (get-in result [:result :response]))))))
+                 (:result result))))))
 
     (testing "passes prompt to CLI"
       (let [captured-opts (atom nil)]

@@ -221,12 +221,14 @@
             captured-prompt (atom nil)
             mock-session-id "mock-session-123"
             mock-messages [{:type :assistant-message :content "Done"}]
-            mock-result {:messages mock-messages}]
+            mock-result {:some "response"}]
         (with-redefs [orchestrator/run-cli-session
                       (fn [config prompt]
                         (reset! captured-config config)
                         (reset! captured-prompt prompt)
-                        {:result mock-result :session-id mock-session-id})]
+                        {:session-id mock-session-id
+                         :messages mock-messages
+                         :result mock-result})]
           (let [task-info {:task-id 111
                            :parent-id 57
                            :worktree-path "/path/to/worktree"}]
@@ -242,10 +244,12 @@
       (let [mock-session-id "session-abc-123"
             mock-messages [{:type :assistant-message
                             :content "Task completed"}]
-            mock-result {:messages mock-messages}]
+            mock-result {:some "response"}]
         (with-redefs [orchestrator/run-cli-session
                       (fn [_config _prompt]
-                        {:result mock-result :session-id mock-session-id})]
+                        {:session-id mock-session-id
+                         :messages mock-messages
+                         :result mock-result})]
           (let [task-info {:task-id 111
                            :parent-id 57
                            :worktree-path "/path/to/worktree"}
@@ -264,7 +268,7 @@
         (with-redefs [orchestrator/run-cli-session
                       (fn [config _prompt]
                         (reset! captured-config config)
-                        {:result {:messages []} :session-id "sess"})]
+                        {:session-id "sess" :messages [] :result {}})]
           (let [task-info {:task-id 111
                            :parent-id 57
                            :worktree-path "/path/to/worktree"}]
@@ -277,7 +281,7 @@
         (with-redefs [orchestrator/run-cli-session
                       (fn [config _prompt]
                         (reset! captured-config config)
-                        {:result {:messages []} :session-id "sess"})]
+                        {:session-id "sess" :messages [] :result {}})]
           (let [task-info {:task-id 111
                            :parent-id 57
                            :worktree-path "/path/to/worktree"}]

@@ -172,7 +172,7 @@
 
    Extracted to enable testing via with-redefs.
 
-   Returns {:result {:messages [] :response <cli-response>} :session-id <string>}."
+   Returns {:session-id <string> :messages [] :result <cli-response>}."
   [session-config prompt]
   (println "[run-cli-session] Creating CLI session with config:" (pr-str session-config))
   (println "[run-cli-session] Prompt:" prompt)
@@ -212,10 +212,10 @@
          _ (println "[execute-task] Built session-config:" (pr-str session-config))
          prompt (build-task-prompt task-info)
          _ (println "[execute-task] Built prompt:" prompt)
-         {:keys [result session-id]} (run-cli-session session-config prompt)]
+         {:keys [messages result session-id]} (run-cli-session session-config prompt)]
      (println "[execute-task] Got result, session-id:" session-id)
-     (println "[execute-task] Messages:" (count (:messages result)))
-     (doseq [msg (:messages result)]
+     (println "[execute-task] Messages:" (count messages))
+     (doseq [msg messages]
        (println "[execute-task] Message type:" (:type msg))
        (when (= :assistant-message (:type msg))
          (println "[execute-task] Assistant content:"
@@ -225,7 +225,7 @@
                   "num-turns:" (:num-turns msg)
                   "result:" (:result msg))))
      {:session-id session-id
-      :messages (:messages result)
+      :messages messages
       :result result
       :handoff-requested? false})))
 
