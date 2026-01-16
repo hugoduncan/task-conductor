@@ -221,3 +221,4 @@
             (is (not= :timeout result))
             (is (= :error (:status result)))
             (is (= "DevEnv shutdown" (:message result)))))))))
+

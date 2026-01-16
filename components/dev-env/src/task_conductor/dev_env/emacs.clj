@@ -38,31 +38,74 @@
           (binding [*out* *err*]
             (println "Callback exception for session" session-id ":" (.getMessage e))))))))
 
+(defn- notify-all-callbacks-error!
+  "Notify all pending callbacks of an error condition.
+   Clears the callbacks atom after notification."
+  [callbacks message]
+  (doseq [[session-id callback] @callbacks]
+    (try
+      (callback {:session-id session-id
+                 :status :error
+                 :message message})
+      (catch Exception _)))
+  (reset! callbacks {}))
+
 (defn- start-reader-thread
   "Start background thread that reads messages and dispatches to callbacks.
+   Detects connection loss and notifies all pending callbacks.
    Returns the Thread object."
-  [channel callbacks running]
+  [channel-atom callbacks running]
   (let [thread (Thread.
                 (fn []
-                  (while @running
-                    (when-let [msg (socket/receive-message! channel)]
-                      (if (:error msg)
-                        (binding [*out* *err*]
-                          (println "Socket parse error:" (:raw msg)))
-                        (dispatch-message callbacks msg)))))
+                  (loop []
+                    (when @running
+                      (let [msg (socket/receive-message! @channel-atom)]
+                        (cond
+                          ;; Connection closed or error - notify callbacks
+                          (nil? msg)
+                          (do
+                            (binding [*out* *err*]
+                              (println "Connection to Emacs lost"))
+                            (notify-all-callbacks-error! callbacks "Connection lost")
+                            (reset! running false))
+
+                          ;; Parse error - log and continue
+                          (:error msg)
+                          (do
+                            (binding [*out* *err*]
+                              (println "Socket parse error:" (:raw msg)))
+                            (recur))
+
+                          ;; Valid message - dispatch and continue
+                          :else
+                          (do
+                            (dispatch-message callbacks msg)
+                            (recur)))))))
                 "emacs-dev-env-reader")]
     (.setDaemon thread true)
     (.start thread)
     thread))
 
-(defrecord EmacsDevEnv [channel callbacks running reader-thread]
+(defn- try-send-with-reconnect!
+  "Try to send message, reconnecting once on failure.
+   Returns true if sent successfully, false otherwise."
+  [channel-atom socket-path message]
+  (or (socket/send-message! @channel-atom message)
+      ;; First attempt failed, try to reconnect
+      (when-let [new-channel (socket/connect! socket-path)]
+        (socket/disconnect! @channel-atom)
+        (reset! channel-atom new-channel)
+        (socket/send-message! new-channel message))))
+
+(defrecord EmacsDevEnv [channel-atom socket-path callbacks running reader-thread]
   dev-env/DevEnv
 
   (open-cli-session [_this opts callback]
     (let [session-id (:session-id opts)]
       (swap! callbacks assoc session-id callback)
-      (let [sent? (socket/send-message!
-                   channel
+      (let [sent? (try-send-with-reconnect!
+                   channel-atom
+                   socket-path
                    {:type "open-session"
                     :session-id session-id
                     :prompt (:prompt opts)
@@ -75,8 +118,9 @@
       {:status :requested}))
 
   (close-session [_this session-id]
-    (socket/send-message!
-     channel
+    (try-send-with-reconnect!
+     channel-atom
+     socket-path
      {:type "close-session"
       :session-id session-id})
     {:status :requested}))
@@ -92,17 +136,18 @@
    (create-emacs-dev-env socket/default-socket-path))
   ([path]
    (when-let [channel (socket/connect! path)]
-     (let [callbacks (atom {})
+     (let [channel-atom (atom channel)
+           callbacks (atom {})
            running (atom true)
-           reader-thread (start-reader-thread channel callbacks running)]
-       (->EmacsDevEnv channel callbacks running reader-thread)))))
+           reader-thread (start-reader-thread channel-atom callbacks running)]
+       (->EmacsDevEnv channel-atom path callbacks running reader-thread)))))
 
 (defn stop!
   "Stop the EmacsDevEnv, closing the socket and stopping the reader thread.
    Any pending callbacks will receive an error result."
   [^EmacsDevEnv env]
   (reset! (:running env) false)
-  (socket/disconnect! (:channel env))
+  (socket/disconnect! @(:channel-atom env))
   ;; Notify pending callbacks of shutdown
   (doseq [[session-id callback] @(:callbacks env)]
     (try
