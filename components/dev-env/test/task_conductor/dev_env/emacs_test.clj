@@ -222,6 +222,24 @@
           (let [msg (read-json-message client)]
             (is (= "close-session" (:type msg)))
             (is (= "close-me" (:session-id msg))))
+          (emacs/stop! env))))
+
+    (testing "invokes pending callback with :cancelled status"
+      (with-test-server [server]
+        (let [env (emacs/create-emacs-dev-env (:path server))
+              result-promise (promise)]
+          ;; Register a session with callback
+          (dev-env/open-cli-session
+           env
+           {:session-id "to-cancel"}
+           (fn [r] (deliver result-promise r)))
+          ;; Close the session before any response
+          (dev-env/close-session env "to-cancel")
+          (let [result (deref result-promise 500 :timeout)]
+            (is (not= :timeout result)
+                "callback should be invoked")
+            (is (= "to-cancel" (:session-id result)))
+            (is (= :cancelled (:status result))))
           (emacs/stop! env))))))
 
 (deftest stop!-test

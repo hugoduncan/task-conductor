@@ -133,6 +133,15 @@
           {:status :requested}))))
 
   (close-session [_this session-id]
+    ;; Invoke callback with :cancelled status before removing
+    (when-let [callback (get @callbacks session-id)]
+      (swap! callbacks dissoc session-id)
+      (try
+        (callback {:session-id session-id
+                   :status :cancelled})
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "Callback exception for session" session-id ":" (.getMessage e))))))
     (try-send-with-reconnect!
      channel-atom
      socket-path
