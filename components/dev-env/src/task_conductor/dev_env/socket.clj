@@ -15,6 +15,10 @@
   "Default socket path for dev-env communication."
   "/tmp/task-conductor-dev-env.sock")
 
+(def buffer-size
+  "Buffer size for socket read operations, in bytes."
+  4096)
+
 (defn connect!
   "Connect to a UNIX domain socket.
 
@@ -87,7 +91,7 @@
    - {:error :parse-error, :raw <string>} if JSON parsing fails"
   [^SocketChannel channel]
   (let [buffer-atom (atom "")
-        byte-buffer (ByteBuffer/allocate 4096)]
+        byte-buffer (ByteBuffer/allocate buffer-size)]
     (fn []
       (try
         ;; First check if we have a complete message buffered

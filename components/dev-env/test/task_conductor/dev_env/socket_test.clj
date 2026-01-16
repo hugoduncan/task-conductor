@@ -34,7 +34,7 @@
                     (while @running
                       (when-let [client (.accept server)]
                         (try
-                          (let [buffer (ByteBuffer/allocate 4096)
+                          (let [buffer (ByteBuffer/allocate socket/buffer-size)
                                 sb (StringBuilder.)]
                             (loop []
                               (let [bytes-read (.read client buffer)]

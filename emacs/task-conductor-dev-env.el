@@ -54,6 +54,12 @@
   :type 'boolean
   :group 'task-conductor-dev-env)
 
+(defcustom task-conductor-dev-env-prompt-delay 0.5
+  "Delay in seconds before sending prompt after session starts.
+Allows time for the Claude CLI session to initialize."
+  :type 'number
+  :group 'task-conductor-dev-env)
+
 ;;; Internal Variables
 
 (defvar task-conductor-dev-env--server-process nil
@@ -291,7 +297,7 @@ Starts a Claude CLI session with --resume using claude-code.el."
                             #'task-conductor-dev-env--buffer-kill-handler nil t))
                 ;; Send prompt if provided, after a small delay for session to initialize
                 (when (and prompt (not (string-empty-p prompt)))
-                  (run-at-time 0.5 nil
+                  (run-at-time task-conductor-dev-env-prompt-delay nil
                                (lambda (buf prompt-text)
                                  (when (buffer-live-p buf)
                                    (with-current-buffer buf
