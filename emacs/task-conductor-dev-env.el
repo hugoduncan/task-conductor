@@ -26,6 +26,15 @@
 ;;; Code:
 
 (require 'json)
+(require 'cl-lib)
+
+;; Forward declarations for claude-code.el
+(declare-function claude-code--start "claude-code")
+(declare-function claude-code--find-claude-buffers-for-directory "claude-code")
+(declare-function claude-code--term-send-string "claude-code")
+(declare-function claude-code--kill-buffer "claude-code")
+(defvar claude-code-terminal-backend)
+(defvar claude-code-event-hook)
 
 ;;; Customization
 
@@ -51,6 +60,12 @@
 
 (defvar task-conductor-dev-env--client-process nil
   "The current client connection process.")
+
+(defvar task-conductor-dev-env--sessions (make-hash-table :test 'equal)
+  "Hash table mapping session-id to Claude buffer.")
+
+(defvar task-conductor-dev-env--buffer-sessions (make-hash-table :test 'eq)
+  "Hash table mapping buffer to session-id for reverse lookup.")
 
 ;;; Debug Logging
 
@@ -105,6 +120,108 @@ EXIT-CODE is the CLI exit code."
      (session-id . ,session-id)
      (message . ,error-message))))
 
+;;; Session Management
+
+(defun task-conductor-dev-env--register-session (session-id buffer)
+  "Register SESSION-ID with BUFFER in session tracking tables."
+  (puthash session-id buffer task-conductor-dev-env--sessions)
+  (puthash buffer session-id task-conductor-dev-env--buffer-sessions)
+  (task-conductor-dev-env--debug "Registered session %s with buffer %s"
+                                  session-id (buffer-name buffer)))
+
+(defun task-conductor-dev-env--unregister-session (session-id)
+  "Remove SESSION-ID from session tracking tables."
+  (when-let ((buffer (gethash session-id task-conductor-dev-env--sessions)))
+    (remhash buffer task-conductor-dev-env--buffer-sessions))
+  (remhash session-id task-conductor-dev-env--sessions)
+  (task-conductor-dev-env--debug "Unregistered session %s" session-id))
+
+(defun task-conductor-dev-env--get-buffer (session-id)
+  "Get the buffer associated with SESSION-ID."
+  (gethash session-id task-conductor-dev-env--sessions))
+
+(defun task-conductor-dev-env--get-session-id (buffer)
+  "Get the session-id associated with BUFFER."
+  (gethash buffer task-conductor-dev-env--buffer-sessions))
+
+(defun task-conductor-dev-env--read-handoff-edn (working-dir)
+  "Read hook status from .task-conductor/handoff.edn in WORKING-DIR.
+Returns an alist or nil if file doesn't exist."
+  (let ((handoff-file (expand-file-name ".task-conductor/handoff.edn" working-dir)))
+    (when (file-exists-p handoff-file)
+      (condition-case err
+          (with-temp-buffer
+            (insert-file-contents handoff-file)
+            ;; Parse EDN as JSON-compatible format
+            ;; EDN keywords become strings, vectors become arrays
+            (let ((content (buffer-string)))
+              ;; Simple conversion: :key -> "key" for JSON compatibility
+              (setq content (replace-regexp-in-string ":\\([a-zA-Z0-9_-]+\\)" "\"\\1\"" content))
+              ;; Convert EDN maps { } to JSON objects
+              (setq content (replace-regexp-in-string "\\([^\\]\\){" "\\1{" content))
+              (json-read-from-string content)))
+        (error
+         (task-conductor-dev-env--debug "Error reading handoff.edn: %s"
+                                        (error-message-string err))
+         nil)))))
+
+(defun task-conductor-dev-env--buffer-kill-handler ()
+  "Handle buffer being killed - send error if session was active."
+  (when-let ((session-id (task-conductor-dev-env--get-session-id (current-buffer))))
+    (task-conductor-dev-env--debug "Buffer killed for session %s" session-id)
+    (task-conductor-dev-env-send-error session-id "Session buffer closed by user")
+    (task-conductor-dev-env--unregister-session session-id)))
+
+;;; Event Hook Integration
+
+(defun task-conductor-dev-env--event-hook-handler (event)
+  "Handle claude-code-event-hook EVENT.
+Detects idle/completion events and sends session-complete response."
+  (let* ((event-type (plist-get event :type))
+         (buffer-name (plist-get event :buffer-name))
+         (json-data (plist-get event :json-data))
+         (buffer (and buffer-name (get-buffer buffer-name)))
+         (session-id (and buffer (task-conductor-dev-env--get-session-id buffer))))
+    (task-conductor-dev-env--debug "Event: type=%s buffer=%s session=%s"
+                                    event-type buffer-name session-id)
+    ;; Only handle events for sessions we're tracking
+    (when session-id
+      (cond
+       ;; Handle idle/stop events
+       ((member event-type '("stop" "idle" "finished"))
+        (let* ((working-dir (and buffer (buffer-local-value 'default-directory buffer)))
+               (hook-status (or (task-conductor-dev-env--read-handoff-edn working-dir)
+                               json-data
+                               '()))
+               (exit-code (or (and json-data (alist-get 'exit-code json-data))
+                             (and (listp hook-status) (alist-get 'exit-code hook-status))
+                             0)))
+          (task-conductor-dev-env--debug
+           "Session %s completed with status %s" session-id event-type)
+          (task-conductor-dev-env-send-session-complete
+           session-id
+           (if (equal event-type "stop") "completed" event-type)
+           hook-status
+           exit-code)
+          ;; Unregister session after completion
+          (task-conductor-dev-env--unregister-session session-id)))
+       ;; Handle error events
+       ((equal event-type "error")
+        (let ((error-msg (or (and json-data (alist-get 'message json-data))
+                            "Unknown error")))
+          (task-conductor-dev-env-send-error session-id error-msg)
+          (task-conductor-dev-env--unregister-session session-id)))))))
+
+(defun task-conductor-dev-env--setup-event-hook ()
+  "Add task-conductor handler to claude-code-event-hook."
+  (when (boundp 'claude-code-event-hook)
+    (add-hook 'claude-code-event-hook #'task-conductor-dev-env--event-hook-handler)))
+
+(defun task-conductor-dev-env--teardown-event-hook ()
+  "Remove task-conductor handler from claude-code-event-hook."
+  (when (boundp 'claude-code-event-hook)
+    (remove-hook 'claude-code-event-hook #'task-conductor-dev-env--event-hook-handler)))
+
 ;;; Message Dispatch
 
 (defvar task-conductor-dev-env-message-handlers
@@ -123,23 +240,74 @@ EXIT-CODE is the CLI exit code."
 
 (defun task-conductor-dev-env--handle-open-session (message)
   "Handle open-session MESSAGE.
-To be implemented in session management task."
+Starts a Claude CLI session with --resume using claude-code.el."
   (let ((session-id (alist-get 'session-id message))
         (prompt (alist-get 'prompt message))
         (working-dir (alist-get 'working-dir message)))
     (task-conductor-dev-env--debug
      "open-session: id=%s dir=%s prompt=%s"
      session-id working-dir (and prompt (substring prompt 0 (min 50 (length prompt)))))
-    ;; Stub - will be implemented in task #156
-    nil))
+    (condition-case err
+        (let* ((default-directory (or working-dir default-directory))
+               ;; Start Claude with --resume <session-id>
+               (extra-switches (list "--resume" session-id))
+               ;; Override claude-code--directory to use working-dir
+               (buffer (cl-letf (((symbol-function 'claude-code--directory)
+                                  (lambda () default-directory)))
+                         ;; Start Claude without prompting for instance name
+                         ;; and don't switch to buffer automatically
+                         (claude-code--start nil extra-switches nil nil)
+                         ;; Get the buffer that was just created
+                         (car (claude-code--find-claude-buffers-for-directory
+                               default-directory)))))
+          (if buffer
+              (progn
+                ;; Register the session
+                (task-conductor-dev-env--register-session session-id buffer)
+                ;; Add buffer kill handler
+                (with-current-buffer buffer
+                  (add-hook 'kill-buffer-hook
+                            #'task-conductor-dev-env--buffer-kill-handler nil t))
+                ;; Send prompt if provided, after a small delay for session to initialize
+                (when (and prompt (not (string-empty-p prompt)))
+                  (run-at-time 0.5 nil
+                               (lambda (buf prompt-text)
+                                 (when (buffer-live-p buf)
+                                   (with-current-buffer buf
+                                     (claude-code--term-send-string
+                                      claude-code-terminal-backend prompt-text)
+                                     (sit-for 0.1)
+                                     (claude-code--term-send-string
+                                      claude-code-terminal-backend (kbd "RET")))))
+                               buffer prompt))
+                (task-conductor-dev-env--debug "Session %s started in buffer %s"
+                                               session-id (buffer-name buffer)))
+            (task-conductor-dev-env-send-error session-id "Failed to create Claude buffer")))
+      (error
+       (task-conductor-dev-env--debug "Error starting session: %s"
+                                      (error-message-string err))
+       (task-conductor-dev-env-send-error session-id
+                                          (format "Error: %s" (error-message-string err)))))))
 
 (defun task-conductor-dev-env--handle-close-session (message)
   "Handle close-session MESSAGE.
-To be implemented in session management task."
+Closes the Claude CLI session buffer."
   (let ((session-id (alist-get 'session-id message)))
     (task-conductor-dev-env--debug "close-session: id=%s" session-id)
-    ;; Stub - will be implemented in task #156
-    nil))
+    (if-let ((buffer (task-conductor-dev-env--get-buffer session-id)))
+        (progn
+          ;; Remove session first to prevent kill-handler from sending error
+          (task-conductor-dev-env--unregister-session session-id)
+          ;; Kill the buffer
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              ;; Remove our kill handler first
+              (remove-hook 'kill-buffer-hook
+                           #'task-conductor-dev-env--buffer-kill-handler t)
+              ;; Kill the Claude process and buffer
+              (claude-code--kill-buffer buffer)))
+          (task-conductor-dev-env--debug "Session %s closed" session-id))
+      (task-conductor-dev-env--debug "Session %s not found" session-id))))
 
 ;;; Process Filter and Sentinel
 
@@ -179,9 +347,9 @@ PROC is the connection process, EVENT describes the state change."
     (when (eq proc task-conductor-dev-env--client-process)
       (setq task-conductor-dev-env--client-process nil))))
 
-(defun task-conductor-dev-env--server-sentinel (proc event)
+(defun task-conductor-dev-env--server-sentinel (_proc event)
   "Sentinel for the server process.
-PROC is the server process, EVENT describes the state change."
+_PROC is the server process, EVENT describes the state change."
   (task-conductor-dev-env--debug "Server event: %s" (string-trim event)))
 
 ;;; Socket Management
@@ -198,8 +366,8 @@ PROC is the server process, EVENT describes the state change."
        (message "task-conductor-dev-env: Failed to delete socket: %s"
                 (error-message-string err))))))
 
-(defun task-conductor-dev-env--make-client-filter (server-proc)
-  "Create a filter function that registers client with SERVER-PROC."
+(defun task-conductor-dev-env--make-client-filter (_server-proc)
+  "Create a filter function that registers client with _SERVER-PROC."
   (lambda (proc string)
     ;; Register as current client on first data
     (unless task-conductor-dev-env--client-process
@@ -233,6 +401,8 @@ Creates a UNIX domain socket at `task-conductor-dev-env-socket-path'."
                :coding 'utf-8-unix))
         (set-process-sentinel task-conductor-dev-env--server-process
                               #'task-conductor-dev-env--server-sentinel)
+        ;; Setup event hook integration
+        (task-conductor-dev-env--setup-event-hook)
         (message "task-conductor-dev-env: Server started on %s"
                  task-conductor-dev-env-socket-path))
     (file-error
@@ -246,6 +416,8 @@ Creates a UNIX domain socket at `task-conductor-dev-env-socket-path'."
 (defun task-conductor-dev-env-stop ()
   "Stop the task-conductor dev-env socket server."
   (interactive)
+  ;; Teardown event hook integration
+  (task-conductor-dev-env--teardown-event-hook)
   ;; Close client connection if active
   (when (and task-conductor-dev-env--client-process
              (process-live-p task-conductor-dev-env--client-process))
@@ -256,6 +428,9 @@ Creates a UNIX domain socket at `task-conductor-dev-env-socket-path'."
     (delete-process task-conductor-dev-env--server-process)
     (setq task-conductor-dev-env--server-process nil)
     (message "task-conductor-dev-env: Server stopped"))
+  ;; Clear session tracking
+  (clrhash task-conductor-dev-env--sessions)
+  (clrhash task-conductor-dev-env--buffer-sessions)
   ;; Cleanup socket file
   (task-conductor-dev-env--cleanup-socket))
 

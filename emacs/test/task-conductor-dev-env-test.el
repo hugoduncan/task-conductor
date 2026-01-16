@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'task-conductor-dev-env)
 
 ;;; Message Parsing Tests
@@ -125,6 +126,103 @@ Empty JSON object {} becomes nil in Emacs Lisp (empty alist)."
   "connected-p returns nil when no client connected."
   (let ((task-conductor-dev-env--client-process nil))
     (should-not (task-conductor-dev-env-connected-p))))
+
+;;; Session State Management Tests
+
+(ert-deftest task-conductor-dev-env-test-register-session ()
+  "Register session stores in both hash tables."
+  (let ((task-conductor-dev-env--sessions (make-hash-table :test 'equal))
+        (task-conductor-dev-env--buffer-sessions (make-hash-table :test 'eq)))
+    (with-temp-buffer
+      (let ((buf (current-buffer)))
+        (task-conductor-dev-env--register-session "test-123" buf)
+        (should (eq (gethash "test-123" task-conductor-dev-env--sessions) buf))
+        (should (equal (gethash buf task-conductor-dev-env--buffer-sessions) "test-123"))))))
+
+(ert-deftest task-conductor-dev-env-test-unregister-session ()
+  "Unregister session removes from both hash tables."
+  (let ((task-conductor-dev-env--sessions (make-hash-table :test 'equal))
+        (task-conductor-dev-env--buffer-sessions (make-hash-table :test 'eq)))
+    (with-temp-buffer
+      (let ((buf (current-buffer)))
+        (task-conductor-dev-env--register-session "test-123" buf)
+        (task-conductor-dev-env--unregister-session "test-123")
+        (should (null (gethash "test-123" task-conductor-dev-env--sessions)))
+        (should (null (gethash buf task-conductor-dev-env--buffer-sessions)))))))
+
+(ert-deftest task-conductor-dev-env-test-get-buffer ()
+  "Get buffer returns registered buffer for session-id."
+  (let ((task-conductor-dev-env--sessions (make-hash-table :test 'equal))
+        (task-conductor-dev-env--buffer-sessions (make-hash-table :test 'eq)))
+    (with-temp-buffer
+      (let ((buf (current-buffer)))
+        (task-conductor-dev-env--register-session "test-123" buf)
+        (should (eq (task-conductor-dev-env--get-buffer "test-123") buf))
+        (should (null (task-conductor-dev-env--get-buffer "nonexistent")))))))
+
+(ert-deftest task-conductor-dev-env-test-get-session-id ()
+  "Get session-id returns registered session-id for buffer."
+  (let ((task-conductor-dev-env--sessions (make-hash-table :test 'equal))
+        (task-conductor-dev-env--buffer-sessions (make-hash-table :test 'eq)))
+    (with-temp-buffer
+      (let ((buf (current-buffer)))
+        (task-conductor-dev-env--register-session "test-123" buf)
+        (should (equal (task-conductor-dev-env--get-session-id buf) "test-123"))))
+    (with-temp-buffer
+      (should (null (task-conductor-dev-env--get-session-id (current-buffer)))))))
+
+(ert-deftest task-conductor-dev-env-test-multiple-sessions ()
+  "Multiple sessions can be registered and tracked."
+  (let ((task-conductor-dev-env--sessions (make-hash-table :test 'equal))
+        (task-conductor-dev-env--buffer-sessions (make-hash-table :test 'eq)))
+    (let ((buf1 (generate-new-buffer " *test-1*"))
+          (buf2 (generate-new-buffer " *test-2*")))
+      (unwind-protect
+          (progn
+            (task-conductor-dev-env--register-session "session-1" buf1)
+            (task-conductor-dev-env--register-session "session-2" buf2)
+            (should (eq (task-conductor-dev-env--get-buffer "session-1") buf1))
+            (should (eq (task-conductor-dev-env--get-buffer "session-2") buf2))
+            (should (equal (task-conductor-dev-env--get-session-id buf1) "session-1"))
+            (should (equal (task-conductor-dev-env--get-session-id buf2) "session-2")))
+        (kill-buffer buf1)
+        (kill-buffer buf2)))))
+
+;;; Event Hook Handler Tests
+
+(ert-deftest task-conductor-dev-env-test-event-hook-ignores-untracked ()
+  "Event hook ignores events for untracked sessions."
+  (let ((task-conductor-dev-env--sessions (make-hash-table :test 'equal))
+        (task-conductor-dev-env--buffer-sessions (make-hash-table :test 'eq))
+        (sent-messages nil))
+    (cl-letf (((symbol-function 'task-conductor-dev-env--send-message)
+               (lambda (msg) (push msg sent-messages))))
+      (task-conductor-dev-env--event-hook-handler
+       '(:type "stop" :buffer-name "*claude:test*"))
+      (should (null sent-messages)))))
+
+(ert-deftest task-conductor-dev-env-test-event-hook-handles-stop ()
+  "Event hook sends session-complete on stop event."
+  (let ((task-conductor-dev-env--sessions (make-hash-table :test 'equal))
+        (task-conductor-dev-env--buffer-sessions (make-hash-table :test 'eq))
+        (sent-messages nil))
+    (let ((buf (generate-new-buffer "*claude:test*")))
+      (unwind-protect
+          (progn
+            (task-conductor-dev-env--register-session "test-123" buf)
+            (cl-letf (((symbol-function 'task-conductor-dev-env--send-message)
+                       (lambda (msg) (push msg sent-messages))))
+              (task-conductor-dev-env--event-hook-handler
+               `(:type "stop" :buffer-name ,(buffer-name buf)))
+              (should (= (length sent-messages) 1))
+              (let ((msg (car sent-messages)))
+                (should (equal (alist-get 'type msg) "session-complete"))
+                (should (equal (alist-get 'session-id msg) "test-123"))
+                (should (equal (alist-get 'status msg) "completed")))
+              ;; Session should be unregistered after completion
+              (should (null (task-conductor-dev-env--get-buffer "test-123")))))
+        (when (buffer-live-p buf)
+          (kill-buffer buf))))))
 
 (provide 'task-conductor-dev-env-test)
 ;;; task-conductor-dev-env-test.el ends here
