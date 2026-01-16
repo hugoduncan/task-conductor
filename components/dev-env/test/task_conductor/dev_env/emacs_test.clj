@@ -113,26 +113,7 @@
 
 (deftest open-cli-session-test
   (testing "open-cli-session"
-    (testing "when session-id is missing"
-      (testing "returns error status and invokes callback"
-        (with-test-server [server]
-          (let [env (emacs/create-emacs-dev-env (:path server))
-                result-promise (promise)
-                result (dev-env/open-cli-session
-                        env
-                        {:prompt "hello"
-                         :working-dir "/tmp"}
-                        (fn [r] (deliver result-promise r)))
-                callback-result (deref result-promise 500 :timeout)]
-            (is (= {:status :error} result))
-            (is (not= :timeout callback-result))
-            (is (nil? (:session-id callback-result)))
-            (is (= :error (:status callback-result)))
-            (is (= "Missing required :session-id in opts"
-                   (:message callback-result)))
-            (emacs/stop! env)))))
-
-    (testing "returns {:status :requested}"
+    (testing "returns {:status :requested :tracking-id ...}"
       (with-test-server [server]
         (let [env (emacs/create-emacs-dev-env (:path server))
               result (dev-env/open-cli-session
@@ -141,7 +122,8 @@
                        :prompt "hello"
                        :working-dir "/tmp"}
                       identity)]
-          (is (= {:status :requested} result))
+          (is (= :requested (:status result)))
+          (is (string? (:tracking-id result)))
           (emacs/stop! env))))
 
     (testing "sends correct message format"
@@ -149,14 +131,15 @@
         (let [env (emacs/create-emacs-dev-env (:path server))
               client (deref (:client-promise server) 1000 nil)]
           (is (some? client))
-          (dev-env/open-cli-session
-           env
-           {:session-id "sess-123"
-            :prompt "test prompt"
-            :working-dir "/home/user"}
-           identity)
-          (let [msg (read-json-message client)]
+          (let [result (dev-env/open-cli-session
+                        env
+                        {:session-id "sess-123"
+                         :prompt "test prompt"
+                         :working-dir "/home/user"}
+                        identity)
+                msg (read-json-message client)]
             (is (= "open-session" (:type msg)))
+            (is (= (:tracking-id result) (:tracking-id msg)))
             (is (= "sess-123" (:session-id msg)))
             (is (= "test prompt" (:prompt msg)))
             (is (= "/home/user" (:working-dir msg))))
@@ -167,25 +150,26 @@
         (let [env (emacs/create-emacs-dev-env (:path server))
               client (deref (:client-promise server) 1000 nil)
               result-promise (promise)]
-          (dev-env/open-cli-session
-           env
-           {:session-id "complete-test"}
-           (fn [r] (deliver result-promise r)))
-          ;; Read the open-session message
-          (read-json-message client)
-          ;; Send session-complete response
-          (send-json-message client
-                             {:type "session-complete"
-                              :session-id "complete-test"
-                              :status "completed"
-                              :hook-status {:state "idle"}
-                              :exit-code 0})
-          (let [result (deref result-promise 1000 :timeout)]
-            (is (not= :timeout result))
-            (is (= "complete-test" (:session-id result)))
-            (is (= :completed (:status result)))
-            (is (= {:state "idle"} (:hook-status result)))
-            (is (= 0 (:exit-code result))))
+          (let [open-result (dev-env/open-cli-session
+                             env
+                             {:session-id "complete-test"}
+                             (fn [r] (deliver result-promise r)))
+                tracking-id (:tracking-id open-result)]
+            ;; Read the open-session message
+            (read-json-message client)
+            ;; Send session-complete response with tracking-id as session-id
+            (send-json-message client
+                               {:type "session-complete"
+                                :session-id tracking-id
+                                :status "completed"
+                                :hook-status {:state "idle"}
+                                :exit-code 0})
+            (let [result (deref result-promise 1000 :timeout)]
+              (is (not= :timeout result))
+              (is (= tracking-id (:tracking-id result)))
+              (is (= :completed (:status result)))
+              (is (= {:state "idle"} (:hook-status result)))
+              (is (= 0 (:exit-code result)))))
           (emacs/stop! env))))
 
     (testing "invokes callback on error response"
@@ -193,20 +177,21 @@
         (let [env (emacs/create-emacs-dev-env (:path server))
               client (deref (:client-promise server) 1000 nil)
               result-promise (promise)]
-          (dev-env/open-cli-session
-           env
-           {:session-id "error-test"}
-           (fn [r] (deliver result-promise r)))
-          (read-json-message client)
-          (send-json-message client
-                             {:type "error"
-                              :session-id "error-test"
-                              :message "Connection lost"})
-          (let [result (deref result-promise 1000 :timeout)]
-            (is (not= :timeout result))
-            (is (= "error-test" (:session-id result)))
-            (is (= :error (:status result)))
-            (is (= "Connection lost" (:message result))))
+          (let [open-result (dev-env/open-cli-session
+                             env
+                             {:session-id "error-test"}
+                             (fn [r] (deliver result-promise r)))
+                tracking-id (:tracking-id open-result)]
+            (read-json-message client)
+            (send-json-message client
+                               {:type "error"
+                                :session-id tracking-id
+                                :message "Connection lost"})
+            (let [result (deref result-promise 1000 :timeout)]
+              (is (not= :timeout result))
+              (is (= tracking-id (:tracking-id result)))
+              (is (= :error (:status result)))
+              (is (= "Connection lost" (:message result)))))
           (emacs/stop! env))))))
 
 (deftest close-session-test
@@ -215,35 +200,36 @@
       (with-test-server [server]
         (let [env (emacs/create-emacs-dev-env (:path server))]
           (is (= {:status :requested}
-                 (dev-env/close-session env "any-session")))
+                 (dev-env/close-session env "any-tracking-id")))
           (emacs/stop! env))))
 
     (testing "sends correct message format"
       (with-test-server [server]
         (let [env (emacs/create-emacs-dev-env (:path server))
               client (deref (:client-promise server) 1000 nil)]
-          (dev-env/close-session env "close-me")
+          (dev-env/close-session env "tracking-123")
           (let [msg (read-json-message client)]
             (is (= "close-session" (:type msg)))
-            (is (= "close-me" (:session-id msg))))
+            (is (= "tracking-123" (:session-id msg))))
           (emacs/stop! env))))
 
     (testing "invokes pending callback with :cancelled status"
       (with-test-server [server]
         (let [env (emacs/create-emacs-dev-env (:path server))
               result-promise (promise)]
-          ;; Register a session with callback
-          (dev-env/open-cli-session
-           env
-           {:session-id "to-cancel"}
-           (fn [r] (deliver result-promise r)))
-          ;; Close the session before any response
-          (dev-env/close-session env "to-cancel")
-          (let [result (deref result-promise 500 :timeout)]
-            (is (not= :timeout result)
-                "callback should be invoked")
-            (is (= "to-cancel" (:session-id result)))
-            (is (= :cancelled (:status result))))
+          ;; Register a session with callback, capture tracking-id
+          (let [open-result (dev-env/open-cli-session
+                             env
+                             {:session-id "to-cancel"}
+                             (fn [r] (deliver result-promise r)))
+                tracking-id (:tracking-id open-result)]
+            ;; Close the session using tracking-id before any response
+            (dev-env/close-session env tracking-id)
+            (let [result (deref result-promise 500 :timeout)]
+              (is (not= :timeout result)
+                  "callback should be invoked")
+              (is (= tracking-id (:tracking-id result)))
+              (is (= :cancelled (:status result)))))
           (emacs/stop! env))))))
 
 (deftest stop!-test
@@ -251,15 +237,17 @@
     (testing "notifies pending callbacks with error"
       (with-test-server [server]
         (let [env (emacs/create-emacs-dev-env (:path server))
-              result-promise (promise)]
-          (dev-env/open-cli-session
-           env
-           {:session-id "pending"}
-           (fn [r] (deliver result-promise r)))
+              result-promise (promise)
+              open-result (dev-env/open-cli-session
+                           env
+                           {:session-id "pending"}
+                           (fn [r] (deliver result-promise r)))
+              tracking-id (:tracking-id open-result)]
           ;; Don't send response, just stop
           (emacs/stop! env)
           (let [result (deref result-promise 1000 :timeout)]
             (is (not= :timeout result))
+            (is (= tracking-id (:tracking-id result)))
             (is (= :error (:status result)))
             (is (= "DevEnv shutdown" (:message result)))))))))
 
