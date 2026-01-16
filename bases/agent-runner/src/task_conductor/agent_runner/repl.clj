@@ -7,7 +7,9 @@
   (:require
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.flow :as flow]
-   [task-conductor.agent-runner.orchestrator :as orchestrator]))
+   [task-conductor.agent-runner.orchestrator :as orchestrator]
+   [task-conductor.dev-env.emacs :as emacs]
+   [task-conductor.dev-env.interface :as dev-env]))
 
 ;;; Control Functions
 
@@ -281,3 +283,86 @@
            (println "Story execution failed:")
            (println (str "  " (get-in result [:error :message])))))
        result))))
+
+;;; Dev-Env CLI Session Management
+
+(defonce ^:private dev-env-atom (atom nil))
+
+(defn open-cli
+  "Open a new Claude CLI session in Emacs via the dev-env socket.
+
+   Connects to the Emacs socket server (task-conductor-dev-env) and sends
+   an open-session request. Emacs will start a new Claude CLI buffer.
+
+   Arguments:
+   - opts: Optional map with:
+     - :session-id - Session ID for --resume (defaults to new UUID)
+     - :prompt - Initial prompt to send after session starts
+     - :working-dir - Directory for the CLI session (defaults to cwd)
+     - :callback - Function called when session completes
+                   Receives {:session-id :status :hook-status :exit-code}
+
+   Returns {:status :requested, :session-id <id>} on success.
+   Returns {:status :error, :message <msg>} on failure.
+
+   Example:
+     (open-cli)
+     (open-cli {:prompt \"Hello\"})
+     (open-cli {:session-id \"abc-123\" :working-dir \"/tmp\"})"
+  ([]
+   (open-cli {}))
+  ([opts]
+   (let [env (or @dev-env-atom
+                 (when-let [e (emacs/create-emacs-dev-env)]
+                   (reset! dev-env-atom e)
+                   e))]
+     (if-not env
+       (do
+         (println "Failed to connect to Emacs socket server")
+         (println "Ensure task-conductor-dev-env-start has been called in Emacs")
+         {:status :error
+          :message "Could not connect to Emacs socket"})
+       (let [session-id (or (:session-id opts) (str (random-uuid)))
+             working-dir (or (:working-dir opts) (System/getProperty "user.dir"))
+             callback (or (:callback opts)
+                          (fn [result]
+                            (println "Session completed:" result)))
+             result (dev-env/open-cli-session
+                     env
+                     {:session-id session-id
+                      :prompt (:prompt opts)
+                      :working-dir working-dir}
+                     callback)]
+         (println (str "Opening CLI session: " session-id))
+         (println (str "Working dir: " working-dir))
+         (when (:prompt opts)
+           (println (str "Prompt: " (subs (:prompt opts) 0 (min 50 (count (:prompt opts)))) "...")))
+         (assoc result :session-id session-id))))))
+
+(defn close-cli
+  "Close a CLI session by session-id.
+
+   Sends a close-session request to Emacs, which will kill the CLI buffer.
+   Any pending callback for this session will receive {:status :cancelled}.
+
+   Returns {:status :requested}."
+  [session-id]
+  (if-let [env @dev-env-atom]
+    (do
+      (dev-env/close-session env session-id)
+      (println (str "Closing session: " session-id))
+      {:status :requested})
+    (do
+      (println "No dev-env connection")
+      {:status :error :message "Not connected"})))
+
+(defn disconnect-dev-env
+  "Disconnect from the Emacs dev-env socket server.
+
+   Closes the connection and clears the cached EmacsDevEnv."
+  []
+  (when-let [env @dev-env-atom]
+    (emacs/stop! env)
+    (reset! dev-env-atom nil)
+    (println "Disconnected from Emacs dev-env"))
+  nil)
