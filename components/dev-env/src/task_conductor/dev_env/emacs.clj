@@ -53,17 +53,22 @@
 (defn- start-reader-thread
   "Start background thread that reads messages and dispatches to callbacks.
    Detects connection loss and notifies all pending callbacks.
+   Handles thread interruption gracefully during shutdown.
    Returns the Thread object."
   [channel-atom callbacks running]
   (let [thread (Thread.
                 (fn []
                   (loop []
-                    (when @running
+                    (when (and @running (not (Thread/interrupted)))
                       (let [msg (socket/receive-message! @channel-atom)]
                         (cond
+                          ;; Thread was interrupted or running flag cleared - clean exit
+                          (or (Thread/interrupted) (not @running))
+                          nil
+
                           ;; Connection closed or error - notify callbacks
                           (nil? msg)
-                          (do
+                          (when @running
                             (binding [*out* *err*]
                               (println "Connection to Emacs lost"))
                             (notify-all-callbacks-error! callbacks "Connection lost")
@@ -147,6 +152,8 @@
    Any pending callbacks will receive an error result."
   [^EmacsDevEnv env]
   (reset! (:running env) false)
+  ;; Interrupt the reader thread to unblock any pending read
+  (.interrupt ^Thread (:reader-thread env))
   (socket/disconnect! @(:channel-atom env))
   ;; Notify pending callbacks of shutdown
   (doseq [[session-id callback] @(:callbacks env)]
