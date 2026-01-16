@@ -296,19 +296,19 @@
 
    Arguments:
    - opts: Optional map with:
-     - :session-id - Session ID for --resume (defaults to new UUID)
+     - :session-id - Session ID for --resume (omit to start fresh session)
      - :prompt - Initial prompt to send after session starts
      - :working-dir - Directory for the CLI session (defaults to cwd)
      - :callback - Function called when session completes
-                   Receives {:session-id :status :hook-status :exit-code}
+                   Receives {:tracking-id :status :hook-status :exit-code}
 
-   Returns {:status :requested, :session-id <id>} on success.
+   Returns {:status :requested, :tracking-id <id>} on success.
    Returns {:status :error, :message <msg>} on failure.
 
    Example:
-     (open-cli)
-     (open-cli {:prompt \"Hello\"})
-     (open-cli {:session-id \"abc-123\" :working-dir \"/tmp\"})"
+     (open-cli)                              ; new session
+     (open-cli {:prompt \"Hello\"})          ; with initial prompt
+     (open-cli {:session-id \"abc-123\"})    ; resume existing session"
   ([]
    (open-cli {}))
   ([opts]
@@ -322,35 +322,36 @@
          (println "Ensure task-conductor-dev-env-start has been called in Emacs")
          {:status :error
           :message "Could not connect to Emacs socket"})
-       (let [session-id (or (:session-id opts) (str (random-uuid)))
-             working-dir (or (:working-dir opts) (System/getProperty "user.dir"))
+       (let [working-dir (or (:working-dir opts) (System/getProperty "user.dir"))
              callback (or (:callback opts)
                           (fn [result]
                             (println "Session completed:" result)))
              result (dev-env/open-cli-session
                      env
-                     {:session-id session-id
+                     {:session-id (:session-id opts)  ; nil for new session
                       :prompt (:prompt opts)
                       :working-dir working-dir}
                      callback)]
-         (println (str "Opening CLI session: " session-id))
+         (println (str "Opening CLI session: " (:tracking-id result)))
+         (when (:session-id opts)
+           (println (str "Resuming session: " (:session-id opts))))
          (println (str "Working dir: " working-dir))
          (when (:prompt opts)
            (println (str "Prompt: " (subs (:prompt opts) 0 (min 50 (count (:prompt opts)))) "...")))
-         (assoc result :session-id session-id))))))
+         result)))))
 
 (defn close-cli
-  "Close a CLI session by session-id.
+  "Close a CLI session by tracking-id.
 
    Sends a close-session request to Emacs, which will kill the CLI buffer.
    Any pending callback for this session will receive {:status :cancelled}.
 
    Returns {:status :requested}."
-  [session-id]
+  [tracking-id]
   (if-let [env @dev-env-atom]
     (do
-      (dev-env/close-session env session-id)
-      (println (str "Closing session: " session-id))
+      (dev-env/close-session env tracking-id)
+      (println (str "Closing session: " tracking-id))
       {:status :requested})
     (do
       (println "No dev-env connection")

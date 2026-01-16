@@ -267,54 +267,60 @@ Detects idle/completion events and sends session-complete response."
 
 (defun task-conductor-dev-env--handle-open-session (message)
   "Handle open-session MESSAGE.
-Starts a Claude CLI session with --resume using claude-code.el."
+Starts a Claude CLI session using claude-code.el.
+If session-id is provided, resumes that session with --resume.
+If session-id is nil/empty, starts a fresh session."
   (let ((session-id (alist-get 'session-id message))
+        (tracking-id (alist-get 'tracking-id message))
         (prompt (alist-get 'prompt message))
         (working-dir (alist-get 'working-dir message)))
-    (task-conductor-dev-env--debug
-     "open-session: id=%s dir=%s prompt=%s"
-     session-id working-dir (and prompt (substring prompt 0 (min 50 (length prompt)))))
-    (condition-case err
-        (let* ((default-directory (or working-dir default-directory))
-               ;; Start Claude with --resume <session-id>
-               (extra-switches (list "--resume" session-id))
-               ;; Override claude-code--directory to use working-dir
-               (buffer (cl-letf (((symbol-function 'claude-code--directory)
-                                  (lambda () default-directory)))
-                         ;; Start Claude without prompting for instance name
-                         ;; and don't switch to buffer automatically
-                         (claude-code--start nil extra-switches nil nil)
-                         ;; Get the buffer that was just created
-                         (car (claude-code--find-claude-buffers-for-directory
-                               default-directory)))))
-          (if buffer
-              (progn
-                ;; Register the session
-                (task-conductor-dev-env--register-session session-id buffer)
-                ;; Add buffer kill handler
-                (with-current-buffer buffer
-                  (add-hook 'kill-buffer-hook
-                            #'task-conductor-dev-env--buffer-kill-handler nil t))
-                ;; Send prompt if provided, after a small delay for session to initialize
-                (when (and prompt (not (string-empty-p prompt)))
-                  (run-at-time task-conductor-dev-env-prompt-delay nil
-                               (lambda (buf prompt-text)
-                                 (when (buffer-live-p buf)
-                                   (with-current-buffer buf
-                                     (claude-code--term-send-string
-                                      claude-code-terminal-backend prompt-text)
-                                     (sit-for 0.1)
-                                     (claude-code--term-send-string
-                                      claude-code-terminal-backend (kbd "RET")))))
-                               buffer prompt))
-                (task-conductor-dev-env--debug "Session %s started in buffer %s"
-                                               session-id (buffer-name buffer)))
-            (task-conductor-dev-env-send-error session-id "Failed to create Claude buffer")))
-      (error
-       (task-conductor-dev-env--debug "Error starting session: %s"
-                                      (error-message-string err))
-       (task-conductor-dev-env-send-error session-id
-                                          (format "Error: %s" (error-message-string err)))))))
+    ;; Use tracking-id for callback correlation, session-id for --resume
+    (let ((correlation-id (or tracking-id session-id (format "%s" (random)))))
+      (task-conductor-dev-env--debug
+       "open-session: session-id=%s tracking-id=%s dir=%s"
+       session-id tracking-id working-dir)
+      (condition-case err
+          (let* ((default-directory (or working-dir default-directory))
+                 ;; Only pass --resume if session-id is provided
+                 (extra-switches (when (and session-id (not (string-empty-p session-id)))
+                                   (list "--resume" session-id)))
+                 ;; Override claude-code--directory to use working-dir
+                 (buffer (cl-letf (((symbol-function 'claude-code--directory)
+                                    (lambda () default-directory)))
+                           ;; Start Claude without prompting for instance name
+                           ;; and don't switch to buffer automatically
+                           (claude-code--start nil extra-switches nil nil)
+                           ;; Get the buffer that was just created
+                           (car (claude-code--find-claude-buffers-for-directory
+                                 default-directory)))))
+            (if buffer
+                (progn
+                  ;; Register using correlation-id for callback lookup
+                  (task-conductor-dev-env--register-session correlation-id buffer)
+                  ;; Add buffer kill handler
+                  (with-current-buffer buffer
+                    (add-hook 'kill-buffer-hook
+                              #'task-conductor-dev-env--buffer-kill-handler nil t))
+                  ;; Send prompt if provided, after a small delay for session to initialize
+                  (when (and prompt (not (string-empty-p prompt)))
+                    (run-at-time task-conductor-dev-env-prompt-delay nil
+                                 (lambda (buf prompt-text)
+                                   (when (buffer-live-p buf)
+                                     (with-current-buffer buf
+                                       (claude-code--term-send-string
+                                        claude-code-terminal-backend prompt-text)
+                                       (sit-for 0.1)
+                                       (claude-code--term-send-string
+                                        claude-code-terminal-backend (kbd "RET")))))
+                                 buffer prompt))
+                  (task-conductor-dev-env--debug "Session %s started in buffer %s"
+                                                 correlation-id (buffer-name buffer)))
+              (task-conductor-dev-env-send-error correlation-id "Failed to create Claude buffer")))
+        (error
+         (task-conductor-dev-env--debug "Error starting session: %s"
+                                        (error-message-string err))
+         (task-conductor-dev-env-send-error correlation-id
+                                            (format "Error: %s" (error-message-string err))))))))
 
 (defun task-conductor-dev-env--handle-close-session (message)
   "Handle close-session MESSAGE.

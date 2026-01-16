@@ -10,41 +10,43 @@
 
 (defn- dispatch-message
   "Dispatch an incoming message to the appropriate callback.
+   Looks up callback by session-id (which is the tracking-id).
    Removes callback from pending map after invocation."
   [callbacks msg]
-  (let [session-id (:session-id msg)
-        callback (get @callbacks session-id)]
+  ;; session-id in response is the tracking-id used for correlation
+  (let [tracking-id (:session-id msg)
+        callback (get @callbacks tracking-id)]
     (when callback
-      (swap! callbacks dissoc session-id)
+      (swap! callbacks dissoc tracking-id)
       (try
         (case (:type msg)
           "session-complete"
-          (callback {:session-id session-id
+          (callback {:tracking-id tracking-id
                      :status (keyword (:status msg))
                      :hook-status (:hook-status msg)
                      :exit-code (:exit-code msg)})
 
           "error"
-          (callback {:session-id session-id
+          (callback {:tracking-id tracking-id
                      :status :error
                      :message (:message msg)})
 
           ;; Unknown message type
-          (callback {:session-id session-id
+          (callback {:tracking-id tracking-id
                      :status :error
                      :message (str "Unknown message type: " (:type msg))}))
         (catch Exception e
           ;; Log but don't propagate callback exceptions
           (binding [*out* *err*]
-            (println "Callback exception for session" session-id ":" (.getMessage e))))))))
+            (println "Callback exception for tracking-id" tracking-id ":" (.getMessage e))))))))
 
 (defn- notify-all-callbacks-error!
   "Notify all pending callbacks of an error condition.
    Clears the callbacks atom after notification."
   [callbacks message]
-  (doseq [[session-id callback] @callbacks]
+  (doseq [[tracking-id callback] @callbacks]
     (try
-      (callback {:session-id session-id
+      (callback {:tracking-id tracking-id
                  :status :error
                  :message message})
       (catch Exception _)))
@@ -108,45 +110,41 @@
   dev-env/DevEnv
 
   (open-cli-session [_this opts callback]
-    (let [session-id (:session-id opts)]
-      (if-not session-id
-        ;; Validation: session-id is required for callback lookup
-        (do
-          (callback {:session-id nil
+    ;; Generate tracking-id for callback correlation
+    ;; session-id is optional (only needed when resuming)
+    (let [tracking-id (str (random-uuid))
+          session-id (:session-id opts)]
+      (swap! callbacks assoc tracking-id callback)
+      (let [sent? (try-send-with-reconnect!
+                   channel-atom
+                   socket-path
+                   {:type "open-session"
+                    :tracking-id tracking-id
+                    :session-id session-id
+                    :prompt (:prompt opts)
+                    :working-dir (:working-dir opts)})]
+        (when-not sent?
+          (swap! callbacks dissoc tracking-id)
+          (callback {:tracking-id tracking-id
                      :status :error
-                     :message "Missing required :session-id in opts"})
-          {:status :error})
-        (do
-          (swap! callbacks assoc session-id callback)
-          (let [sent? (try-send-with-reconnect!
-                       channel-atom
-                       socket-path
-                       {:type "open-session"
-                        :session-id session-id
-                        :prompt (:prompt opts)
-                        :working-dir (:working-dir opts)})]
-            (when-not sent?
-              (swap! callbacks dissoc session-id)
-              (callback {:session-id session-id
-                         :status :error
-                         :message "Failed to send message to Emacs"})))
-          {:status :requested}))))
+                     :message "Failed to send message to Emacs"})))
+      {:status :requested :tracking-id tracking-id}))
 
-  (close-session [_this session-id]
+  (close-session [_this tracking-id]
     ;; Invoke callback with :cancelled status before removing
-    (when-let [callback (get @callbacks session-id)]
-      (swap! callbacks dissoc session-id)
+    (when-let [callback (get @callbacks tracking-id)]
+      (swap! callbacks dissoc tracking-id)
       (try
-        (callback {:session-id session-id
+        (callback {:tracking-id tracking-id
                    :status :cancelled})
         (catch Exception e
           (binding [*out* *err*]
-            (println "Callback exception for session" session-id ":" (.getMessage e))))))
+            (println "Callback exception for tracking-id" tracking-id ":" (.getMessage e))))))
     (try-send-with-reconnect!
      channel-atom
      socket-path
      {:type "close-session"
-      :session-id session-id})
+      :session-id tracking-id})
     {:status :requested}))
 
 (defn create-emacs-dev-env
@@ -184,9 +182,9 @@
     (.join ^Thread (:reader-thread env) join-timeout-ms)
     (catch InterruptedException _))
   ;; Notify pending callbacks of shutdown
-  (doseq [[session-id callback] @(:callbacks env)]
+  (doseq [[tracking-id callback] @(:callbacks env)]
     (try
-      (callback {:session-id session-id
+      (callback {:tracking-id tracking-id
                  :status :error
                  :message "DevEnv shutdown"})
       (catch Exception _)))
