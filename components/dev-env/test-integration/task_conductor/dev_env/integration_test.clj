@@ -173,7 +173,7 @@
               (is received? "Callback should be invoked within timeout")
               (when received?
                 (let [result @result-atom]
-                  (is (= "integration-test-1" (:session-id result)))
+                  (is (string? (:tracking-id result)))
                   (is (= :completed (:status result)))
                   (is (= 0 (:exit-code result)))
                   (is (some? (:hook-status result))))))
@@ -225,17 +225,19 @@
         (when env
           (try
             (let [latch (CountDownLatch. 1)
-                  result (atom nil)]
-              ;; Open session
-              (dev-env/open-cli-session
-               env
-               {:session-id "close-test-1"
-                :working-dir "/tmp"}
-               (fn [r]
-                 (reset! result r)
-                 (.countDown latch)))
-              ;; Immediately close it
-              (dev-env/close-session env "close-test-1")
+                  result (atom nil)
+                  tracking-id (atom nil)]
+              ;; Open session and capture tracking-id
+              (let [open-result (dev-env/open-cli-session
+                                 env
+                                 {:session-id "close-test-1"
+                                  :working-dir "/tmp"}
+                                 (fn [r]
+                                   (reset! result r)
+                                   (.countDown latch)))]
+                (reset! tracking-id (:tracking-id open-result)))
+              ;; Close using tracking-id
+              (dev-env/close-session env @tracking-id)
               ;; Callback should be invoked with :cancelled
               (is (.await latch callback-timeout-ms TimeUnit/MILLISECONDS)
                   "Callback should be invoked")
