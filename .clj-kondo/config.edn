@@ -7,6 +7,8 @@
  {task-conductor.claude-agent-sdk.core-test
   {:linters {:private-call {:level :off}}}
   task-conductor.dev-env.socket-test
+  {:linters {:unresolved-symbol {:level :off}}}
+  task-conductor.dev-env.emacs-test
   {:linters {:unresolved-symbol {:level :off}}}}
 
  :linters
