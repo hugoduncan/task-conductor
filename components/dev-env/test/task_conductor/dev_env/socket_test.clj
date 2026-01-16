@@ -22,15 +22,17 @@
 
 (defn- start-echo-server
   "Start a server that echoes back JSON messages with an :echo key added.
-   Returns {:server server-channel :path socket-path :stop-fn (fn [])}."
+   Returns {:server server-channel :path socket-path :ready-promise :stop-fn (fn [])}."
   [socket-path]
   (let [address (UnixDomainSocketAddress/of socket-path)
         server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
                  (.bind address))
         running (atom true)
+        ready-promise (promise)
         thread (Thread.
                 (fn []
                   (try
+                    (deliver ready-promise true)
                     (while @running
                       (when-let [client (.accept server)]
                         (try
@@ -61,6 +63,7 @@
     (.start thread)
     {:server server
      :path socket-path
+     :ready-promise ready-promise
      :stop-fn (fn []
                 (reset! running false)
                 (.close server)
@@ -72,10 +75,10 @@
    Binds socket-path to the path of the socket."
   [[socket-path-sym] & body]
   `(let [path# (temp-socket-path)
-         {:keys [~'stop-fn]} (start-echo-server path#)
+         {:keys [~'stop-fn ~'ready-promise]} (start-echo-server path#)
          ~socket-path-sym path#]
      (try
-       (Thread/sleep 50) ; Allow server to start
+       (deref ~'ready-promise 1000 nil)
        ~@body
        (finally
          (~'stop-fn)))))
@@ -144,15 +147,17 @@
 
 (defn- start-multi-message-server
   "Start a server that sends multiple messages in a single write.
-   Returns {:server server-channel :path socket-path :stop-fn (fn [])}."
+   Returns {:server server-channel :path socket-path :ready-promise :stop-fn (fn [])}."
   [socket-path messages]
   (let [address (UnixDomainSocketAddress/of socket-path)
         server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
                  (.bind address))
         running (atom true)
+        ready-promise (promise)
         thread (Thread.
                 (fn []
                   (try
+                    (deliver ready-promise true)
                     (while @running
                       (when-let [client (.accept server)]
                         (try
@@ -167,6 +172,7 @@
     (.start thread)
     {:server server
      :path socket-path
+     :ready-promise ready-promise
      :stop-fn (fn []
                 (reset! running false)
                 (.close server)
@@ -177,10 +183,10 @@
   "Execute body with a server that sends multiple messages at once."
   [[socket-path-sym messages] & body]
   `(let [path# (temp-socket-path)
-         {:keys [~'stop-fn]} (start-multi-message-server path# ~messages)
+         {:keys [~'stop-fn ~'ready-promise]} (start-multi-message-server path# ~messages)
          ~socket-path-sym path#]
      (try
-       (Thread/sleep 50)
+       (deref ~'ready-promise 1000 nil)
        ~@body
        (finally
          (~'stop-fn)))))
@@ -197,7 +203,7 @@
         (with-multi-message-server [socket-path messages]
           (let [channel (socket/connect! socket-path)
                 read-message! (socket/make-message-reader channel)]
-            (Thread/sleep 50) ; Allow server to send
+            ;; Blocking read waits for server to send
             (is (= {:type "first" :n 1} (read-message!)))
             (is (= {:type "second" :n 2} (read-message!)))
             (is (= {:type "third" :n 3} (read-message!)))
@@ -208,7 +214,7 @@
         (with-multi-message-server [socket-path messages]
           (let [channel (socket/connect! socket-path)
                 read-message! (socket/make-message-reader channel)]
-            (Thread/sleep 50)
+            ;; Blocking read waits for server to send
             (is (= {:type "only" :n 1} (read-message!)))
             ;; Server closed after sending - next read should return nil
             (is (nil? (read-message!)))

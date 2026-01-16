@@ -58,21 +58,25 @@
   "Start a test server that accepts one connection and provides
    control over responses. Returns map with:
    :path - socket path
+   :ready-promise - delivered when server is ready to accept
    :client-promise - delivers the client channel when connected
    :stop-fn - cleanup function"
   [socket-path]
   (let [address (UnixDomainSocketAddress/of socket-path)
         server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
                  (.bind address))
+        ready-promise (promise)
         client-promise (promise)
         thread (Thread.
                 (fn []
                   (try
+                    (deliver ready-promise true)
                     (when-let [client (.accept server)]
                       (deliver client-promise client))
                     (catch Exception _))))]
     (.start thread)
     {:path socket-path
+     :ready-promise ready-promise
      :client-promise client-promise
      :stop-fn (fn []
                 (.close server)
@@ -88,7 +92,7 @@
   `(let [path# (temp-socket-path)
          ~server-sym (start-test-server path#)]
      (try
-       (Thread/sleep 50)
+       (deref (:ready-promise ~server-sym) 1000 nil)
        ~@body
        (finally
          ((:stop-fn ~server-sym))))))
@@ -119,7 +123,7 @@
                         {:prompt "hello"
                          :working-dir "/tmp"}
                         (fn [r] (deliver result-promise r)))
-                callback-result (deref result-promise 100 :timeout)]
+                callback-result (deref result-promise 500 :timeout)]
             (is (= {:status :error} result))
             (is (not= :timeout callback-result))
             (is (nil? (:session-id callback-result)))

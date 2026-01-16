@@ -96,7 +96,7 @@
                              :status :completed
                              :hook-status {:state "done"}
                              :exit-code 0})
-          (let [result (deref received 100 :timeout)]
+          (let [result (deref received 500 :timeout)]
             (is (not= :timeout result))
             (is (= "cb-test" (:session-id result)))
             (is (= :completed (:status result)))
