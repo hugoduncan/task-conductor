@@ -107,20 +107,28 @@
 
   (open-cli-session [_this opts callback]
     (let [session-id (:session-id opts)]
-      (swap! callbacks assoc session-id callback)
-      (let [sent? (try-send-with-reconnect!
-                   channel-atom
-                   socket-path
-                   {:type "open-session"
-                    :session-id session-id
-                    :prompt (:prompt opts)
-                    :working-dir (:working-dir opts)})]
-        (when-not sent?
-          (swap! callbacks dissoc session-id)
-          (callback {:session-id session-id
+      (if-not session-id
+        ;; Validation: session-id is required for callback lookup
+        (do
+          (callback {:session-id nil
                      :status :error
-                     :message "Failed to send message to Emacs"})))
-      {:status :requested}))
+                     :message "Missing required :session-id in opts"})
+          {:status :error})
+        (do
+          (swap! callbacks assoc session-id callback)
+          (let [sent? (try-send-with-reconnect!
+                       channel-atom
+                       socket-path
+                       {:type "open-session"
+                        :session-id session-id
+                        :prompt (:prompt opts)
+                        :working-dir (:working-dir opts)})]
+            (when-not sent?
+              (swap! callbacks dissoc session-id)
+              (callback {:session-id session-id
+                         :status :error
+                         :message "Failed to send message to Emacs"})))
+          {:status :requested}))))
 
   (close-session [_this session-id]
     (try-send-with-reconnect!

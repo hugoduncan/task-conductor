@@ -109,6 +109,25 @@
 
 (deftest open-cli-session-test
   (testing "open-cli-session"
+    (testing "when session-id is missing"
+      (testing "returns error status and invokes callback"
+        (with-test-server [server]
+          (let [env (emacs/create-emacs-dev-env (:path server))
+                result-promise (promise)
+                result (dev-env/open-cli-session
+                        env
+                        {:prompt "hello"
+                         :working-dir "/tmp"}
+                        (fn [r] (deliver result-promise r)))
+                callback-result (deref result-promise 100 :timeout)]
+            (is (= {:status :error} result))
+            (is (not= :timeout callback-result))
+            (is (nil? (:session-id callback-result)))
+            (is (= :error (:status callback-result)))
+            (is (= "Missing required :session-id in opts"
+                   (:message callback-result)))
+            (emacs/stop! env)))))
+
     (testing "returns {:status :requested}"
       (with-test-server [server]
         (let [env (emacs/create-emacs-dev-env (:path server))
