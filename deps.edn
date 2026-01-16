@@ -1,6 +1,7 @@
 {:paths []
  :deps {task-conductor/agent-runner {:local/root "bases/agent-runner"}
         task-conductor/claude-agent-sdk {:local/root "components/claude-agent-sdk"}
+        task-conductor/dev-env {:local/root "components/dev-env"}
         task-conductor/python-venv {:local/root "components/python-venv"}}
  :aliases
  {:dev {:extra-paths ["dev"]

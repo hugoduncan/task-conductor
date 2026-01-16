@@ -41,6 +41,12 @@ From the REPL:
 ;; Execute a story
 (repl/run-story 123)
 ```
+For resetting the console state, use:
+
+``` clojure
+(require '[task-conductor.agent-runner.console :as console])
+(console/reset-state!)
+```
 
 ### Control Functions
 

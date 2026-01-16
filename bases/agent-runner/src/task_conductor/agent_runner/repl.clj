@@ -6,7 +6,10 @@
    data for programmatic use."
   (:require
    [task-conductor.agent-runner.console :as console]
-   [task-conductor.agent-runner.orchestrator :as orchestrator]))
+   [task-conductor.agent-runner.flow :as flow]
+   [task-conductor.agent-runner.orchestrator :as orchestrator]
+   [task-conductor.dev-env.emacs :as emacs]
+   [task-conductor.dev-env.interface :as dev-env]))
 
 ;;; Control Functions
 
@@ -221,8 +224,10 @@
 (defn run-story
   "Execute all tasks in a story with automated orchestration.
 
-   Creates fresh Claude SDK sessions for each task, running them
-   sequentially until the story is complete, paused, or blocked.
+   Uses the StoryFlowModel by default, which auto-refines unrefined stories
+   and creates child tasks as needed. Creates fresh Claude SDK sessions for
+   each task, running them sequentially until the story is complete, paused,
+   or blocked.
 
    Validates that the console is in :idle state before starting.
    Prints progress information and final outcome.
@@ -230,6 +235,7 @@
    Arguments:
    - story-id: The ID of the story to execute
    - opts: Optional map of session configuration overrides
+     - :flow-model - Custom flow model (defaults to StoryFlowModel)
 
    Returns the result map from orchestrator/execute-story with:
    - :outcome - One of :complete, :paused, :blocked, :no-tasks, :error
@@ -247,7 +253,11 @@
                         :current-state current
                         :required-state :idle})))
      (println (str "Running story " story-id "..."))
-     (let [result (orchestrator/execute-story story-id opts)]
+     (let [opts (if (:flow-model opts)
+                  opts
+                  (assoc opts :flow-model
+                         (flow/story-flow-model orchestrator/run-mcp-tasks story-id)))
+           result (orchestrator/execute-story story-id opts)]
        (case (:outcome result)
          :complete
          (println (str "Story complete! ("
@@ -273,3 +283,87 @@
            (println "Story execution failed:")
            (println (str "  " (get-in result [:error :message])))))
        result))))
+
+;;; Dev-Env CLI Session Management
+
+(defonce ^:private dev-env-atom (atom nil))
+
+(defn open-cli
+  "Open a new Claude CLI session in Emacs via the dev-env socket.
+
+   Connects to the Emacs socket server (task-conductor-dev-env) and sends
+   an open-session request. Emacs will start a new Claude CLI buffer.
+
+   Arguments:
+   - opts: Optional map with:
+     - :session-id - Session ID for --resume (omit to start fresh session)
+     - :prompt - Initial prompt to send after session starts
+     - :working-dir - Directory for the CLI session (defaults to cwd)
+     - :callback - Function called when session completes
+                   Receives {:tracking-id :status :hook-status :exit-code}
+
+   Returns {:status :requested, :tracking-id <id>} on success.
+   Returns {:status :error, :message <msg>} on failure.
+
+   Example:
+     (open-cli)                              ; new session
+     (open-cli {:prompt \"Hello\"})          ; with initial prompt
+     (open-cli {:session-id \"abc-123\"})    ; resume existing session"
+  ([]
+   (open-cli {}))
+  ([opts]
+   (let [env (or @dev-env-atom
+                 (when-let [e (emacs/create-emacs-dev-env)]
+                   (reset! dev-env-atom e)
+                   e))]
+     (if-not env
+       (do
+         (println "Failed to connect to Emacs socket server")
+         (println "Ensure task-conductor-dev-env-start has been called in Emacs")
+         {:status :error
+          :message "Could not connect to Emacs socket"})
+       (let [working-dir (or (:working-dir opts) (System/getProperty "user.dir"))
+             callback (or (:callback opts)
+                          (fn [result]
+                            (println "Session completed:" result)))
+             result (dev-env/open-cli-session
+                     env
+                     {:session-id (:session-id opts)  ; nil for new session
+                      :prompt (:prompt opts)
+                      :working-dir working-dir}
+                     callback)]
+         (println (str "Opening CLI session: " (:tracking-id result)))
+         (when (:session-id opts)
+           (println (str "Resuming session: " (:session-id opts))))
+         (println (str "Working dir: " working-dir))
+         (when (:prompt opts)
+           (println (str "Prompt: " (subs (:prompt opts) 0 (min 50 (count (:prompt opts)))) "...")))
+         result)))))
+
+(defn close-cli
+  "Close a CLI session by tracking-id.
+
+   Sends a close-session request to Emacs, which will kill the CLI buffer.
+   Any pending callback for this session will receive {:status :cancelled}.
+
+   Returns {:status :requested}."
+  [tracking-id]
+  (if-let [env @dev-env-atom]
+    (do
+      (dev-env/close-session env tracking-id)
+      (println (str "Closing session: " tracking-id))
+      {:status :requested})
+    (do
+      (println "No dev-env connection")
+      {:status :error :message "Not connected"})))
+
+(defn disconnect-dev-env
+  "Disconnect from the Emacs dev-env socket server.
+
+   Closes the connection and clears the cached EmacsDevEnv."
+  []
+  (when-let [env @dev-env-atom]
+    (emacs/stop! env)
+    (reset! dev-env-atom nil)
+    (println "Disconnected from Emacs dev-env"))
+  nil)

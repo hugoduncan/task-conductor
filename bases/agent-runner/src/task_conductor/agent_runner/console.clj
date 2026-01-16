@@ -6,7 +6,8 @@
    transition functions and mutable wrappers with history tracking."
   (:require
    [babashka.process :as p]
-   [task-conductor.agent-runner.handoff :as handoff]))
+   [task-conductor.agent-runner.handoff :as handoff]
+   [task-conductor.dev-env.interface :as dev-env]))
 
 ;;; State Machine Definition
 
@@ -340,39 +341,79 @@
     {:next-state :running-sdk
      :error nil}))
 
+(defn- make-dev-env-callback
+  "Create callback for dev-env that handles state transitions.
+   Wraps user-provided callback with state machine updates."
+  [user-callback]
+  (fn [result]
+    (let [{:keys [exit-code hook-status]} result
+          {:keys [error]} (determine-cli-result (or exit-code 0) hook-status)
+          new-state (if error
+                      (transition! :error-recovery {:error error})
+                      (transition! :running-sdk))]
+      (when user-callback
+        (user-callback {:state new-state
+                        :cli-status hook-status})))))
+
 (defn hand-to-cli
   "Hand off from SDK to CLI for user interaction.
 
    Transitions state machine through :needs-input to :running-cli,
    launches the CLI with the current session, and handles the exit.
 
-   After CLI exits, reads hook status from the handoff file to determine
-   the outcome:
+   Supports two modes:
+   1. Blocking (no dev-env): Launches CLI process directly, blocks until exit
+   2. Async (with dev-env): Delegates to dev-env, returns immediately
+
+   Arguments:
+   - opts: Optional map with:
+     :dev-env  - DevEnv instance for async operation
+     :callback - Function called with result when session completes (async only)
+     :prompt   - Optional prompt to send after session opens (async only)
+
+   Blocking mode return value:
+   - :state - the new state map after transition
+   - :cli-status - the hook status read from the handoff file (or nil)
+
+   Async mode return value:
+   - :status - :pending (callback will be invoked when complete)
+
+   After CLI exits (blocking) or session completes (async), determines outcome:
    - Exit code 0 + hook status :completed → :running-sdk
    - Exit code non-zero → :error-recovery
    - Hook status :error → :error-recovery
    - Missing hook status (user killed CLI) → :error-recovery with :cli-killed
 
-   Returns a map with:
-   - :state - the new state map after transition
-   - :cli-status - the hook status read from the handoff file (or nil)
-
    Throws if current state is not :running-sdk."
-  []
-  (let [current (:state @console-state)]
-    (when (not= :running-sdk current)
-      (throw (ex-info (str "hand-to-cli requires :running-sdk state, got " current)
-                      {:type :invalid-state
-                       :current-state current
-                       :required-state :running-sdk}))))
-  (transition! :needs-input)
-  (transition! :running-cli)
-  (let [session-id (:session-id @console-state)
-        exit-code (launch-cli-resume session-id)
-        cli-status (handoff/read-hook-status)
-        {:keys [error]} (determine-cli-result exit-code cli-status)
-        new-state (if error
-                    (transition! :error-recovery {:error error})
-                    (transition! :running-sdk))]
-    {:state new-state
-     :cli-status cli-status}))
+  ([]
+   (hand-to-cli {}))
+  ([opts]
+   (let [current (:state @console-state)]
+     (when (not= :running-sdk current)
+       (throw (ex-info (str "hand-to-cli requires :running-sdk state, got " current)
+                       {:type :invalid-state
+                        :current-state current
+                        :required-state :running-sdk}))))
+   (transition! :needs-input)
+   (transition! :running-cli)
+   (let [session-id (:session-id @console-state)
+         {:keys [dev-env callback prompt]} opts]
+     (if dev-env
+       ;; Async mode: delegate to dev-env
+       (do
+         (dev-env/open-cli-session
+          dev-env
+          {:session-id session-id
+           :prompt prompt
+           :working-dir (System/getProperty "user.dir")}
+          (make-dev-env-callback callback))
+         {:status :pending})
+       ;; Blocking mode: existing behavior
+       (let [exit-code (launch-cli-resume session-id)
+             cli-status (handoff/read-hook-status)
+             {:keys [error]} (determine-cli-result exit-code cli-status)
+             new-state (if error
+                         (transition! :error-recovery {:error error})
+                         (transition! :running-sdk))]
+         {:state new-state
+          :cli-status cli-status})))))
