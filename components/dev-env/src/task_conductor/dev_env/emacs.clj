@@ -157,14 +157,23 @@
            reader-thread (start-reader-thread channel-atom callbacks running)]
        (->EmacsDevEnv channel-atom path callbacks running reader-thread)))))
 
+(def ^:private join-timeout-ms
+  "Timeout in milliseconds to wait for reader thread termination."
+  1000)
+
 (defn stop!
   "Stop the EmacsDevEnv, closing the socket and stopping the reader thread.
-   Any pending callbacks will receive an error result."
+   Any pending callbacks will receive an error result.
+   Waits up to 1 second for the reader thread to terminate."
   [^EmacsDevEnv env]
   (reset! (:running env) false)
   ;; Interrupt the reader thread to unblock any pending read
   (.interrupt ^Thread (:reader-thread env))
   (socket/disconnect! @(:channel-atom env))
+  ;; Wait for reader thread to terminate (with timeout)
+  (try
+    (.join ^Thread (:reader-thread env) join-timeout-ms)
+    (catch InterruptedException _))
   ;; Notify pending callbacks of shutdown
   (doseq [[session-id callback] @(:callbacks env)]
     (try
