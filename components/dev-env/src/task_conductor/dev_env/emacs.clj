@@ -58,34 +58,36 @@
   [channel-atom callbacks running]
   (let [thread (Thread.
                 (fn []
-                  (loop []
-                    (when (and @running (not (Thread/interrupted)))
-                      (let [msg (socket/receive-message! @channel-atom)]
-                        (cond
-                          ;; Thread was interrupted or running flag cleared - clean exit
-                          (or (Thread/interrupted) (not @running))
-                          nil
+                  ;; Create a single reader instance to maintain buffer across calls
+                  (let [read-message! (socket/make-message-reader @channel-atom)]
+                    (loop []
+                      (when (and @running (not (Thread/interrupted)))
+                        (let [msg (read-message!)]
+                          (cond
+                            ;; Thread was interrupted or running flag cleared - clean exit
+                            (or (Thread/interrupted) (not @running))
+                            nil
 
-                          ;; Connection closed or error - notify callbacks
-                          (nil? msg)
-                          (when @running
-                            (binding [*out* *err*]
-                              (println "Connection to Emacs lost"))
-                            (notify-all-callbacks-error! callbacks "Connection lost")
-                            (reset! running false))
+                            ;; Connection closed or error - notify callbacks
+                            (nil? msg)
+                            (when @running
+                              (binding [*out* *err*]
+                                (println "Connection to Emacs lost"))
+                              (notify-all-callbacks-error! callbacks "Connection lost")
+                              (reset! running false))
 
-                          ;; Parse error - log and continue
-                          (:error msg)
-                          (do
-                            (binding [*out* *err*]
-                              (println "Socket parse error:" (:raw msg)))
-                            (recur))
+                            ;; Parse error - log and continue
+                            (:error msg)
+                            (do
+                              (binding [*out* *err*]
+                                (println "Socket parse error:" (:raw msg)))
+                              (recur))
 
-                          ;; Valid message - dispatch and continue
-                          :else
-                          (do
-                            (dispatch-message callbacks msg)
-                            (recur)))))))
+                            ;; Valid message - dispatch and continue
+                            :else
+                            (do
+                              (dispatch-message callbacks msg)
+                              (recur))))))))
                 "emacs-dev-env-reader")]
     (.setDaemon thread true)
     (.start thread)

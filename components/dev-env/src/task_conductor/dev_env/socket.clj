@@ -62,8 +62,70 @@
     (catch Exception _
       nil)))
 
+(defn- parse-first-message
+  "Parse the first complete JSON message from content string.
+   Returns [parsed-message remaining-content] or nil if no complete message."
+  [content]
+  (let [newline-idx (.indexOf ^String content "\n")]
+    (when-not (neg? newline-idx)
+      (let [json-str (.substring ^String content 0 newline-idx)
+            remaining (.substring ^String content (inc newline-idx))
+            parsed (try
+                     (json/read-str json-str :key-fn keyword)
+                     (catch Exception _
+                       {:error :parse-error :raw json-str}))]
+        [parsed remaining]))))
+
+(defn make-message-reader
+  "Create a stateful message reader for a socket channel.
+   Returns a function that when called, reads and returns the next message.
+   Buffers any content after a newline for subsequent calls.
+
+   The returned function returns:
+   - parsed message map on success
+   - nil if the connection was closed
+   - {:error :parse-error, :raw <string>} if JSON parsing fails"
+  [^SocketChannel channel]
+  (let [buffer-atom (atom "")
+        byte-buffer (ByteBuffer/allocate 4096)]
+    (fn []
+      (try
+        ;; First check if we have a complete message buffered
+        (if-let [[msg remaining] (parse-first-message @buffer-atom)]
+          (do
+            (reset! buffer-atom remaining)
+            msg)
+          ;; Need to read more data
+          (loop []
+            (let [bytes-read (.read channel byte-buffer)]
+              (cond
+                ;; Connection closed
+                (neg? bytes-read)
+                nil
+
+                ;; No bytes read, keep waiting
+                (zero? bytes-read)
+                (recur)
+
+                :else
+                (do
+                  (.flip byte-buffer)
+                  (let [bytes (byte-array (.remaining byte-buffer))]
+                    (.get byte-buffer bytes)
+                    (swap! buffer-atom str (String. bytes StandardCharsets/UTF_8)))
+                  (.clear byte-buffer)
+                  (if-let [[msg remaining] (parse-first-message @buffer-atom)]
+                    (do
+                      (reset! buffer-atom remaining)
+                      msg)
+                    (recur)))))))
+        (catch Exception _
+          nil)))))
+
 (defn receive-message!
   "Receive a newline-delimited JSON message (blocking).
+   NOTE: Does not buffer content after newlines - use make-message-reader
+   for scenarios where multiple messages may arrive together.
 
    channel - the SocketChannel to read from
 
@@ -71,35 +133,4 @@
    - nil if the connection was closed
    - {:error :parse-error, :raw <string>} if JSON parsing fails"
   [^SocketChannel channel]
-  (try
-    (let [buffer (ByteBuffer/allocate 4096)
-          sb (StringBuilder.)]
-      (loop []
-        (let [bytes-read (.read channel buffer)]
-          (cond
-            ;; Connection closed
-            (neg? bytes-read)
-            nil
-
-            ;; No bytes read, keep waiting
-            (zero? bytes-read)
-            (recur)
-
-            :else
-            (do
-              (.flip buffer)
-              (let [bytes (byte-array (.remaining buffer))]
-                (.get buffer bytes)
-                (.append sb (String. bytes StandardCharsets/UTF_8)))
-              (.clear buffer)
-              (let [content (.toString sb)
-                    newline-idx (.indexOf content "\n")]
-                (if (neg? newline-idx)
-                  (recur)
-                  (let [json-str (.substring content 0 newline-idx)]
-                    (try
-                      (json/read-str json-str :key-fn keyword)
-                      (catch Exception _
-                        {:error :parse-error :raw json-str}))))))))))
-    (catch Exception _
-      nil)))
+  ((make-message-reader channel)))

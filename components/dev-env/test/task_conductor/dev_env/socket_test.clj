@@ -141,3 +141,75 @@
         (let [channel (socket/connect! socket-path)]
           (socket/disconnect! channel)
           (is (nil? (socket/receive-message! channel))))))))
+
+(defn- start-multi-message-server
+  "Start a server that sends multiple messages in a single write.
+   Returns {:server server-channel :path socket-path :stop-fn (fn [])}."
+  [socket-path messages]
+  (let [address (UnixDomainSocketAddress/of socket-path)
+        server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
+                 (.bind address))
+        running (atom true)
+        thread (Thread.
+                (fn []
+                  (try
+                    (while @running
+                      (when-let [client (.accept server)]
+                        (try
+                          ;; Write all messages in a single buffer
+                          (let [combined (apply str (map #(str (json/write-str %) "\n") messages))
+                                response-buf (ByteBuffer/wrap (.getBytes combined StandardCharsets/UTF_8))]
+                            (while (.hasRemaining response-buf)
+                              (.write client response-buf)))
+                          (finally
+                            (.close client)))))
+                    (catch Exception _))))]
+    (.start thread)
+    {:server server
+     :path socket-path
+     :stop-fn (fn []
+                (reset! running false)
+                (.close server)
+                (.interrupt thread)
+                (Files/deleteIfExists (java.nio.file.Path/of socket-path (into-array String []))))}))
+
+(defmacro with-multi-message-server
+  "Execute body with a server that sends multiple messages at once."
+  [[socket-path-sym messages] & body]
+  `(let [path# (temp-socket-path)
+         {:keys [~'stop-fn]} (start-multi-message-server path# ~messages)
+         ~socket-path-sym path#]
+     (try
+       (Thread/sleep 50)
+       ~@body
+       (finally
+         (~'stop-fn)))))
+
+(deftest make-message-reader-test
+  ;; Tests for stateful message reader that buffers content across calls.
+  ;; Verifies that multiple messages received in a single read are
+  ;; correctly parsed and returned on subsequent calls.
+  (testing "make-message-reader"
+    (testing "returns messages one at a time when multiple arrive together"
+      (let [messages [{:type "first" :n 1}
+                      {:type "second" :n 2}
+                      {:type "third" :n 3}]]
+        (with-multi-message-server [socket-path messages]
+          (let [channel (socket/connect! socket-path)
+                read-message! (socket/make-message-reader channel)]
+            (Thread/sleep 50) ; Allow server to send
+            (is (= {:type "first" :n 1} (read-message!)))
+            (is (= {:type "second" :n 2} (read-message!)))
+            (is (= {:type "third" :n 3} (read-message!)))
+            (socket/disconnect! channel)))))
+
+    (testing "returns nil after all buffered messages consumed and connection closed"
+      (let [messages [{:type "only" :n 1}]]
+        (with-multi-message-server [socket-path messages]
+          (let [channel (socket/connect! socket-path)
+                read-message! (socket/make-message-reader channel)]
+            (Thread/sleep 50)
+            (is (= {:type "only" :n 1} (read-message!)))
+            ;; Server closed after sending - next read should return nil
+            (is (nil? (read-message!)))
+            (socket/disconnect! channel)))))))
