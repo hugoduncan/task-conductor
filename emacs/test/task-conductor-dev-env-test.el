@@ -8,6 +8,7 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'parseedn)
 (require 'task-conductor-dev-env)
 
 ;;; Message Parsing Tests
@@ -187,6 +188,78 @@ Empty JSON object {} becomes nil in Emacs Lisp (empty alist)."
             (should (equal (task-conductor-dev-env--get-session-id buf2) "session-2")))
         (kill-buffer buf1)
         (kill-buffer buf2)))))
+
+;;; EDN Parsing Tests
+
+(ert-deftest task-conductor-dev-env-test-edn-to-alist-simple-map ()
+  "Convert simple EDN map to alist."
+  (let ((hash (make-hash-table)))
+    (puthash :status :completed hash)
+    (puthash :timestamp "2025-01-16T12:00:00Z" hash)
+    (let ((result (task-conductor-dev-env--edn-to-alist hash)))
+      (should (equal (alist-get 'status result) "completed"))
+      (should (equal (alist-get 'timestamp result) "2025-01-16T12:00:00Z")))))
+
+(ert-deftest task-conductor-dev-env-test-edn-to-alist-nested-map ()
+  "Convert nested EDN map to alist."
+  (let ((inner (make-hash-table))
+        (outer (make-hash-table)))
+    (puthash :reason :cli-killed inner)
+    (puthash :status :error outer)
+    (puthash :details inner outer)
+    (let ((result (task-conductor-dev-env--edn-to-alist outer)))
+      (should (equal (alist-get 'status result) "error"))
+      (let ((details (alist-get 'details result)))
+        (should (equal (alist-get 'reason details) "cli-killed"))))))
+
+(ert-deftest task-conductor-dev-env-test-edn-to-alist-preserves-strings ()
+  "String values are preserved as-is."
+  (let ((hash (make-hash-table)))
+    (puthash :message "Use :foo here" hash)
+    (let ((result (task-conductor-dev-env--edn-to-alist hash)))
+      (should (equal (alist-get 'message result) "Use :foo here")))))
+
+(ert-deftest task-conductor-dev-env-test-edn-to-alist-handles-numbers ()
+  "Numeric values are preserved."
+  (let ((hash (make-hash-table)))
+    (puthash :exit-code 42 hash)
+    (puthash :count 0 hash)
+    (let ((result (task-conductor-dev-env--edn-to-alist hash)))
+      (should (equal (alist-get 'exit-code result) 42))
+      (should (equal (alist-get 'count result) 0)))))
+
+(ert-deftest task-conductor-dev-env-test-read-handoff-edn-nonexistent ()
+  "Return nil for nonexistent file."
+  (let ((result (task-conductor-dev-env--read-handoff-edn "/nonexistent/path")))
+    (should (null result))))
+
+(ert-deftest task-conductor-dev-env-test-read-handoff-edn-valid ()
+  "Parse valid handoff.edn file."
+  (let ((temp-dir (make-temp-file "tc-test" t)))
+    (unwind-protect
+        (let ((tc-dir (expand-file-name ".task-conductor" temp-dir)))
+          (make-directory tc-dir)
+          (with-temp-file (expand-file-name "handoff.edn" tc-dir)
+            (insert "{:status :completed :timestamp \"2025-01-16T12:00:00Z\"}"))
+          (let ((result (task-conductor-dev-env--read-handoff-edn temp-dir)))
+            (should result)
+            (should (equal (alist-get 'status result) "completed"))
+            (should (equal (alist-get 'timestamp result) "2025-01-16T12:00:00Z"))))
+      (delete-directory temp-dir t))))
+
+(ert-deftest task-conductor-dev-env-test-read-handoff-edn-with-reason ()
+  "Parse handoff.edn with optional reason field."
+  (let ((temp-dir (make-temp-file "tc-test" t)))
+    (unwind-protect
+        (let ((tc-dir (expand-file-name ".task-conductor" temp-dir)))
+          (make-directory tc-dir)
+          (with-temp-file (expand-file-name "handoff.edn" tc-dir)
+            (insert "{:status :error :timestamp \"2025-01-16T12:00:00Z\" :reason :cli-killed}"))
+          (let ((result (task-conductor-dev-env--read-handoff-edn temp-dir)))
+            (should result)
+            (should (equal (alist-get 'status result) "error"))
+            (should (equal (alist-get 'reason result) "cli-killed"))))
+      (delete-directory temp-dir t))))
 
 ;;; Event Hook Handler Tests
 

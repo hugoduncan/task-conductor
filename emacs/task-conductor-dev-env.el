@@ -4,7 +4,7 @@
 
 ;; Author: task-conductor Contributors
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "27.1") (parseedn "1.2.0"))
 ;; Keywords: tools, processes
 
 ;;; Commentary:
@@ -27,6 +27,7 @@
 
 (require 'json)
 (require 'cl-lib)
+(require 'parseedn)
 
 ;; Forward declarations for claude-code.el
 (declare-function claude-code--start "claude-code")
@@ -144,22 +145,42 @@ EXIT-CODE is the CLI exit code."
   "Get the session-id associated with BUFFER."
   (gethash buffer task-conductor-dev-env--buffer-sessions))
 
+(defun task-conductor-dev-env--edn-to-alist (edn-value)
+  "Convert EDN-VALUE from parseedn to alist with symbol keys.
+parseedn returns hash tables for maps and keywords for EDN keywords.
+This converts to alists with plain symbol keys for compatibility."
+  (cond
+   ((hash-table-p edn-value)
+    (let (result)
+      (maphash (lambda (k v)
+                 ;; Convert keyword :foo to symbol foo
+                 (let ((key (if (keywordp k)
+                               (intern (substring (symbol-name k) 1))
+                             k)))
+                   (push (cons key (task-conductor-dev-env--edn-to-alist v))
+                         result)))
+               edn-value)
+      (nreverse result)))
+   ((listp edn-value)
+    (mapcar #'task-conductor-dev-env--edn-to-alist edn-value))
+   ((keywordp edn-value)
+    ;; Convert keyword values to strings (e.g., :completed -> "completed")
+    (substring (symbol-name edn-value) 1))
+   (t edn-value)))
+
 (defun task-conductor-dev-env--read-handoff-edn (working-dir)
   "Read hook status from .task-conductor/handoff.edn in WORKING-DIR.
-Returns an alist or nil if file doesn't exist."
+Returns an alist or nil if file doesn't exist.
+Uses parseedn for robust EDN parsing."
   (let ((handoff-file (expand-file-name ".task-conductor/handoff.edn" working-dir)))
     (when (file-exists-p handoff-file)
       (condition-case err
           (with-temp-buffer
             (insert-file-contents handoff-file)
-            ;; Parse EDN as JSON-compatible format
-            ;; EDN keywords become strings, vectors become arrays
-            (let ((content (buffer-string)))
-              ;; Simple conversion: :key -> "key" for JSON compatibility
-              (setq content (replace-regexp-in-string ":\\([a-zA-Z0-9_-]+\\)" "\"\\1\"" content))
-              ;; Convert EDN maps { } to JSON objects
-              (setq content (replace-regexp-in-string "\\([^\\]\\){" "\\1{" content))
-              (json-read-from-string content)))
+            (goto-char (point-min))
+            ;; parseedn-read returns a list; extract the first element
+            (let ((parsed (car (parseedn-read))))
+              (task-conductor-dev-env--edn-to-alist parsed)))
         (error
          (task-conductor-dev-env--debug "Error reading handoff.edn: %s"
                                         (error-message-string err))
