@@ -42,7 +42,9 @@
    8. No refined: true → :unrefined-story"
   [story children]
   (let [meta-map (or (:meta story) {})
-        refined? (get meta-map :refined)
+        ;; Check both :refined and :mcp-tasks/refined (latter from normalized ::refined)
+        refined? (or (get meta-map :refined)
+                     (get meta-map :mcp-tasks/refined))
         code-reviewed (get meta-map :code-reviewed)
         pr-num (get meta-map :pr-num)
         pr-merged? (get meta-map :pr-merged?)

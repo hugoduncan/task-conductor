@@ -341,44 +341,6 @@
     {:next-state :running-sdk
      :error nil}))
 
-(defn- make-file-watcher-callback
-  "Create callback for handoff file watcher that handles state transitions.
-
-   Handles three status types:
-   - :idle - invokes idle-callback, stays in :running-cli
-   - :completed - transitions to :running-sdk, invokes completion-callback
-   - :error - transitions to :error-recovery, invokes completion-callback
-
-   The stop-watch-fn atom is dereferenced to stop the watcher on completion."
-  [idle-callback completion-callback stop-watch-fn]
-  (fn [hook-status]
-    (case (:status hook-status)
-      :idle
-      (when idle-callback
-        (idle-callback hook-status))
-
-      :completed
-      (do
-        (when-let [stop-fn @stop-watch-fn]
-          (stop-fn))
-        (let [new-state (transition! :running-sdk)]
-          (when completion-callback
-            (completion-callback {:state new-state
-                                  :cli-status hook-status}))))
-
-      :error
-      (do
-        (when-let [stop-fn @stop-watch-fn]
-          (stop-fn))
-        (let [new-state (transition! :error-recovery {:error {:type :hook-error
-                                                              :hook-status hook-status}})]
-          (when completion-callback
-            (completion-callback {:state new-state
-                                  :cli-status hook-status}))))
-
-      ;; Unknown status - ignore
-      nil)))
-
 (defn hand-to-cli
   "Hand off from SDK to CLI for user interaction.
 
@@ -432,17 +394,43 @@
      (if dev-env
        ;; Async mode: watch file for status changes, delegate to dev-env
        (let [stop-watch-fn (atom nil)
-             watcher-callback (make-file-watcher-callback idle-callback callback stop-watch-fn)]
+             completed? (atom false)
+             ;; Shared completion handler - only fires once
+             handle-completion (fn [source hook-status]
+                                 (when (compare-and-set! completed? false true)
+                                   (println "[hand-to-cli] Completion detected via" source)
+                                   (when-let [stop-fn @stop-watch-fn]
+                                     (stop-fn))
+                                   (let [new-state (if (= :error (:status hook-status))
+                                                     (transition! :error-recovery
+                                                                  {:error {:type :hook-error
+                                                                           :hook-status hook-status}})
+                                                     (transition! :running-sdk))]
+                                     (when callback
+                                       (callback {:state new-state
+                                                  :cli-status hook-status})))))
+             watcher-callback (fn [hook-status]
+                                (case (:status hook-status)
+                                  :idle (when idle-callback (idle-callback hook-status))
+                                  :completed (handle-completion :file-watcher hook-status)
+                                  :error (handle-completion :file-watcher hook-status)
+                                  nil))
+             emacs-callback (fn [result]
+                              (println "[hand-to-cli] Emacs callback fired:" (pr-str result))
+                              (handle-completion :emacs-callback
+                                                 {:status (if (= :completed (:status result))
+                                                            :completed
+                                                            :error)}))]
          ;; Start watching handoff file for status changes
          (reset! stop-watch-fn
                  (handoff/watch-hook-status-file watcher-callback))
-         ;; Open CLI session (fire-and-forget, no completion callback)
+         ;; Open CLI session with Emacs callback as backup
          (dev-env/open-cli-session
           dev-env
           {:session-id session-id
            :prompt prompt
            :working-dir (System/getProperty "user.dir")}
-          nil)
+          emacs-callback)
          {:status :running})
        ;; Blocking mode: existing behavior
        (let [exit-code (launch-cli-resume session-id)
