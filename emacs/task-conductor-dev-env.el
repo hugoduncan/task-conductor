@@ -218,10 +218,12 @@ Uses parseedn for robust EDN parsing."
          nil)))))
 
 (defun task-conductor-dev-env--buffer-kill-handler ()
-  "Handle buffer being killed - send error if session was active."
+  "Handle buffer being killed - send session-complete if session was active."
   (when-let ((session-id (task-conductor-dev-env--get-session-id (current-buffer))))
     (task-conductor-dev-env--debug "Buffer killed for session %s" session-id)
-    (task-conductor-dev-env-send-error session-id "Session buffer closed by user")
+    ;; Send session-complete with "completed" status so flow can continue
+    ;; The user closing the buffer is a valid completion path
+    (task-conductor-dev-env-send-session-complete session-id "completed" nil 0)
     (task-conductor-dev-env--unregister-session session-id)))
 
 ;;; Event Hook Integration
