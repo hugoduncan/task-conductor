@@ -20,12 +20,13 @@
        :prompt      - Optional prompt to send after session opens
        :working-dir - Directory to cd before launching
 
-     callback: (fn [result] ...) invoked when session completes.
-       result map contains:
-         :session-id  - The session ID
-         :status      - :completed, :cancelled, or :error
-         :hook-status - Hook status map from handoff.edn (if available)
-         :exit-code   - CLI exit code
+     callback: Optional (fn [result] ...) for reporting open errors.
+       Only invoked if session fails to open.
+       result map: {:status :error :message \"...\"}
+
+     Session status (idle, completed) is reported via handoff file
+     (.task-conductor/handoff.edn), not via callback. The orchestrator
+     uses watch-hook-status-file to monitor session state.
 
      Returns {:status :requested} immediately (non-blocking).")
 

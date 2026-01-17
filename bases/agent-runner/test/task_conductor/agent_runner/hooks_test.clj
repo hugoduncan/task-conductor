@@ -1,11 +1,13 @@
 (ns task-conductor.agent-runner.hooks-test
-  ;; Tests for stop hook generation and installation.
+  ;; Tests for stop and idle hook generation and installation.
   ;;
   ;; Contracts tested:
   ;; - generate-stop-hook produces valid bash script
-  ;; - Generated script writes valid HookStatus EDN
+  ;; - generate-idle-hook produces valid bash script
+  ;; - Generated scripts write valid HookStatus EDN
   ;; - install-stop-hook creates executable file
-  ;; - configure-claude-settings creates valid JSON structure
+  ;; - install-idle-hook creates executable file
+  ;; - configure-claude-settings creates valid JSON with Stop and Notification hooks
   ;; - ensure-hooks-installed is idempotent
   ;; - Full hook flow: install → execute → read status
   (:require
@@ -67,10 +69,39 @@
       (testing "exits with code 0"
         (is (str/includes? script "exit 0"))))))
 
+(deftest generate-idle-hook-test
+  (testing "generate-idle-hook"
+    (let [script (hooks/generate-idle-hook)]
+
+      (testing "produces non-empty script"
+        (is (not (str/blank? script))))
+
+      (testing "starts with shebang"
+        (is (str/starts-with? script "#!/bin/bash")))
+
+      (testing "contains atomic write pattern"
+        (is (str/includes? script "TEMP_FILE"))
+        (is (str/includes? script "mv \"$TEMP_FILE\"")))
+
+      (testing "writes EDN with :status :idle and :source"
+        (is (str/includes? script ":status :idle"))
+        (is (str/includes? script ":timestamp"))
+        (is (str/includes? script ":source :notification-hook")))
+
+      (testing "exits with code 0"
+        (is (str/includes? script "exit 0"))))))
+
 (deftest generated-script-shellcheck-test
-  (testing "generated script"
+  (testing "generated stop script"
     (testing "passes shellcheck validation"
       (let [script (hooks/generate-stop-hook)
+            result (shell/sh "shellcheck" "-" :in script)]
+        (is (zero? (:exit result))
+            (str "shellcheck errors: " (:out result) (:err result))))))
+
+  (testing "generated idle script"
+    (testing "passes shellcheck validation"
+      (let [script (hooks/generate-idle-hook)
             result (shell/sh "shellcheck" "-" :in script)]
         (is (zero? (:exit result))
             (str "shellcheck errors: " (:out result) (:err result)))))))
@@ -142,14 +173,15 @@
           (let [settings-file (io/file temp-dir ".claude" "settings.local.json")]
             (is (.exists settings-file))))
 
-        (testing "creates valid JSON structure"
+        (testing "creates valid JSON structure with Stop and Notification hooks"
           (hooks/configure-claude-settings temp-dir)
           (let [settings-file (io/file temp-dir ".claude" "settings.local.json")
                 content (slurp settings-file)
                 parsed (json/read-str content :key-fn keyword)]
             (is (map? parsed))
             (is (contains? parsed :hooks))
-            (is (contains? (:hooks parsed) :Stop))))
+            (is (contains? (:hooks parsed) :Stop))
+            (is (contains? (:hooks parsed) :Notification))))
 
         (testing "Stop hook has correct structure"
           (hooks/configure-claude-settings temp-dir)
@@ -160,6 +192,18 @@
             (is (vector? stop-hooks))
             (is (= 1 (count stop-hooks)))
             (is (= ".task-conductor/hooks/stop-hook.sh"
+                   (get-in first-hook [:hooks 0 :command])))))
+
+        (testing "Notification hook has correct structure with matcher"
+          (hooks/configure-claude-settings temp-dir)
+          (let [settings-file (io/file temp-dir ".claude" "settings.local.json")
+                parsed (json/read-str (slurp settings-file) :key-fn keyword)
+                notification-hooks (get-in parsed [:hooks :Notification])
+                first-hook (first notification-hooks)]
+            (is (vector? notification-hooks))
+            (is (= 1 (count notification-hooks)))
+            (is (= "idle_prompt" (:matcher first-hook)))
+            (is (= ".task-conductor/hooks/idle-hook.sh"
                    (get-in first-hook [:hooks 0 :command])))))
 
         (testing "preserves existing settings"
@@ -181,10 +225,12 @@
   (testing "ensure-hooks-installed"
     (with-temp-dir
       (fn [temp-dir]
-        (testing "installs hook and configures settings on first call"
+        (testing "installs both hooks and configures settings on first call"
           (let [result (hooks/ensure-hooks-installed temp-dir)]
-            (is (string? (:hook-path result)))
-            (is (.exists (io/file (:hook-path result))))
+            (is (string? (:stop-hook-path result)))
+            (is (string? (:idle-hook-path result)))
+            (is (.exists (io/file (:stop-hook-path result))))
+            (is (.exists (io/file (:idle-hook-path result))))
             (is (:settings-updated? result))))
 
         (testing "is idempotent on subsequent calls"
@@ -194,19 +240,24 @@
           (let [result (hooks/ensure-hooks-installed temp-dir)]
             (is (false? (:settings-updated? result)))))
 
-        (testing "returns correct hook path"
+        (testing "returns correct hook paths"
           (let [result (hooks/ensure-hooks-installed temp-dir)]
-            (is (str/ends-with? (:hook-path result) "stop-hook.sh"))))))))
+            (is (str/ends-with? (:stop-hook-path result) "stop-hook.sh"))
+            (is (str/ends-with? (:idle-hook-path result) "idle-hook.sh"))))))))
 
 (deftest hook-installed?-test
   (testing "hook-installed?"
     (with-temp-dir
       (fn [temp-dir]
-        (testing "returns false when hook not installed"
+        (testing "returns false when no hooks installed"
           (is (false? (hooks/hook-installed? temp-dir))))
 
-        (testing "returns true after installation"
+        (testing "returns false when only stop hook installed"
           (hooks/install-stop-hook temp-dir)
+          (is (false? (hooks/hook-installed? temp-dir))))
+
+        (testing "returns true after both hooks installed"
+          (hooks/install-idle-hook temp-dir)
           (is (true? (hooks/hook-installed? temp-dir))))))))
 
 (deftest settings-configured?-test
@@ -234,32 +285,32 @@
   (testing "full hook flow"
     (with-temp-dir
       (fn [temp-dir]
-        (testing "install, execute, and read hook status"
+        (testing "install, execute stop hook, and read status"
           (let [;; Step 1: Install hooks
                 install-result (hooks/ensure-hooks-installed temp-dir)
-                hook-path (:hook-path install-result)
+                stop-hook-path (:stop-hook-path install-result)
                 ;; The hook writes to .task-conductor/handoff.edn
                 handoff-path (str temp-dir "/.task-conductor/handoff.edn")
                 ;; Simulate CLI input (JSON with session_id)
                 input-json "{\"session_id\": \"test-session\"}"]
 
-            (testing "ensure-hooks-installed creates hook file"
-              (is (string? hook-path))
-              (is (.exists (io/file hook-path)))
-              (is (file-executable? hook-path)))
+            (testing "ensure-hooks-installed creates stop hook file"
+              (is (string? stop-hook-path))
+              (is (.exists (io/file stop-hook-path)))
+              (is (file-executable? stop-hook-path)))
 
             (testing "ensure-hooks-installed configures settings"
               (is (:settings-updated? install-result)))
 
-            ;; Step 2: Execute the installed hook script
-            (let [result (shell/sh "bash" hook-path
+            ;; Step 2: Execute the installed stop hook script
+            (let [result (shell/sh "bash" stop-hook-path
                                    :in input-json
                                    :dir temp-dir)]
-              (testing "hook script executes successfully"
+              (testing "stop hook script executes successfully"
                 (is (zero? (:exit result))
                     (str "script failed: " (:err result))))
 
-              (testing "hook script creates handoff file"
+              (testing "stop hook script creates handoff file"
                 (is (.exists (io/file handoff-path))
                     "handoff.edn should be created")))
 
@@ -271,6 +322,33 @@
                 (is (handoff/valid-hook-status? hook-status)
                     "returned status should be valid"))
 
-              (testing "HookStatus has expected values"
+              (testing "HookStatus has expected values for stop hook"
                 (is (= :completed (:status hook-status)))
+                (is (inst? (:timestamp hook-status)))))))
+
+        (testing "install, execute idle hook, and read status"
+          (let [;; Use the already installed hooks
+                install-result (hooks/ensure-hooks-installed temp-dir)
+                idle-hook-path (:idle-hook-path install-result)
+                handoff-path (str temp-dir "/.task-conductor/handoff.edn")
+                input-json "{\"type\": \"notification\"}"]
+
+            (testing "ensure-hooks-installed creates idle hook file"
+              (is (string? idle-hook-path))
+              (is (.exists (io/file idle-hook-path)))
+              (is (file-executable? idle-hook-path)))
+
+            ;; Execute the idle hook script
+            (let [result (shell/sh "bash" idle-hook-path
+                                   :in input-json
+                                   :dir temp-dir)]
+              (testing "idle hook script executes successfully"
+                (is (zero? (:exit result))
+                    (str "script failed: " (:err result)))))
+
+            ;; Read hook status
+            (let [hook-status (handoff/read-hook-status handoff-path)]
+              (testing "HookStatus has expected values for idle hook"
+                (is (= :idle (:status hook-status)))
+                (is (= :notification-hook (:source hook-status)))
                 (is (inst? (:timestamp hook-status)))))))))))
