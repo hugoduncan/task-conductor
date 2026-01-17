@@ -382,6 +382,14 @@
     {:action :story-done
      :reason "Story complete - PR merged"}))
 
+(defn- needs-user-input?
+  "Check if SDK result indicates user input is needed.
+   Returns true if there are AskUserQuestion permission denials."
+  [sdk-result]
+  (let [response (or (:result sdk-result) sdk-result)
+        denials (get response :permission_denials [])]
+    (some #(= "AskUserQuestion" (:tool_name %)) denials)))
+
 (defn- derive-flow-decision
   "Query story and children, derive state, return validated FlowDecision.
    Encapsulates the common pattern used by all StoryFlowModel methods."
@@ -404,8 +412,11 @@
   (on-cli-return [_this _cli-status _console-state]
     (derive-flow-decision run-mcp-tasks-fn story-id))
 
-  (on-sdk-complete [_this _sdk-result _console-state]
-    (derive-flow-decision run-mcp-tasks-fn story-id))
+  (on-sdk-complete [_this sdk-result _console-state]
+    (if (needs-user-input? sdk-result)
+      {:action :hand-to-cli
+       :reason "SDK requires user input (AskUserQuestion denied)"}
+      (derive-flow-decision run-mcp-tasks-fn story-id)))
 
   (on-task-complete [_this _console-state]
     (derive-flow-decision run-mcp-tasks-fn story-id)))

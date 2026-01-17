@@ -255,8 +255,9 @@
 (defn- derive-flow-decision
   "Process on-sdk-complete result and return next action for the loop.
    Handles transition to CLI, story completion, errors, and continuation.
-   Returns {:next-prompt prompt} or {:outcome ...}."
-  [decision]
+   Returns {:next-prompt prompt} or {:outcome ...}.
+   opts may contain :dev-env for async CLI handoff."
+  [decision opts]
   (case (:action decision)
     :continue-sdk
     (do
@@ -266,10 +267,20 @@
 
     :hand-to-cli
     (do
-      (console/hand-to-cli)
-      {:outcome :handed-to-cli
-       :reason (:reason decision)
-       :state @console/console-state})
+      (println "[derive-flow-decision] Hand-to-CLI requested:" (:reason decision))
+      (println "[derive-flow-decision] Session ID:" (:session-id @console/console-state))
+      (if-let [dev-env (:dev-env opts)]
+        (do
+          (println "[derive-flow-decision] Using async mode with dev-env")
+          (console/hand-to-cli {:dev-env dev-env})
+          {:outcome :handed-to-cli
+           :reason (:reason decision)
+           :state @console/console-state})
+        (do
+          (println "[derive-flow-decision] No dev-env - returning without launching CLI")
+          {:outcome :handed-to-cli
+           :reason (:reason decision)
+           :state @console/console-state})))
 
     :story-done
     (do
@@ -301,8 +312,15 @@
   (let [cwd (or (:cwd opts) (System/getProperty "user.dir"))
         session-config (build-task-session-config {:worktree-path cwd} opts)]
     (println "[run-cli-with-prompt] Running CLI with prompt:" prompt)
-    (let [{:keys [result session-id]} (run-cli-session session-config prompt)]
+    (let [{:keys [result session-id]} (run-cli-session session-config prompt)
+          response (:response result)]
       (println "[run-cli-with-prompt] CLI complete, session-id:" session-id)
+      (println "[run-cli-with-prompt] Result text:" (subs (str (:result response)) 0
+                                                          (min 200 (count (str (:result response))))))
+      (when-let [denials (seq (:permission_denials response))]
+        (println "[run-cli-with-prompt] Permission denials:" (count denials))
+        (doseq [{:keys [tool_name]} denials]
+          (println "  -" tool_name)))
       {:session-id session-id
        :messages (:messages result)
        :result result})))
@@ -323,7 +341,7 @@
         (swap! console/console-state assoc :session-id (:session-id sdk-result))
         (let [next-decision (flow/on-sdk-complete flow-model sdk-result @console/console-state)]
           (println "[handle-flow-decision] on-sdk-complete returned:" (pr-str next-decision))
-          (derive-flow-decision next-decision))))
+          (derive-flow-decision next-decision opts))))
 
     :hand-to-cli
     ;; Don't call console/hand-to-cli here - we haven't run SDK yet.

@@ -34,6 +34,7 @@
   [{:keys [working-dir prompt timeout-ms]}]
   (let [timeout (or timeout-ms default-timeout-ms)
         proc (p/process {:dir working-dir
+                         :in ""
                          :out :string
                          :err :string}
                         "claude" "--print" "--output-format" "json"
