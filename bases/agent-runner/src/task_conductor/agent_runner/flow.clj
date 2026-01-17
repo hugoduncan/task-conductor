@@ -382,13 +382,22 @@
     {:action :story-done
      :reason "Story complete - PR merged"}))
 
-(defn- needs-user-input?
-  "Check if SDK result indicates user input is needed.
-   Returns true if there are AskUserQuestion permission denials."
+(defn- sdk-made-progress?
+  "Check if SDK result indicates meaningful progress was made.
+
+   Returns true if:
+   - There's actual result content (non-empty response text)
+   - No permission denials occurred
+
+   Returns false (needs CLI handoff) if:
+   - Result is empty or nil
+   - Any permission was denied (not just AskUserQuestion)"
   [sdk-result]
   (let [response (or (:result sdk-result) sdk-result)
+        result-text (get response :result)
         denials (get response :permission_denials [])]
-    (some #(= "AskUserQuestion" (:tool_name %)) denials)))
+    (and (seq result-text)
+         (empty? denials))))
 
 (defn- derive-flow-decision
   "Query story and children, derive state, return validated FlowDecision.
@@ -413,10 +422,10 @@
     (derive-flow-decision run-mcp-tasks-fn story-id))
 
   (on-sdk-complete [_this sdk-result _console-state]
-    (if (needs-user-input? sdk-result)
+    (if (sdk-made-progress? sdk-result)
+      (derive-flow-decision run-mcp-tasks-fn story-id)
       {:action :hand-to-cli
-       :reason "SDK requires user input (AskUserQuestion denied)"}
-      (derive-flow-decision run-mcp-tasks-fn story-id)))
+       :reason "SDK did not complete - handing to CLI for user interaction"}))
 
   (on-task-complete [_this _console-state]
     (derive-flow-decision run-mcp-tasks-fn story-id)))

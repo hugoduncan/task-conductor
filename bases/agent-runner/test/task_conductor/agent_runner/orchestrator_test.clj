@@ -10,6 +10,20 @@
    [task-conductor.agent-runner.handoff :as handoff]
    [task-conductor.agent-runner.orchestrator :as orchestrator]))
 
+;;; Test Helpers
+
+(defn successful-sdk-result
+  "Create an SDK result that indicates successful completion.
+   The result must have actual content and no permission denials
+   for the flow model to continue (rather than hand to CLI)."
+  ([]
+   (successful-sdk-result "sess-1"))
+  ([session-id]
+   {:session-id session-id
+    :messages []
+    :result {:result "Task completed successfully"
+             :permission_denials []}}))
+
 (deftest select-next-task-test
   ;; Verifies task selection handles all edge cases:
   ;; task available, all blocked, all complete, no tasks.
@@ -325,8 +339,7 @@
                             orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (swap! task-counter inc)
-                              {:result {:messages []}
-                               :session-id (str "sess-" @task-counter)})]
+                              (successful-sdk-result (str "sess-" @task-counter)))]
                 (let [result (orchestrator/execute-story 57)]
                   (is (= :complete (:outcome result))
                       "should return :complete")
@@ -350,8 +363,7 @@
                             (fn [_config _prompt]
                               (reset! executed? true)
                               (console/set-paused!)
-                              {:result {:messages []}
-                               :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (let [result (orchestrator/execute-story 57)]
                   (is (= :paused (:outcome result))
                       "should return :paused")
@@ -424,8 +436,7 @@
                             orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (swap! states conj (console/current-state))
-                              {:result {:messages []}
-                               :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (orchestrator/execute-story 57)
                 (is (= :selecting-task (first @states))
                     "should be in :selecting-task when selecting")
@@ -492,7 +503,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (orchestrator/execute-story-with-flow-model fm 42)
                 (is (= "/mcp-tasks:refine-task (MCP) 42" (first @captured-prompts))
                     "should invoke SDK with refine-task prompt")))))))
@@ -521,7 +532,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (orchestrator/execute-story-with-flow-model fm 42)
                 (is (= "/mcp-tasks:create-story-children (MCP) 42"
                        (first @captured-prompts))
@@ -550,7 +561,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (orchestrator/execute-story-with-flow-model fm 42)
                 (is (= "/mcp-tasks:execute-story-child (MCP) 42"
                        (first @captured-prompts))
@@ -577,7 +588,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (orchestrator/execute-story-with-flow-model fm 42)
                 (is (= "/mcp-tasks:review-story-implementation (MCP) 42"
                        (first @captured-prompts))
@@ -602,7 +613,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})
+                              (successful-sdk-result))
                             console/hand-to-cli
                             (fn []
                               (swap! console/console-state assoc :state :running-cli)
@@ -630,7 +641,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (reset! sdk-called? true)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (let [result (orchestrator/execute-story-with-flow-model fm 42)]
                   (is (not @sdk-called?)
                       "should not call SDK for manual review state")
@@ -682,7 +693,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (console/set-paused!)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (let [result (orchestrator/execute-story-with-flow-model fm 42)]
                   (is (= :paused (:outcome result))
                       "should return paused outcome"))))))))))
@@ -743,7 +754,7 @@
             (with-redefs [orchestrator/run-cli-session
                           (fn [_config prompt]
                             (swap! captured-prompts conj prompt)
-                            {:result {:messages []} :session-id "sess-1"})
+                            (successful-sdk-result))
                           console/hand-to-cli
                           (fn []
                             (swap! console/console-state assoc :state :running-cli)
