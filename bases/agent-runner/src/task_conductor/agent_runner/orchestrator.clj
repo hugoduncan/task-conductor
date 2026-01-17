@@ -326,12 +326,12 @@
   (let [cwd (or (:cwd opts) (System/getProperty "user.dir"))
         session-config (build-task-session-config {:worktree-path cwd} opts)]
     (println "[run-cli-with-prompt] Running CLI with prompt:" prompt)
-    (let [{:keys [result session-id]} (run-cli-session session-config prompt)
-          response (:response result)]
+    (let [{:keys [result session-id]} (run-cli-session session-config prompt)]
+      ;; result is the CLI JSON response directly
       (println "[run-cli-with-prompt] CLI complete, session-id:" session-id)
-      (println "[run-cli-with-prompt] Result text:" (subs (str (:result response)) 0
-                                                          (min 200 (count (str (:result response))))))
-      (when-let [denials (seq (:permission_denials response))]
+      (println "[run-cli-with-prompt] Result text:" (subs (str (:result result)) 0
+                                                          (min 200 (count (str (:result result))))))
+      (when-let [denials (seq (:permission_denials result))]
         (println "[run-cli-with-prompt] Permission denials:" (count denials))
         (doseq [{:keys [tool_name]} denials]
           (println "  -" tool_name)))
