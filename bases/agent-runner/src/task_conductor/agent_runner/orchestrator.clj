@@ -94,19 +94,21 @@
             ok))))
 
 (defn- extract-story-id-from-prompt
-  "Extract story ID from execute-story-child prompt.
+  "Extract story ID from mcp-tasks prompt.
+   Matches any prompt with `(MCP) <id>` pattern.
    Returns the story ID as a number, or nil if not found.
 
-   Example: '/mcp-tasks:execute-story-child (MCP) 42' => 42"
+   Example: '/mcp-tasks:execute-story-child (MCP) 42' => 42
+            '/mcp-tasks:refine-task (MCP) 57' => 57"
   [prompt]
-  (when-let [[_ id-str] (re-find #"execute-story-child.*?(\d+)" prompt)]
+  (when-let [[_ id-str] (re-find #"\(MCP\)\s*(\d+)" prompt)]
     (parse-long id-str)))
 
 (defn- get-task-worktree-cwd
   "Get the working directory for executing a task.
 
-   For execute-story-child prompts, looks up the worktree for the story
-   itself (not child tasks). All child tasks execute in the story's worktree.
+   For mcp-tasks prompts with (MCP) <story-id>, looks up the worktree for
+   the story. All story operations execute in the story's worktree.
 
    Returns the worktree path if found, nil otherwise.
    Falls back to nil (caller should use default cwd)."
