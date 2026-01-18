@@ -772,6 +772,9 @@
     {:status :requested})
   (close-session [_this session-id]
     (swap! calls conj {:method :close-session :session-id session-id})
+    {:status :requested})
+  (notify [_this message]
+    (swap! calls conj {:method :notify :message message})
     {:status :requested}))
 
 (defn create-mock-dev-env
@@ -839,7 +842,28 @@
               "state should be :running-cli")
           ;; Verify dev-env was called
           (is (= 1 (count @(:calls mock-env)))
-              "dev-env should be called once"))))))
+              "dev-env should be called once")))
+
+      (testing "invokes idle-callback when file watcher reports :idle status"
+        (let [mock-env (create-mock-dev-env)
+              watcher-callback-atom (atom nil)
+              idle-callback-invoked? (atom false)]
+          (with-redefs [handoff/watch-hook-status-file
+                        (fn [callback]
+                          (reset! watcher-callback-atom callback)
+                          ;; Return a no-op stop function
+                          (fn []))]
+            (console/reset-state!)
+            (console/transition! :selecting-task {:story-id 53})
+            (console/transition! :running-sdk {:session-id "sess-async-8"
+                                               :current-task-id 97})
+            (console/hand-to-cli {:dev-env mock-env
+                                  :idle-callback (fn [_status]
+                                                   (reset! idle-callback-invoked? true))})
+            ;; Simulate file watcher detecting :idle status
+            (@watcher-callback-atom {:status :idle})
+            (is @idle-callback-invoked?
+                "idle-callback should be invoked when watcher reports :idle")))))))
 
 ;;; Pause Control Tests
 

@@ -8,7 +8,8 @@
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.flow :as flow]
    [task-conductor.agent-runner.handoff :as handoff]
-   [task-conductor.agent-runner.orchestrator :as orchestrator]))
+   [task-conductor.agent-runner.orchestrator :as orchestrator]
+   [task-conductor.dev-env.interface :as dev-env]))
 
 ;;; Test Helpers
 
@@ -831,3 +832,73 @@
                                 :err "not a git repo"})]
         (let [find-fn #'orchestrator/find-worktree-for-task]
           (is (nil? (find-fn 42))))))))
+
+;;; Idle Notification Tests
+
+(defrecord MockDevEnv [calls]
+  dev-env/DevEnv
+  (open-cli-session [_this opts callback]
+    (swap! calls conj {:method :open-cli-session :opts opts :callback callback})
+    {:status :requested})
+  (close-session [_this session-id]
+    (swap! calls conj {:method :close-session :session-id session-id})
+    {:status :requested})
+  (notify [_this message]
+    (swap! calls conj {:method :notify :message message})
+    {:status :requested}))
+
+(deftest idle-callback-notify-test
+  ;; Tests that idle-callback calls dev-env/notify with expected message.
+  ;; Contract: When CLI goes idle via derive-flow-decision, orchestrator notifies user.
+  ;; The idle-callback is wired up in derive-flow-decision when :hand-to-cli action
+  ;; is received with a dev-env. This test verifies:
+  ;; 1. The idle-callback is passed to console/hand-to-cli
+  ;; 2. When invoked, it calls dev-env/notify with expected message
+  (testing "idle-callback"
+    (testing "when :hand-to-cli decision is handled with dev-env"
+      (testing "idle-callback calls dev-env/notify with expected message"
+        (with-clean-console-state
+          (fn []
+            (let [mock-calls (atom [])
+                  mock-env (->MockDevEnv mock-calls)
+                  captured-idle-callback (atom nil)
+                  captured-completion-callback (atom nil)
+                  hand-to-cli-called (promise)
+                  decision {:action :hand-to-cli :reason "Test handoff"}]
+              ;; Setup: transition to :running-sdk state so hand-to-cli can be called
+              (console/transition! :selecting-task {:story-id 42})
+              (console/transition! :running-sdk {:session-id "test-sess"
+                                                 :current-task-id 101})
+              (with-redefs [console/hand-to-cli
+                            (fn [{:keys [idle-callback callback] :as _opts}]
+                              (reset! captured-idle-callback idle-callback)
+                              (reset! captured-completion-callback callback)
+                              (deliver hand-to-cli-called true)
+                              ;; Return immediately but don't invoke callback
+                              ;; derive-flow-decision will block on its promise
+                              {:status :running})
+                            handoff/write-handoff-state (fn [& _] nil)]
+                ;; Call derive-flow-decision in a future - it will block waiting for callback
+                (let [f (future (#'orchestrator/derive-flow-decision
+                                 decision
+                                 {:dev-env mock-env}))]
+                  ;; Wait for hand-to-cli to be called (with timeout)
+                  (deref hand-to-cli-called 1000 nil)
+                  ;; Verify idle-callback was passed to hand-to-cli
+                  (is (fn? @captured-idle-callback)
+                      "should pass idle-callback fn to hand-to-cli")
+                  ;; Invoke the captured idle-callback (simulates file watcher detecting :idle)
+                  (when @captured-idle-callback
+                    (@captured-idle-callback)
+                    ;; Verify dev-env/notify was called with expected message
+                    (let [notify-calls (filter #(= :notify (:method %)) @mock-calls)]
+                      (is (= 1 (count notify-calls))
+                          "should call dev-env/notify once")
+                      (is (= "CLI is idle - continue here or exit to resume automated flow"
+                             (:message (first notify-calls)))
+                          "should use expected notification message")))
+                  ;; Cleanup: invoke completion callback to unblock the future
+                  (when @captured-completion-callback
+                    (@captured-completion-callback {:state {:state :running-sdk}}))
+                  ;; Wait for future to complete (with timeout to not hang test)
+                  (deref f 500 nil))))))))))
