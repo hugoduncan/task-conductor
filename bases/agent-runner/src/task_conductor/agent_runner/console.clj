@@ -85,7 +85,7 @@
 ;;
 ;; Different transitions expect different context keys to be provided:
 ;; - → :selecting-task from :idle: {:story-id id}
-;; - → :running-sdk: {:session-id id, :current-task-id id}
+;; - → :running-sdk: {:session-id id, :current-task-id id, :cwd path}
 ;; - → :needs-input: {} (preserves existing)
 ;; - → :running-cli: {} (preserves existing)
 ;; - → :error-recovery: {:error error-map}
@@ -99,6 +99,7 @@
    :story-id nil
    :current-task-id nil
    :session-id nil
+   :cwd nil
    :error nil
    :history []
    :paused false
@@ -145,7 +146,7 @@
       :running-sdk
       (-> state
           (assoc :state to-state)
-          (merge (select-keys context [:session-id :current-task-id]))
+          (merge (select-keys context [:session-id :current-task-id :cwd]))
           (assoc :error nil))
 
       :needs-input
@@ -425,11 +426,13 @@
          (reset! stop-watch-fn
                  (handoff/watch-hook-status-file watcher-callback))
          ;; Open CLI session with Emacs callback as backup
+         ;; Use the cwd where the session was created, not the current directory
          (dev-env/open-cli-session
           dev-env
           {:session-id session-id
            :prompt prompt
-           :working-dir (System/getProperty "user.dir")}
+           :working-dir (or (:cwd @console-state)
+                            (System/getProperty "user.dir"))}
           emacs-callback)
          {:status :running})
        ;; Blocking mode: existing behavior

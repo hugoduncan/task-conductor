@@ -380,7 +380,7 @@
 
 (defn- run-cli-with-prompt
   "Run CLI session with the given prompt and config.
-   Returns {:session-id string :messages vector :result map}.
+   Returns {:session-id string :messages vector :result map :cwd string}.
 
    For execute-story-child prompts, automatically determines the correct
    worktree directory by querying for the next unblocked child task."
@@ -402,7 +402,8 @@
           (println "  -" tool_name)))
       {:session-id session-id
        :messages (:messages result)
-       :result result})))
+       :result result
+       :cwd cwd})))
 
 (defn- handle-flow-decision
   "Process a FlowDecision and return outcome map or :next-prompt to continue.
@@ -417,7 +418,10 @@
     (do
       (console/transition! :running-sdk {:session-id nil})
       (let [sdk-result (run-cli-with-prompt (:prompt decision) opts)]
-        (swap! console/console-state assoc :session-id (:session-id sdk-result))
+        ;; Store both session-id and cwd for later handoff
+        (swap! console/console-state assoc
+               :session-id (:session-id sdk-result)
+               :cwd (:cwd sdk-result))
         (let [next-decision (flow/on-sdk-complete flow-model sdk-result @console/console-state)]
           (println "[handle-flow-decision] on-sdk-complete returned:" (pr-str next-decision))
           (derive-flow-decision next-decision opts))))
