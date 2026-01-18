@@ -34,4 +34,11 @@
     "Request closing a CLI session.
 
      Signals the environment to close the session identified by session-id.
+     Returns {:status :requested}.")
+
+  (notify [this message]
+    "Send a notification to the user.
+
+     message - string to display
+
      Returns {:status :requested}."))
