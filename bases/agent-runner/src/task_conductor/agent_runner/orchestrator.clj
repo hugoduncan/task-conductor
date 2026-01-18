@@ -18,7 +18,8 @@
    [clojure.string :as str]
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.flow :as flow]
-   [task-conductor.agent-runner.session :as session]))
+   [task-conductor.agent-runner.session :as session]
+   [task-conductor.dev-env.interface :as dev-env]))
 
 ;;; CLI Integration
 
@@ -314,10 +315,15 @@
     (do
       (println "[derive-flow-decision] Hand-to-CLI requested:" (:reason decision))
       (println "[derive-flow-decision] Session ID:" (:session-id @console/console-state))
-      (if-let [dev-env (:dev-env opts)]
+      (if-let [dev-env-instance (:dev-env opts)]
         (let [completion-promise (promise)]
           (println "[derive-flow-decision] Using async mode with dev-env, waiting for CLI completion")
-          (console/hand-to-cli {:dev-env dev-env
+          (console/hand-to-cli {:dev-env dev-env-instance
+                                :idle-callback
+                                (fn []
+                                  (dev-env/notify
+                                   dev-env-instance
+                                   "CLI is idle - continue here or exit to resume automated flow"))
                                 :callback (fn [result]
                                             (println "[derive-flow-decision] CLI completed, delivering to promise")
                                             (println "[derive-flow-decision] Result state:" (:state result))
