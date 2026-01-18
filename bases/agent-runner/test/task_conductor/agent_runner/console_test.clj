@@ -783,11 +783,12 @@
   ;; Tests hand-to-cli async mode with dev-env.
   ;; In async mode:
   ;; - Returns {:status :running} immediately when dev-env provided
-  ;; - Passes correct opts to dev-env/open-cli-session with nil callback
+  ;; - Passes correct opts to dev-env/open-cli-session with internal callback
   ;; - Starts watching handoff file for status changes
   ;; - File watcher invokes idle-callback on :idle status
   ;; - File watcher transitions to :running-sdk on :completed status
   ;; - File watcher transitions to :error-recovery on :error status
+  ;; The internal emacs-callback handles state transitions as a backup to file watcher.
   (testing "hand-to-cli"
     (testing "with dev-env"
       (testing "returns {:status :running} immediately"
@@ -802,7 +803,7 @@
             (is (= :running-cli (console/current-state))
                 "state should be :running-cli"))))
 
-      (testing "passes correct opts to open-cli-session with nil callback"
+      (testing "passes correct opts to open-cli-session with internal callback"
         (let [mock-env (create-mock-dev-env)]
           (console/reset-state!)
           (console/transition! :selecting-task {:story-id 53})
@@ -820,8 +821,8 @@
                 "should pass prompt")
             (is (string? (:working-dir opts))
                 "should include working-dir")
-            (is (nil? (:callback call))
-                "callback should be nil (fire-and-forget)"))))
+            (is (fn? (:callback call))
+                "should provide internal callback for state transitions"))))
 
       ;; Note: Testing file watcher behavior would require mocking handoff/watch-hook-status-file
       ;; The actual state transitions happen when the watcher invokes its callback

@@ -101,28 +101,33 @@ EXIT-CODE is the exit code."
 
 (defun integration-test--handle-open-session (message)
   "Handle open-session MESSAGE in test mode.
-Creates a mock session and schedules completion."
-  (let ((session-id (alist-get 'session-id message))
-        (working-dir (alist-get 'working-dir message)))
-    (message "integration-test: Received open-session for %s" session-id)
+Creates a mock session and schedules completion.
+Uses tracking-id for callback correlation (matching production behavior)."
+  (let* ((session-id (alist-get 'session-id message))
+         (tracking-id (alist-get 'tracking-id message))
+         (working-dir (alist-get 'working-dir message))
+         ;; Use tracking-id for callback correlation, like production code
+         (correlation-id (or tracking-id session-id)))
+    (message "integration-test: Received open-session for %s (tracking: %s)"
+             session-id tracking-id)
     (message "SESSION:%s" session-id)
     (condition-case err
         (let* ((default-directory (or working-dir default-directory))
                (extra-switches (list "--resume" session-id))
                (buffer (claude-code--start nil extra-switches nil nil)))
           (when buffer
-            ;; Register session
-            (task-conductor-dev-env--register-session session-id buffer)
+            ;; Register session using correlation-id for callback lookup
+            (task-conductor-dev-env--register-session correlation-id buffer)
             ;; Schedule completion after delay
             (run-at-time integration-test-session-delay nil
                          #'integration-test--complete-session
-                         session-id "completed"
+                         correlation-id "completed"
                          '((state . "idle") (reason . "test"))
                          0)))
       (error
        (message "integration-test: Error in open-session: %s" (error-message-string err))
        (message "ERROR:%s" (error-message-string err))
-       (task-conductor-dev-env-send-error session-id (error-message-string err))))))
+       (task-conductor-dev-env-send-error correlation-id (error-message-string err))))))
 
 ;;; Main entry point
 
