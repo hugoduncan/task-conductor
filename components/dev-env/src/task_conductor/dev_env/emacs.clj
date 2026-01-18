@@ -145,6 +145,14 @@
      socket-path
      {:type "close-session"
       :session-id tracking-id})
+    {:status :requested})
+
+  (notify [_this message]
+    (try-send-with-reconnect!
+     channel-atom
+     socket-path
+     {:type "notify"
+      :message message})
     {:status :requested}))
 
 (defn create-emacs-dev-env
