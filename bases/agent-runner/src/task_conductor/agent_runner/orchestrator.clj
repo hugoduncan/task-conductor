@@ -55,6 +55,65 @@
                        :stderr err
                        :stdout out})))))
 
+;;; Worktree Discovery
+
+(defn- parse-git-worktree-list
+  "Parse output of `git worktree list` into a sequence of maps.
+   Each map has :path, :commit, and :branch keys.
+   Returns empty sequence if parsing fails."
+  [output]
+  (for [line (str/split-lines output)
+        :when (not (str/blank? line))
+        :let [[path commit branch-part] (str/split line #"\s+" 3)]
+        :when (and path commit)]
+    {:path path
+     :commit commit
+     :branch (when branch-part
+               (second (re-find #"\[(.+)\]" branch-part)))}))
+
+(defn- list-git-worktrees
+  "List all git worktrees for the current repository.
+   Returns {:ok worktrees} or {:error message}."
+  []
+  (let [{:keys [exit out err]} (shell/sh "git" "worktree" "list")]
+    (if (zero? exit)
+      {:ok (parse-git-worktree-list out)}
+      {:error (str "git worktree list failed: " err)})))
+
+(defn- find-worktree-for-task
+  "Find the worktree path for a given task ID.
+   Worktrees are named <task-id>-<slugified-title>.
+   Returns the path string if found, nil otherwise."
+  [task-id]
+  (let [{:keys [ok error]} (list-git-worktrees)]
+    (when-not error
+      (some (fn [{:keys [path branch]}]
+              (when (and branch
+                         (re-matches (re-pattern (str task-id "-.*")) branch))
+                path))
+            ok))))
+
+(defn- extract-story-id-from-prompt
+  "Extract story ID from execute-story-child prompt.
+   Returns the story ID as a number, or nil if not found.
+
+   Example: '/mcp-tasks:execute-story-child (MCP) 42' => 42"
+  [prompt]
+  (when-let [[_ id-str] (re-find #"execute-story-child.*?(\d+)" prompt)]
+    (parse-long id-str)))
+
+(defn- get-task-worktree-cwd
+  "Get the working directory for executing a task.
+
+   For execute-story-child prompts, looks up the worktree for the story
+   itself (not child tasks). All child tasks execute in the story's worktree.
+
+   Returns the worktree path if found, nil otherwise.
+   Falls back to nil (caller should use default cwd)."
+  [prompt]
+  (when-let [story-id (extract-story-id-from-prompt prompt)]
+    (find-worktree-for-task story-id)))
+
 ;;; Task Selection
 
 (defn- query-unblocked-child
@@ -321,11 +380,17 @@
 
 (defn- run-cli-with-prompt
   "Run CLI session with the given prompt and config.
-   Returns {:session-id string :messages vector :result map}."
+   Returns {:session-id string :messages vector :result map}.
+
+   For execute-story-child prompts, automatically determines the correct
+   worktree directory by querying for the next unblocked child task."
   [prompt opts]
-  (let [cwd (or (:cwd opts) (System/getProperty "user.dir"))
+  (let [worktree-cwd (get-task-worktree-cwd prompt)
+        cwd (or (:cwd opts) worktree-cwd (System/getProperty "user.dir"))
         session-config (build-task-session-config {:worktree-path cwd} opts)]
     (println "[run-cli-with-prompt] Running CLI with prompt:" prompt)
+    (println "[run-cli-with-prompt] Using cwd:" cwd
+             (when worktree-cwd "(from worktree lookup)"))
     (let [{:keys [result session-id]} (run-cli-session session-config prompt)]
       ;; result is the CLI JSON response directly
       (println "[run-cli-with-prompt] CLI complete, session-id:" session-id)

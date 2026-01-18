@@ -775,3 +775,104 @@
                     "should create PR after CR tasks complete")
                 (is (= :handed-to-cli (:outcome result))
                     "should hand to CLI after PR creation")))))))))
+
+;;; Worktree Discovery Tests
+
+(deftest parse-git-worktree-list-test
+  ;; Tests parsing of git worktree list output into structured data.
+  (testing "parse-git-worktree-list"
+    (testing "parses standard git worktree list output"
+      (let [parse-fn #'orchestrator/parse-git-worktree-list
+            output (str "/path/to/main  abc1234 [master]\n"
+                        "/path/to/wt1   def5678 [feature-1]\n"
+                        "/path/to/wt2   ghi9012 [42-task-name]\n")]
+        (is (= [{:path "/path/to/main" :commit "abc1234" :branch "master"}
+                {:path "/path/to/wt1" :commit "def5678" :branch "feature-1"}
+                {:path "/path/to/wt2" :commit "ghi9012" :branch "42-task-name"}]
+               (parse-fn output)))))
+
+    (testing "handles bare worktree (no branch)"
+      (let [parse-fn #'orchestrator/parse-git-worktree-list
+            output "/path/to/bare  abc1234 (bare)\n"]
+        (is (= [{:path "/path/to/bare" :commit "abc1234" :branch nil}]
+               (parse-fn output)))))
+
+    (testing "handles empty output"
+      (let [parse-fn #'orchestrator/parse-git-worktree-list]
+        (is (= [] (parse-fn "")))
+        (is (= [] (parse-fn "   \n  \n")))))))
+
+(deftest extract-story-id-from-prompt-test
+  ;; Tests extraction of story ID from execute-story-child prompts.
+  (testing "extract-story-id-from-prompt"
+    (testing "extracts ID from standard prompt format"
+      (let [extract-fn #'orchestrator/extract-story-id-from-prompt]
+        (is (= 42 (extract-fn "/mcp-tasks:execute-story-child (MCP) 42")))
+        (is (= 150 (extract-fn "/mcp-tasks:execute-story-child (MCP) 150")))
+        (is (= 9999 (extract-fn "/mcp-tasks:execute-story-child (MCP) 9999")))))
+
+    (testing "returns nil for non-matching prompts"
+      (let [extract-fn #'orchestrator/extract-story-id-from-prompt]
+        (is (nil? (extract-fn "/mcp-tasks:refine-task (MCP) 42")))
+        (is (nil? (extract-fn "some other prompt")))
+        (is (nil? (extract-fn "")))))))
+
+(deftest find-worktree-for-task-test
+  ;; Tests finding worktree path by task ID from git worktree list.
+  (testing "find-worktree-for-task"
+    (testing "finds worktree matching task ID prefix"
+      (with-redefs [shell/sh (fn [& _args]
+                               {:exit 0
+                                :out (str "/path/main  abc [master]\n"
+                                          "/path/42-my-task  def [42-my-task]\n"
+                                          "/path/150-other  ghi [150-other]\n")
+                                :err ""})]
+        (let [find-fn #'orchestrator/find-worktree-for-task]
+          (is (= "/path/42-my-task" (find-fn 42)))
+          (is (= "/path/150-other" (find-fn 150))))))
+
+    (testing "returns nil when no matching worktree"
+      (with-redefs [shell/sh (fn [& _args]
+                               {:exit 0
+                                :out "/path/main  abc [master]\n"
+                                :err ""})]
+        (let [find-fn #'orchestrator/find-worktree-for-task]
+          (is (nil? (find-fn 999))))))
+
+    (testing "returns nil on git error"
+      (with-redefs [shell/sh (fn [& _args]
+                               {:exit 1
+                                :out ""
+                                :err "not a git repo"})]
+        (let [find-fn #'orchestrator/find-worktree-for-task]
+          (is (nil? (find-fn 42))))))))
+
+(deftest get-task-worktree-cwd-test
+  ;; Tests determining cwd from prompt by looking up story worktree.
+  ;; All child tasks execute in the story's worktree.
+  (testing "get-task-worktree-cwd"
+    (testing "returns story worktree path for execute-story-child prompt"
+      (with-redefs [shell/sh
+                    (fn [& _args]
+                      {:exit 0
+                       :out (str "/path/main  abc [master]\n"
+                                 "/path/42-my-story  def [42-my-story]\n")
+                       :err ""})]
+        (let [get-cwd-fn #'orchestrator/get-task-worktree-cwd]
+          (is (= "/path/42-my-story"
+                 (get-cwd-fn "/mcp-tasks:execute-story-child (MCP) 42"))
+              "should return worktree for story ID, not child task"))))
+
+    (testing "returns nil for non-execute-story-child prompts"
+      (let [get-cwd-fn #'orchestrator/get-task-worktree-cwd]
+        (is (nil? (get-cwd-fn "/mcp-tasks:refine-task (MCP) 42")))
+        (is (nil? (get-cwd-fn "hello world")))))
+
+    (testing "returns nil when story worktree doesn't exist"
+      (with-redefs [shell/sh
+                    (fn [& _args]
+                      {:exit 0
+                       :out "/path/main  abc [master]\n"
+                       :err ""})]
+        (let [get-cwd-fn #'orchestrator/get-task-worktree-cwd]
+          (is (nil? (get-cwd-fn "/mcp-tasks:execute-story-child (MCP) 42"))))))))
