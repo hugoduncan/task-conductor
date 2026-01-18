@@ -93,29 +93,6 @@
                 path))
             ok))))
 
-(defn- extract-story-id-from-prompt
-  "Extract story ID from mcp-tasks prompt.
-   Matches any prompt with `(MCP) <id>` pattern.
-   Returns the story ID as a number, or nil if not found.
-
-   Example: '/mcp-tasks:execute-story-child (MCP) 42' => 42
-            '/mcp-tasks:refine-task (MCP) 57' => 57"
-  [prompt]
-  (when-let [[_ id-str] (re-find #"\(MCP\)\s*(\d+)" prompt)]
-    (parse-long id-str)))
-
-(defn- get-task-worktree-cwd
-  "Get the working directory for executing a task.
-
-   For mcp-tasks prompts with (MCP) <story-id>, looks up the worktree for
-   the story. All story operations execute in the story's worktree.
-
-   Returns the worktree path if found, nil otherwise.
-   Falls back to nil (caller should use default cwd)."
-  [prompt]
-  (when-let [story-id (extract-story-id-from-prompt prompt)]
-    (find-worktree-for-task story-id)))
-
 ;;; Task Selection
 
 (defn- query-unblocked-child
@@ -382,19 +359,17 @@
 
 (defn- run-cli-with-prompt
   "Run CLI session with the given prompt and config.
-   Returns {:session-id string :messages vector :result map :cwd string}.
+   Returns {:session-id string :messages vector :result map}.
 
-   For execute-story-child prompts, automatically determines the correct
-   worktree directory by querying for the next unblocked child task."
+   Uses :cwd from opts, falling back to console-state :cwd or current directory."
   [prompt opts]
-  (let [worktree-cwd (get-task-worktree-cwd prompt)
-        cwd (or (:cwd opts) worktree-cwd (System/getProperty "user.dir"))
+  (let [cwd (or (:cwd opts)
+                (:cwd @console/console-state)
+                (System/getProperty "user.dir"))
         session-config (build-task-session-config {:worktree-path cwd} opts)]
     (println "[run-cli-with-prompt] Running CLI with prompt:" prompt)
-    (println "[run-cli-with-prompt] Using cwd:" cwd
-             (when worktree-cwd "(from worktree lookup)"))
+    (println "[run-cli-with-prompt] Using cwd:" cwd)
     (let [{:keys [result session-id]} (run-cli-session session-config prompt)]
-      ;; result is the CLI JSON response directly
       (println "[run-cli-with-prompt] CLI complete, session-id:" session-id)
       (println "[run-cli-with-prompt] Result text:" (subs (str (:result result)) 0
                                                           (min 200 (count (str (:result result))))))
@@ -404,8 +379,7 @@
           (println "  -" tool_name)))
       {:session-id session-id
        :messages (:messages result)
-       :result result
-       :cwd cwd})))
+       :result result})))
 
 (defn- handle-flow-decision
   "Process a FlowDecision and return outcome map or :next-prompt to continue.
@@ -420,10 +394,8 @@
     (do
       (console/transition! :running-sdk {:session-id nil})
       (let [sdk-result (run-cli-with-prompt (:prompt decision) opts)]
-        ;; Store both session-id and cwd for later handoff
-        (swap! console/console-state assoc
-               :session-id (:session-id sdk-result)
-               :cwd (:cwd sdk-result))
+        ;; Store session-id for later handoff (cwd is set at story start)
+        (swap! console/console-state assoc :session-id (:session-id sdk-result))
         (let [next-decision (flow/on-sdk-complete flow-model sdk-result @console/console-state)]
           (println "[handle-flow-decision] on-sdk-complete returned:" (pr-str next-decision))
           (derive-flow-decision next-decision opts))))
@@ -574,7 +546,12 @@
   ([flow-model story-id opts]
    (println "[execute-story-with-flow-model] Starting story-id:" story-id)
    (try
-     (console/transition! :selecting-task {:story-id story-id})
+     ;; Look up worktree for story and store in console-state
+     (let [worktree-cwd (find-worktree-for-task story-id)]
+       (println "[execute-story-with-flow-model] Story worktree:" worktree-cwd)
+       (console/transition! :selecting-task {:story-id story-id})
+       (when worktree-cwd
+         (swap! console/console-state assoc :cwd worktree-cwd)))
      (println "[execute-story-with-flow-model] Calling flow-model-loop")
      (let [result (flow-model-loop flow-model opts)]
        (println "[execute-story-with-flow-model] Returned:" (:outcome result))
