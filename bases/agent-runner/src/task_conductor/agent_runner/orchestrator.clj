@@ -312,33 +312,23 @@
       {:next-prompt (:prompt decision)})
 
     :hand-to-cli
-    (do
-      (println "[derive-flow-decision] Hand-to-CLI requested:" (:reason decision))
-      (println "[derive-flow-decision] Session ID:" (:session-id @console/console-state))
-      (if-let [dev-env-instance (:dev-env opts)]
-        (let [completion-promise (promise)]
-          (println "[derive-flow-decision] Using async mode with dev-env, waiting for CLI completion")
-          (console/hand-to-cli {:dev-env dev-env-instance
-                                :idle-callback
-                                (fn [_hook-status]
-                                  (dev-env/notify
-                                   dev-env-instance
-                                   "CLI is idle - continue here or exit to resume automated flow"))
-                                :callback (fn [result]
-                                            (println "[derive-flow-decision] CLI completed, delivering to promise")
-                                            (println "[derive-flow-decision] Result state:" (:state result))
-                                            (deliver completion-promise result))})
-          (println "[derive-flow-decision] Blocking on CLI completion...")
-          (let [_result @completion-promise]
-            (println "[derive-flow-decision] CLI completion received, continuing flow")
-            ;; CLI completed - continue the flow by returning next-prompt nil
-            ;; This will cause the loop to ask flow-model for next action
-            {:next-prompt nil}))
-        (do
-          (println "[derive-flow-decision] No dev-env - returning without launching CLI")
-          {:outcome :handed-to-cli
-           :reason (:reason decision)
-           :state @console/console-state})))
+    (if-let [dev-env-instance (:dev-env opts)]
+      (let [completion-promise (promise)]
+        (console/hand-to-cli {:dev-env dev-env-instance
+                              :idle-callback
+                              (fn [_hook-status]
+                                (dev-env/notify
+                                 dev-env-instance
+                                 "CLI is idle - continue here or exit to resume automated flow"))
+                              :callback (fn [result]
+                                          (deliver completion-promise result))})
+        (let [_result @completion-promise]
+          ;; CLI completed - continue the flow by returning next-prompt nil
+          ;; This will cause the loop to ask flow-model for next action
+          {:next-prompt nil}))
+      {:outcome :handed-to-cli
+       :reason (:reason decision)
+       :state @console/console-state})
 
     :story-done
     (do
