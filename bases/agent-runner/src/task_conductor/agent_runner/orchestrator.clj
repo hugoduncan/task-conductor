@@ -320,7 +320,7 @@
           (println "[derive-flow-decision] Using async mode with dev-env, waiting for CLI completion")
           (console/hand-to-cli {:dev-env dev-env-instance
                                 :idle-callback
-                                (fn []
+                                (fn [_hook-status]
                                   (dev-env/notify
                                    dev-env-instance
                                    "CLI is idle - continue here or exit to resume automated flow"))

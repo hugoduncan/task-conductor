@@ -889,7 +889,7 @@
                       "should pass idle-callback fn to hand-to-cli")
                   ;; Invoke the captured idle-callback (simulates file watcher detecting :idle)
                   (when @captured-idle-callback
-                    (@captured-idle-callback)
+                    (@captured-idle-callback {:status :idle})
                     ;; Verify dev-env/notify was called with expected message
                     (let [notify-calls (filter #(= :notify (:method %)) @mock-calls)]
                       (is (= 1 (count notify-calls))
