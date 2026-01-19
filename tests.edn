@@ -6,17 +6,20 @@
                           "bases/agent-runner/src"
                           "components/claude-agent-sdk/src"
                           "components/dev-env/src"
-                          "components/python-venv/src"]
+                          "components/python-venv/src"
+                          "components/workspace/src"]
            :test-paths   ["bases/agent-runner/test"
                           "components/claude-agent-sdk/test"
                           "components/dev-env/test"
-                          "components/python-venv/test"]}
+                          "components/python-venv/test"
+                          "components/workspace/test"]}
           {:id           :integration
            :source-paths ["test-support"
                           "bases/agent-runner/src"
                           "components/claude-agent-sdk/src"
                           "components/dev-env/src"
-                          "components/python-venv/src"]
+                          "components/python-venv/src"
+                          "components/workspace/src"]
            :test-paths   ["bases/agent-runner/test-integration"
                           "components/claude-agent-sdk/test-integration"
                           "components/dev-env/test-integration"]}
