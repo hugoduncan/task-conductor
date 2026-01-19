@@ -127,6 +127,31 @@ EXIT-CODE is the CLI exit code."
      (session-id . ,session-id)
      (message . ,error-message))))
 
+;;; Handoff File Writing
+
+(defun task-conductor-dev-env--write-handoff-status (working-dir status)
+  "Write STATUS to handoff.edn in WORKING-DIR.
+STATUS should be a keyword symbol like `:idle' or `:completed'.
+The hook-status is read from the existing handoff file if present."
+  (let* ((handoff-dir (expand-file-name ".task-conductor" working-dir))
+         (handoff-file (expand-file-name "handoff.edn" handoff-dir))
+         (timestamp (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+         ;; Read existing hook-status if available
+         (existing-hook-status (task-conductor-dev-env--read-handoff-edn working-dir))
+         ;; Build content - merge with existing if present
+         (content (format "{:status %s\n :timestamp \"%s\"%s}"
+                          (symbol-name status)
+                          timestamp
+                          (if-let ((source (alist-get 'source existing-hook-status)))
+                              (format "\n :source %s" source)
+                            ""))))
+    (make-directory handoff-dir t)
+    ;; Write atomically via temp file
+    (let ((temp-file (concat handoff-file ".tmp")))
+      (write-region content nil temp-file nil 'silent)
+      (rename-file temp-file handoff-file t))
+    (task-conductor-dev-env--debug "Wrote %s status to %s" status handoff-file)))
+
 ;;; Session Management
 
 (defun task-conductor-dev-env--register-session (session-id buffer)
@@ -193,17 +218,20 @@ Uses parseedn for robust EDN parsing."
          nil)))))
 
 (defun task-conductor-dev-env--buffer-kill-handler ()
-  "Handle buffer being killed - send error if session was active."
+  "Handle buffer being killed - send session-complete if session was active."
   (when-let ((session-id (task-conductor-dev-env--get-session-id (current-buffer))))
     (task-conductor-dev-env--debug "Buffer killed for session %s" session-id)
-    (task-conductor-dev-env-send-error session-id "Session buffer closed by user")
+    ;; Send session-complete with "completed" status so flow can continue
+    ;; The user closing the buffer is a valid completion path
+    (task-conductor-dev-env-send-session-complete session-id "completed" nil 0)
     (task-conductor-dev-env--unregister-session session-id)))
 
 ;;; Event Hook Integration
 
 (defun task-conductor-dev-env--event-hook-handler (event)
   "Handle claude-code-event-hook EVENT.
-Detects idle/completion events and sends session-complete response."
+Detects idle/completion events and writes status to handoff file.
+The orchestrator watches the handoff file for status changes."
   (let* ((event-type (plist-get event :type))
          (buffer-name (plist-get event :buffer-name))
          (json-data (plist-get event :json-data))
@@ -213,30 +241,28 @@ Detects idle/completion events and sends session-complete response."
                                     event-type buffer-name session-id)
     ;; Only handle events for sessions we're tracking
     (when session-id
-      (cond
-       ;; Handle idle/stop events
-       ((member event-type '("stop" "idle" "finished"))
-        (let* ((working-dir (and buffer (buffer-local-value 'default-directory buffer)))
-               (hook-status (or (task-conductor-dev-env--read-handoff-edn working-dir)
-                               json-data
-                               '()))
-               (exit-code (or (and json-data (alist-get 'exit-code json-data))
-                             (and (listp hook-status) (alist-get 'exit-code hook-status))
-                             0)))
-          (task-conductor-dev-env--debug
-           "Session %s completed with status %s" session-id event-type)
-          (task-conductor-dev-env-send-session-complete
-           session-id
-           (if (equal event-type "stop") "completed" event-type)
-           hook-status
-           exit-code)
+      (let ((working-dir (and buffer (buffer-local-value 'default-directory buffer))))
+        (cond
+         ;; Handle idle events - write :idle status to handoff file
+         ((equal event-type "idle")
+          (when working-dir
+            (task-conductor-dev-env--debug
+             "Session %s idle, writing to handoff file" session-id)
+            (task-conductor-dev-env--write-handoff-status working-dir :idle)))
+         ;; Handle stop/finished events - write :completed status and unregister
+         ((member event-type '("stop" "finished"))
+          (when working-dir
+            (task-conductor-dev-env--debug
+             "Session %s completed with status %s" session-id event-type)
+            (task-conductor-dev-env--write-handoff-status working-dir :completed))
           ;; Unregister session after completion
-          (task-conductor-dev-env--unregister-session session-id)))
-       ;; Handle error events
-       ((equal event-type "error")
-        (let ((error-msg (or (and json-data (alist-get 'message json-data))
-                            "Unknown error")))
-          (task-conductor-dev-env-send-error session-id error-msg)
+          (task-conductor-dev-env--unregister-session session-id))
+         ;; Handle error events - write :error status and unregister
+         ((equal event-type "error")
+          (when working-dir
+            (task-conductor-dev-env--debug
+             "Session %s error" session-id)
+            (task-conductor-dev-env--write-handoff-status working-dir :error))
           (task-conductor-dev-env--unregister-session session-id)))))))
 
 (defun task-conductor-dev-env--setup-event-hook ()

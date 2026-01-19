@@ -221,6 +221,16 @@
 
 ;;; Story Execution
 
+(defonce ^:private dev-env-atom (atom nil))
+
+(defn- get-or-create-dev-env
+  "Get existing dev-env or create new one. Returns nil if Emacs not available."
+  []
+  (or @dev-env-atom
+      (when-let [e (emacs/create-emacs-dev-env)]
+        (reset! dev-env-atom e)
+        e)))
+
 (defn run-story
   "Execute all tasks in a story with automated orchestration.
 
@@ -253,10 +263,13 @@
                         :current-state current
                         :required-state :idle})))
      (println (str "Running story " story-id "..."))
-     (let [opts (if (:flow-model opts)
-                  opts
-                  (assoc opts :flow-model
-                         (flow/story-flow-model orchestrator/run-mcp-tasks story-id)))
+     (let [dev-env (get-or-create-dev-env)
+           _ (when dev-env (println "[run-story] Using Emacs dev-env for CLI handoff"))
+           opts (cond-> opts
+                  (not (:flow-model opts))
+                  (assoc :flow-model (flow/story-flow-model orchestrator/run-mcp-tasks story-id))
+                  dev-env
+                  (assoc :dev-env dev-env))
            result (orchestrator/execute-story story-id opts)]
        (case (:outcome result)
          :complete
@@ -278,6 +291,12 @@
          :no-tasks
          (println "Story has no child tasks - create tasks or refine the story")
 
+         :handed-to-cli
+         (do
+           (println "Handed off to CLI for user interaction")
+           (println (str "Reason: " (:reason result)))
+           (println (str "Session ID: " (:session-id (:state result)))))
+
          :error
          (do
            (println "Story execution failed:")
@@ -285,8 +304,6 @@
        result))))
 
 ;;; Dev-Env CLI Session Management
-
-(defonce ^:private dev-env-atom (atom nil))
 
 (defn open-cli
   "Open a new Claude CLI session in Emacs via the dev-env socket.

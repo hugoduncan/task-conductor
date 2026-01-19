@@ -85,7 +85,7 @@
 ;;
 ;; Different transitions expect different context keys to be provided:
 ;; - → :selecting-task from :idle: {:story-id id}
-;; - → :running-sdk: {:session-id id, :current-task-id id}
+;; - → :running-sdk: {:session-id id, :current-task-id id, :cwd path}
 ;; - → :needs-input: {} (preserves existing)
 ;; - → :running-cli: {} (preserves existing)
 ;; - → :error-recovery: {:error error-map}
@@ -99,6 +99,7 @@
    :story-id nil
    :current-task-id nil
    :session-id nil
+   :cwd nil
    :error nil
    :history []
    :paused false
@@ -145,7 +146,7 @@
       :running-sdk
       (-> state
           (assoc :state to-state)
-          (merge (select-keys context [:session-id :current-task-id]))
+          (merge (select-keys context [:session-id :current-task-id :cwd]))
           (assoc :error nil))
 
       :needs-input
@@ -341,44 +342,37 @@
     {:next-state :running-sdk
      :error nil}))
 
-(defn- make-dev-env-callback
-  "Create callback for dev-env that handles state transitions.
-   Wraps user-provided callback with state machine updates."
-  [user-callback]
-  (fn [result]
-    (let [{:keys [exit-code hook-status]} result
-          {:keys [error]} (determine-cli-result (or exit-code 0) hook-status)
-          new-state (if error
-                      (transition! :error-recovery {:error error})
-                      (transition! :running-sdk))]
-      (when user-callback
-        (user-callback {:state new-state
-                        :cli-status hook-status})))))
-
 (defn hand-to-cli
   "Hand off from SDK to CLI for user interaction.
 
    Transitions state machine through :needs-input to :running-cli,
-   launches the CLI with the current session, and handles the exit.
+   launches the CLI with the current session, and monitors the handoff
+   file for status changes.
 
    Supports two modes:
    1. Blocking (no dev-env): Launches CLI process directly, blocks until exit
-   2. Async (with dev-env): Delegates to dev-env, returns immediately
+   2. Async (with dev-env): Delegates to dev-env, watches file for status
 
    Arguments:
    - opts: Optional map with:
-     :dev-env  - DevEnv instance for async operation
-     :callback - Function called with result when session completes (async only)
-     :prompt   - Optional prompt to send after session opens (async only)
+     :dev-env        - DevEnv instance for async operation
+     :idle-callback  - Function called when CLI becomes idle (async only)
+     :callback       - Function called when session completes (async only)
+     :prompt         - Optional prompt to send after session opens (async only)
 
    Blocking mode return value:
    - :state - the new state map after transition
    - :cli-status - the hook status read from the handoff file (or nil)
 
    Async mode return value:
-   - :status - :pending (callback will be invoked when complete)
+   - :status - :running (file watcher active, callbacks will be invoked)
 
-   After CLI exits (blocking) or session completes (async), determines outcome:
+   Status monitoring (async mode):
+   - :idle status → invokes idle-callback, stays in :running-cli
+   - :completed status → transitions to :running-sdk, invokes callback
+   - :error status → transitions to :error-recovery, invokes callback
+
+   After CLI exits (blocking), determines outcome:
    - Exit code 0 + hook status :completed → :running-sdk
    - Exit code non-zero → :error-recovery
    - Hook status :error → :error-recovery
@@ -397,17 +391,50 @@
    (transition! :needs-input)
    (transition! :running-cli)
    (let [session-id (:session-id @console-state)
-         {:keys [dev-env callback prompt]} opts]
+         {:keys [dev-env callback idle-callback prompt]} opts]
      (if dev-env
-       ;; Async mode: delegate to dev-env
-       (do
+       ;; Async mode: watch file for status changes, delegate to dev-env
+       (let [stop-watch-fn (atom nil)
+             completed? (atom false)
+             ;; Shared completion handler - only fires once
+             handle-completion (fn [source hook-status]
+                                 (when (compare-and-set! completed? false true)
+                                   (println "[hand-to-cli] Completion detected via" source)
+                                   (when-let [stop-fn @stop-watch-fn]
+                                     (stop-fn))
+                                   (let [new-state (if (= :error (:status hook-status))
+                                                     (transition! :error-recovery
+                                                                  {:error {:type :hook-error
+                                                                           :hook-status hook-status}})
+                                                     (transition! :running-sdk))]
+                                     (when callback
+                                       (callback {:state new-state
+                                                  :cli-status hook-status})))))
+             watcher-callback (fn [hook-status]
+                                (case (:status hook-status)
+                                  :idle (when idle-callback (idle-callback hook-status))
+                                  :completed (handle-completion :file-watcher hook-status)
+                                  :error (handle-completion :file-watcher hook-status)
+                                  nil))
+             emacs-callback (fn [result]
+                              (println "[hand-to-cli] Emacs callback fired:" (pr-str result))
+                              (handle-completion :emacs-callback
+                                                 {:status (if (= :completed (:status result))
+                                                            :completed
+                                                            :error)}))]
+         ;; Start watching handoff file for status changes
+         (reset! stop-watch-fn
+                 (handoff/watch-hook-status-file watcher-callback))
+         ;; Open CLI session with Emacs callback as backup
+         ;; Use the cwd where the session was created, not the current directory
          (dev-env/open-cli-session
           dev-env
           {:session-id session-id
            :prompt prompt
-           :working-dir (System/getProperty "user.dir")}
-          (make-dev-env-callback callback))
-         {:status :pending})
+           :working-dir (or (:cwd @console-state)
+                            (System/getProperty "user.dir"))}
+          emacs-callback)
+         {:status :running})
        ;; Blocking mode: existing behavior
        (let [exit-code (launch-cli-resume session-id)
              cli-status (handoff/read-hook-status)

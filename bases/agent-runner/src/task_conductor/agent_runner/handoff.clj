@@ -58,21 +58,27 @@
 ;;; HookStatus Schema (for CLI stop hook exit status)
 
 (def HookStatus
-  "Schema for CLI exit status captured by stop hooks.
+  "Schema for CLI exit status captured by stop hooks or Emacs events.
 
    Required fields:
-   - :status - keyword indicating exit status (:completed, :error, :needs-clarification, etc.)
+   - :status - keyword indicating exit status:
+     - :idle - CLI waiting for user input (Emacs event or Notification hook)
+     - :completed - CLI finished successfully
+     - :error - Error occurred
+     - :needs-clarification - Claude asked a question
    - :timestamp - when the status was recorded
 
    Optional/extensible fields:
    - :reason - keyword providing more detail (e.g., :cli-killed, :tool-error)
    - :question - string containing clarification question (when :needs-clarification)
+   - :source - keyword indicating status source (:emacs-event, :notification-hook, :stop-hook)
    - Additional fields may be added by flow models."
   [:map {:closed false}
    [:status keyword?]
    [:timestamp inst?]
    [:reason {:optional true} keyword?]
-   [:question {:optional true} string?]])
+   [:question {:optional true} string?]
+   [:source {:optional true} keyword?]])
 
 (def RawHookStatus
   "File-serializable format for HookStatus.
@@ -81,7 +87,8 @@
    [:status keyword?]
    [:timestamp string?]
    [:reason {:optional true} keyword?]
-   [:question {:optional true} string?]])
+   [:question {:optional true} string?]
+   [:source {:optional true} keyword?]])
 
 ;;; HandoffState Schema (for console state machine)
 
@@ -310,3 +317,38 @@
    (merge {:status status
            :timestamp (now)}
           opts)))
+
+;;; Hook Status File Watching
+
+(defn watch-hook-status-file
+  "Watch the hook status file for changes and invoke callback with new status.
+
+   Watches the parent directory and filters for the specific hook handoff file
+   (.task-conductor/handoff.edn). On create or modify events, reads and
+   validates the HookStatus, then invokes callback with the parsed status map.
+
+   The callback receives a HookStatus map with at least :status and :timestamp.
+   FileNotFoundException and parse errors during atomic writes are logged at
+   DEBUG. Other exceptions are logged at WARN.
+
+   Returns a stop function that halts the watcher when called."
+  ([callback]
+   (watch-hook-status-file callback hook-handoff-path))
+  ([callback path]
+   (let [file (File. ^String path)
+         filename (.getName file)
+         parent-dir (or (.getParent file) ".")
+         handler (fn [{:keys [type path] :as event}]
+                   (when (and (#{:create :modify} type)
+                              (= filename (str (.getFileName path))))
+                     (try
+                       (when-let [hook-status (read-hook-status (.getAbsolutePath file))]
+                         (callback hook-status))
+                       (catch Exception e
+                         (if (expected-watcher-exception? e)
+                           (log/debug e "Expected exception reading hook status file"
+                                      {:event event})
+                           (log/warn e "Unexpected exception reading hook status file"
+                                     {:event event}))))))
+         watcher (beholder/watch handler parent-dir)]
+     (fn [] (beholder/stop watcher)))))

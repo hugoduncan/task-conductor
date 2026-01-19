@@ -232,6 +232,30 @@
               (is (= :cancelled (:status result)))))
           (emacs/stop! env))))))
 
+(deftest notify-test
+  ;; Tests notify method sends correct message format to socket.
+  ;; Contract: notify sends {:type "notify" :message <string>}
+  (testing "notify"
+    (testing "returns {:status :requested}"
+      (with-test-server [server]
+        (let [env (emacs/create-emacs-dev-env (:path server))]
+          (is (= {:status :requested}
+                 (dev-env/notify env "test message")))
+          (emacs/stop! env))))
+
+    (testing "sends correct message format to socket"
+      (with-test-server [server]
+        (let [env (emacs/create-emacs-dev-env (:path server))
+              client (deref (:client-promise server) 1000 nil)]
+          (is (some? client) "client should connect")
+          (dev-env/notify env "CLI is idle")
+          (let [msg (read-json-message client)]
+            (is (= "notify" (:type msg))
+                "should send type 'notify'")
+            (is (= "CLI is idle" (:message msg))
+                "should include the message"))
+          (emacs/stop! env))))))
+
 (deftest stop!-test
   (testing "stop!"
     (testing "notifies pending callbacks with error"

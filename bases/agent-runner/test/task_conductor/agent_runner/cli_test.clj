@@ -10,12 +10,28 @@
   (:require
    [babashka.process :as p]
    [clojure.test :refer [deftest is testing]]
-   [task-conductor.agent-runner.cli :as cli]))
+   [task-conductor.agent-runner.cli :as cli])
+  (:import
+   [java.io ByteArrayInputStream]))
 
 ;;; Test Utilities
 
+(defn- string->stream
+  "Convert a string to an InputStream."
+  [^String s]
+  (ByteArrayInputStream. (.getBytes s "UTF-8")))
+
+(defn- mock-java-process
+  "Create a mock java.lang.Process with a pid method."
+  []
+  (proxy [java.lang.Process] []
+    (pid [] 12345)))
+
 (defn mock-process
-  "Create a mock process result that can be deref'd.
+  "Create a mock process that mimics babashka.process output.
+
+   Returns a map-like object with :out, :err as InputStreams, :proc as mock
+   Process, and implements IDeref/IBlockingDeref for exit code.
 
    Options:
    - :exit - exit code (default 0)
@@ -24,18 +40,25 @@
    - :delay-ms - delay before returning (for timeout tests)"
   [{:keys [exit out err delay-ms]
     :or {exit 0 out "" err ""}}]
-  (reify
-    clojure.lang.IDeref
-    (deref [_]
-      (when delay-ms (Thread/sleep delay-ms))
-      {:exit exit :out out :err err})
-    clojure.lang.IBlockingDeref
-    (deref [_ timeout-ms timeout-val]
-      (if (and delay-ms (> delay-ms timeout-ms))
-        timeout-val
-        (do
-          (when delay-ms (Thread/sleep (min delay-ms timeout-ms)))
-          {:exit exit :out out :err err})))))
+  (let [deref-result {:exit exit}
+        out-stream (string->stream out)
+        err-stream (string->stream err)
+        proc (mock-java-process)]
+    (reify
+      clojure.lang.ILookup
+      (valAt [_ k] (case k :out out-stream :err err-stream :proc proc nil))
+      (valAt [this k not-found] (or (.valAt this k) not-found))
+      clojure.lang.IDeref
+      (deref [_]
+        (when delay-ms (Thread/sleep delay-ms))
+        deref-result)
+      clojure.lang.IBlockingDeref
+      (deref [_ timeout-ms timeout-val]
+        (if (and delay-ms (> delay-ms timeout-ms))
+          timeout-val
+          (do
+            (when delay-ms (Thread/sleep (min delay-ms timeout-ms)))
+            deref-result))))))
 
 ;;; Success Tests
 
@@ -66,28 +89,36 @@
                  (:args @captured-args))))))
 
     (testing "uses default timeout when not specified"
-      (let [deref-timeout (atom nil)]
+      (let [deref-timeout (atom nil)
+            out-stream (string->stream "{\"session_id\":\"x\"}")
+            err-stream (string->stream "")
+            proc (mock-java-process)]
         (with-redefs [p/process (fn [_ & _]
                                   (reify
+                                    clojure.lang.ILookup
+                                    (valAt [_ k] (case k :out out-stream :err err-stream :proc proc nil))
+                                    (valAt [this k nf] (or (.valAt this k) nf))
                                     clojure.lang.IBlockingDeref
                                     (deref [_ timeout-ms _timeout-val]
                                       (reset! deref-timeout timeout-ms)
-                                      {:exit 0
-                                       :out "{\"session_id\":\"x\"}"
-                                       :err ""})))]
+                                      {:exit 0})))]
           (cli/create-session-via-cli {:working-dir "/tmp" :prompt "Hi"})
-          (is (= 120000 @deref-timeout)))))
+          (is (= 300000 @deref-timeout)))))
 
     (testing "uses custom timeout when specified"
-      (let [deref-timeout (atom nil)]
+      (let [deref-timeout (atom nil)
+            out-stream (string->stream "{\"session_id\":\"x\"}")
+            err-stream (string->stream "")
+            proc (mock-java-process)]
         (with-redefs [p/process (fn [_ & _]
                                   (reify
+                                    clojure.lang.ILookup
+                                    (valAt [_ k] (case k :out out-stream :err err-stream :proc proc nil))
+                                    (valAt [this k nf] (or (.valAt this k) nf))
                                     clojure.lang.IBlockingDeref
                                     (deref [_ timeout-ms _timeout-val]
                                       (reset! deref-timeout timeout-ms)
-                                      {:exit 0
-                                       :out "{\"session_id\":\"x\"}"
-                                       :err ""})))]
+                                      {:exit 0})))]
           (cli/create-session-via-cli {:working-dir "/tmp"
                                        :prompt "Hi"
                                        :timeout-ms 5000})
@@ -128,7 +159,7 @@
           (is (some? ex))
           (is (= :cli/non-zero-exit (:type (ex-data ex))))
           (is (= 1 (:exit-code (ex-data ex))))
-          (is (= "Error occurred" (:stderr (ex-data ex)))))))))
+          (is (= "Error occurred\n" (:stderr (ex-data ex)))))))))
 
 (deftest create-session-via-cli-parse-error-test
   (testing "create-session-via-cli"
@@ -142,7 +173,7 @@
                    (catch Exception e e))]
           (is (some? ex))
           (is (= :cli/parse-error (:type (ex-data ex))))
-          (is (= "not json" (:output (ex-data ex)))))))
+          (is (= "not json\n" (:output (ex-data ex)))))))
 
     (testing "throws :cli/parse-error when output is truncated JSON"
       (with-redefs [p/process (fn [_ & _]

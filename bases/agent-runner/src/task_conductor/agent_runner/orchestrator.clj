@@ -15,11 +15,19 @@
   (:require
    [clojure.edn :as edn]
    [clojure.java.shell :as shell]
+   [clojure.string :as str]
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.flow :as flow]
-   [task-conductor.agent-runner.session :as session]))
+   [task-conductor.agent-runner.session :as session]
+   [task-conductor.dev-env.interface :as dev-env]))
 
 ;;; CLI Integration
+
+(defn- normalize-auto-resolved-keywords
+  "Replace auto-resolved keywords (::foo) with namespaced keywords (:mcp-tasks/foo).
+   EDN reader can't parse :: without namespace context."
+  [s]
+  (str/replace s #"::(\w+)" ":mcp-tasks/$1"))
 
 (defn run-mcp-tasks
   "Execute mcp-tasks CLI command and return parsed EDN result.
@@ -36,7 +44,7 @@
         {:keys [exit out err]} (apply shell/sh cmd)]
     (if (zero? exit)
       (try
-        (edn/read-string out)
+        (edn/read-string (normalize-auto-resolved-keywords out))
         (catch Exception e
           (throw (ex-info "Failed to parse mcp-tasks output"
                           {:cmd cmd
@@ -47,6 +55,44 @@
                        :exit-code exit
                        :stderr err
                        :stdout out})))))
+
+;;; Worktree Discovery
+
+(defn- parse-git-worktree-list
+  "Parse output of `git worktree list` into a sequence of maps.
+   Each map has :path, :commit, and :branch keys.
+   Returns empty sequence if parsing fails."
+  [output]
+  (for [line (str/split-lines output)
+        :when (not (str/blank? line))
+        :let [[path commit branch-part] (str/split line #"\s+" 3)]
+        :when (and path commit)]
+    {:path path
+     :commit commit
+     :branch (when branch-part
+               (second (re-find #"\[(.+)\]" branch-part)))}))
+
+(defn- list-git-worktrees
+  "List all git worktrees for the current repository.
+   Returns {:ok worktrees} or {:error message}."
+  []
+  (let [{:keys [exit out err]} (shell/sh "git" "worktree" "list")]
+    (if (zero? exit)
+      {:ok (parse-git-worktree-list out)}
+      {:error (str "git worktree list failed: " err)})))
+
+(defn- find-worktree-for-task
+  "Find the worktree path for a given task ID.
+   Worktrees are named <task-id>-<slugified-title>.
+   Returns the path string if found, nil otherwise."
+  [task-id]
+  (let [{:keys [ok error]} (list-git-worktrees)]
+    (when-not error
+      (some (fn [{:keys [path branch]}]
+              (when (and branch
+                         (re-matches (re-pattern (str task-id "-.*")) branch))
+                path))
+            ok))))
 
 ;;; Task Selection
 
@@ -255,8 +301,9 @@
 (defn- derive-flow-decision
   "Process on-sdk-complete result and return next action for the loop.
    Handles transition to CLI, story completion, errors, and continuation.
-   Returns {:next-prompt prompt} or {:outcome ...}."
-  [decision]
+   Returns {:next-prompt prompt} or {:outcome ...}.
+   opts may contain :dev-env for async CLI handoff."
+  [decision opts]
   (case (:action decision)
     :continue-sdk
     (do
@@ -265,8 +312,20 @@
       {:next-prompt (:prompt decision)})
 
     :hand-to-cli
-    (do
-      (console/hand-to-cli)
+    (if-let [dev-env-instance (:dev-env opts)]
+      (let [completion-promise (promise)]
+        (console/hand-to-cli {:dev-env dev-env-instance
+                              :idle-callback
+                              (fn [_hook-status]
+                                (dev-env/notify
+                                 dev-env-instance
+                                 "CLI is idle - continue here or exit to resume automated flow"))
+                              :callback (fn [result]
+                                          (deliver completion-promise result))})
+        (let [_result @completion-promise]
+          ;; CLI completed - continue the flow by returning next-prompt nil
+          ;; This will cause the loop to ask flow-model for next action
+          {:next-prompt nil}))
       {:outcome :handed-to-cli
        :reason (:reason decision)
        :state @console/console-state})
@@ -296,13 +355,24 @@
 
 (defn- run-cli-with-prompt
   "Run CLI session with the given prompt and config.
-   Returns {:session-id string :messages vector :result map}."
+   Returns {:session-id string :messages vector :result map}.
+
+   Uses :cwd from opts, falling back to console-state :cwd or current directory."
   [prompt opts]
-  (let [cwd (or (:cwd opts) (System/getProperty "user.dir"))
+  (let [cwd (or (:cwd opts)
+                (:cwd @console/console-state)
+                (System/getProperty "user.dir"))
         session-config (build-task-session-config {:worktree-path cwd} opts)]
     (println "[run-cli-with-prompt] Running CLI with prompt:" prompt)
+    (println "[run-cli-with-prompt] Using cwd:" cwd)
     (let [{:keys [result session-id]} (run-cli-session session-config prompt)]
       (println "[run-cli-with-prompt] CLI complete, session-id:" session-id)
+      (println "[run-cli-with-prompt] Result text:" (subs (str (:result result)) 0
+                                                          (min 200 (count (str (:result result))))))
+      (when-let [denials (seq (:permission_denials result))]
+        (println "[run-cli-with-prompt] Permission denials:" (count denials))
+        (doseq [{:keys [tool_name]} denials]
+          (println "  -" tool_name)))
       {:session-id session-id
        :messages (:messages result)
        :result result})))
@@ -320,10 +390,11 @@
     (do
       (console/transition! :running-sdk {:session-id nil})
       (let [sdk-result (run-cli-with-prompt (:prompt decision) opts)]
+        ;; Store session-id for later handoff (cwd is set at story start)
         (swap! console/console-state assoc :session-id (:session-id sdk-result))
         (let [next-decision (flow/on-sdk-complete flow-model sdk-result @console/console-state)]
           (println "[handle-flow-decision] on-sdk-complete returned:" (pr-str next-decision))
-          (derive-flow-decision next-decision))))
+          (derive-flow-decision next-decision opts))))
 
     :hand-to-cli
     ;; Don't call console/hand-to-cli here - we haven't run SDK yet.
@@ -471,7 +542,12 @@
   ([flow-model story-id opts]
    (println "[execute-story-with-flow-model] Starting story-id:" story-id)
    (try
-     (console/transition! :selecting-task {:story-id story-id})
+     ;; Look up worktree for story and store in console-state
+     (let [worktree-cwd (find-worktree-for-task story-id)]
+       (println "[execute-story-with-flow-model] Story worktree:" worktree-cwd)
+       (console/transition! :selecting-task {:story-id story-id})
+       (when worktree-cwd
+         (swap! console/console-state assoc :cwd worktree-cwd)))
      (println "[execute-story-with-flow-model] Calling flow-model-loop")
      (let [result (flow-model-loop flow-model opts)]
        (println "[execute-story-with-flow-model] Returned:" (:outcome result))

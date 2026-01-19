@@ -128,11 +128,15 @@
 (deftest initialize!-test
   ;; Verifies Python interpreter initialization with venv support
   ;; and claude_agent_sdk module import.
+  ;; Note: The specific return value of initialize! depends on whether
+  ;; Python was already initialized in this JVM, so we verify behavior
+  ;; rather than specific return values from the test fixture.
   (with-sdk
     (testing "initialize!"
-      (testing "returns true on first initialization"
-        (is (true? (:init-result (ensure-initialized!)))
-            "should return true on first initialization"))
+      (testing "initializes successfully via test fixture"
+        (ensure-initialized!)
+        (is (true? ((sdk 'initialized?)))
+            "SDK should report as initialized after ensure-initialized!"))
 
       (testing "returns nil on subsequent calls (already initialized)"
         (is (nil? ((sdk 'initialize!) {:venv-path venv-path}))

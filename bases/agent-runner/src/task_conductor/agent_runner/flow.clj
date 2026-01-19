@@ -42,7 +42,9 @@
    8. No refined: true → :unrefined-story"
   [story children]
   (let [meta-map (or (:meta story) {})
-        refined? (get meta-map :refined)
+        ;; Check both :refined and :mcp-tasks/refined (latter from normalized ::refined)
+        refined? (or (get meta-map :refined)
+                     (get meta-map :mcp-tasks/refined))
         code-reviewed (get meta-map :code-reviewed)
         pr-num (get meta-map :pr-num)
         pr-merged? (get meta-map :pr-merged?)
@@ -382,6 +384,23 @@
     {:action :story-done
      :reason "Story complete - PR merged"}))
 
+(defn- sdk-made-progress?
+  "Check if SDK result indicates meaningful progress was made.
+
+   Returns true if:
+   - There's actual result content (non-empty response text)
+   - No permission denials occurred
+
+   Returns false (needs CLI handoff) if:
+   - Result is empty or nil
+   - Any permission was denied (not just AskUserQuestion)"
+  [sdk-result]
+  (let [response (or (:result sdk-result) sdk-result)
+        result-text (get response :result)
+        denials (get response :permission_denials [])]
+    (and (seq result-text)
+         (empty? denials))))
+
 (defn- derive-flow-decision
   "Query story and children, derive state, return validated FlowDecision.
    Encapsulates the common pattern used by all StoryFlowModel methods."
@@ -404,8 +423,11 @@
   (on-cli-return [_this _cli-status _console-state]
     (derive-flow-decision run-mcp-tasks-fn story-id))
 
-  (on-sdk-complete [_this _sdk-result _console-state]
-    (derive-flow-decision run-mcp-tasks-fn story-id))
+  (on-sdk-complete [_this sdk-result _console-state]
+    (if (sdk-made-progress? sdk-result)
+      (derive-flow-decision run-mcp-tasks-fn story-id)
+      {:action :hand-to-cli
+       :reason "SDK did not complete - handing to CLI for user interaction"}))
 
   (on-task-complete [_this _console-state]
     (derive-flow-decision run-mcp-tasks-fn story-id)))

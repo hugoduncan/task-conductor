@@ -8,7 +8,22 @@
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.flow :as flow]
    [task-conductor.agent-runner.handoff :as handoff]
-   [task-conductor.agent-runner.orchestrator :as orchestrator]))
+   [task-conductor.agent-runner.orchestrator :as orchestrator]
+   [task-conductor.dev-env.interface :as dev-env]))
+
+;;; Test Helpers
+
+(defn successful-sdk-result
+  "Create an SDK result that indicates successful completion.
+   The result must have actual content and no permission denials
+   for the flow model to continue (rather than hand to CLI)."
+  ([]
+   (successful-sdk-result "sess-1"))
+  ([session-id]
+   {:session-id session-id
+    :messages []
+    :result {:result "Task completed successfully"
+             :permission_denials []}}))
 
 (deftest select-next-task-test
   ;; Verifies task selection handles all edge cases:
@@ -325,8 +340,7 @@
                             orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (swap! task-counter inc)
-                              {:result {:messages []}
-                               :session-id (str "sess-" @task-counter)})]
+                              (successful-sdk-result (str "sess-" @task-counter)))]
                 (let [result (orchestrator/execute-story 57)]
                   (is (= :complete (:outcome result))
                       "should return :complete")
@@ -350,8 +364,7 @@
                             (fn [_config _prompt]
                               (reset! executed? true)
                               (console/set-paused!)
-                              {:result {:messages []}
-                               :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (let [result (orchestrator/execute-story 57)]
                   (is (= :paused (:outcome result))
                       "should return :paused")
@@ -424,8 +437,7 @@
                             orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (swap! states conj (console/current-state))
-                              {:result {:messages []}
-                               :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (orchestrator/execute-story 57)
                 (is (= :selecting-task (first @states))
                     "should be in :selecting-task when selecting")
@@ -492,7 +504,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (orchestrator/execute-story-with-flow-model fm 42)
                 (is (= "/mcp-tasks:refine-task (MCP) 42" (first @captured-prompts))
                     "should invoke SDK with refine-task prompt")))))))
@@ -521,7 +533,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (orchestrator/execute-story-with-flow-model fm 42)
                 (is (= "/mcp-tasks:create-story-children (MCP) 42"
                        (first @captured-prompts))
@@ -550,7 +562,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (orchestrator/execute-story-with-flow-model fm 42)
                 (is (= "/mcp-tasks:execute-story-child (MCP) 42"
                        (first @captured-prompts))
@@ -577,7 +589,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (orchestrator/execute-story-with-flow-model fm 42)
                 (is (= "/mcp-tasks:review-story-implementation (MCP) 42"
                        (first @captured-prompts))
@@ -602,7 +614,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config prompt]
                               (swap! captured-prompts conj prompt)
-                              {:result {:messages []} :session-id "sess-1"})
+                              (successful-sdk-result))
                             console/hand-to-cli
                             (fn []
                               (swap! console/console-state assoc :state :running-cli)
@@ -630,7 +642,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (reset! sdk-called? true)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (let [result (orchestrator/execute-story-with-flow-model fm 42)]
                   (is (not @sdk-called?)
                       "should not call SDK for manual review state")
@@ -682,7 +694,7 @@
               (with-redefs [orchestrator/run-cli-session
                             (fn [_config _prompt]
                               (console/set-paused!)
-                              {:result {:messages []} :session-id "sess-1"})]
+                              (successful-sdk-result))]
                 (let [result (orchestrator/execute-story-with-flow-model fm 42)]
                   (is (= :paused (:outcome result))
                       "should return paused outcome"))))))))))
@@ -743,7 +755,7 @@
             (with-redefs [orchestrator/run-cli-session
                           (fn [_config prompt]
                             (swap! captured-prompts conj prompt)
-                            {:result {:messages []} :session-id "sess-1"})
+                            (successful-sdk-result))
                           console/hand-to-cli
                           (fn []
                             (swap! console/console-state assoc :state :running-cli)
@@ -764,3 +776,129 @@
                     "should create PR after CR tasks complete")
                 (is (= :handed-to-cli (:outcome result))
                     "should hand to CLI after PR creation")))))))))
+
+;;; Worktree Discovery Tests
+
+(deftest parse-git-worktree-list-test
+  ;; Tests parsing of git worktree list output into structured data.
+  (testing "parse-git-worktree-list"
+    (testing "parses standard git worktree list output"
+      (let [parse-fn #'orchestrator/parse-git-worktree-list
+            output (str "/path/to/main  abc1234 [master]\n"
+                        "/path/to/wt1   def5678 [feature-1]\n"
+                        "/path/to/wt2   ghi9012 [42-task-name]\n")]
+        (is (= [{:path "/path/to/main" :commit "abc1234" :branch "master"}
+                {:path "/path/to/wt1" :commit "def5678" :branch "feature-1"}
+                {:path "/path/to/wt2" :commit "ghi9012" :branch "42-task-name"}]
+               (parse-fn output)))))
+
+    (testing "handles bare worktree (no branch)"
+      (let [parse-fn #'orchestrator/parse-git-worktree-list
+            output "/path/to/bare  abc1234 (bare)\n"]
+        (is (= [{:path "/path/to/bare" :commit "abc1234" :branch nil}]
+               (parse-fn output)))))
+
+    (testing "handles empty output"
+      (let [parse-fn #'orchestrator/parse-git-worktree-list]
+        (is (= [] (parse-fn "")))
+        (is (= [] (parse-fn "   \n  \n")))))))
+
+(deftest find-worktree-for-task-test
+  ;; Tests finding worktree path by task ID from git worktree list.
+  (testing "find-worktree-for-task"
+    (testing "finds worktree matching task ID prefix"
+      (with-redefs [shell/sh (fn [& _args]
+                               {:exit 0
+                                :out (str "/path/main  abc [master]\n"
+                                          "/path/42-my-task  def [42-my-task]\n"
+                                          "/path/150-other  ghi [150-other]\n")
+                                :err ""})]
+        (let [find-fn #'orchestrator/find-worktree-for-task]
+          (is (= "/path/42-my-task" (find-fn 42)))
+          (is (= "/path/150-other" (find-fn 150))))))
+
+    (testing "returns nil when no matching worktree"
+      (with-redefs [shell/sh (fn [& _args]
+                               {:exit 0
+                                :out "/path/main  abc [master]\n"
+                                :err ""})]
+        (let [find-fn #'orchestrator/find-worktree-for-task]
+          (is (nil? (find-fn 999))))))
+
+    (testing "returns nil on git error"
+      (with-redefs [shell/sh (fn [& _args]
+                               {:exit 1
+                                :out ""
+                                :err "not a git repo"})]
+        (let [find-fn #'orchestrator/find-worktree-for-task]
+          (is (nil? (find-fn 42))))))))
+
+;;; Idle Notification Tests
+
+(defrecord MockDevEnv [calls]
+  dev-env/DevEnv
+  (open-cli-session [_this opts callback]
+    (swap! calls conj {:method :open-cli-session :opts opts :callback callback})
+    {:status :requested})
+  (close-session [_this session-id]
+    (swap! calls conj {:method :close-session :session-id session-id})
+    {:status :requested})
+  (notify [_this message]
+    (swap! calls conj {:method :notify :message message})
+    {:status :requested}))
+
+(deftest idle-callback-notify-test
+  ;; Tests that idle-callback calls dev-env/notify with expected message.
+  ;; Contract: When CLI goes idle via derive-flow-decision, orchestrator notifies user.
+  ;; The idle-callback is wired up in derive-flow-decision when :hand-to-cli action
+  ;; is received with a dev-env. This test verifies:
+  ;; 1. The idle-callback is passed to console/hand-to-cli
+  ;; 2. When invoked, it calls dev-env/notify with expected message
+  (testing "idle-callback"
+    (testing "when :hand-to-cli decision is handled with dev-env"
+      (testing "idle-callback calls dev-env/notify with expected message"
+        (with-clean-console-state
+          (fn []
+            (let [mock-calls (atom [])
+                  mock-env (->MockDevEnv mock-calls)
+                  captured-idle-callback (atom nil)
+                  captured-completion-callback (atom nil)
+                  hand-to-cli-called (promise)
+                  decision {:action :hand-to-cli :reason "Test handoff"}]
+              ;; Setup: transition to :running-sdk state so hand-to-cli can be called
+              (console/transition! :selecting-task {:story-id 42})
+              (console/transition! :running-sdk {:session-id "test-sess"
+                                                 :current-task-id 101})
+              (with-redefs [console/hand-to-cli
+                            (fn [{:keys [idle-callback callback] :as _opts}]
+                              (reset! captured-idle-callback idle-callback)
+                              (reset! captured-completion-callback callback)
+                              (deliver hand-to-cli-called true)
+                              ;; Return immediately but don't invoke callback
+                              ;; derive-flow-decision will block on its promise
+                              {:status :running})
+                            handoff/write-handoff-state (fn [& _] nil)]
+                ;; Call derive-flow-decision in a future - it will block waiting for callback
+                (let [f (future (#'orchestrator/derive-flow-decision
+                                 decision
+                                 {:dev-env mock-env}))]
+                  ;; Wait for hand-to-cli to be called (with timeout)
+                  (deref hand-to-cli-called 1000 nil)
+                  ;; Verify idle-callback was passed to hand-to-cli
+                  (is (fn? @captured-idle-callback)
+                      "should pass idle-callback fn to hand-to-cli")
+                  ;; Invoke the captured idle-callback (simulates file watcher detecting :idle)
+                  (when @captured-idle-callback
+                    (@captured-idle-callback {:status :idle})
+                    ;; Verify dev-env/notify was called with expected message
+                    (let [notify-calls (filter #(= :notify (:method %)) @mock-calls)]
+                      (is (= 1 (count notify-calls))
+                          "should call dev-env/notify once")
+                      (is (= "CLI is idle - continue here or exit to resume automated flow"
+                             (:message (first notify-calls)))
+                          "should use expected notification message")))
+                  ;; Cleanup: invoke completion callback to unblock the future
+                  (when @captured-completion-callback
+                    (@captured-completion-callback {:state {:state :running-sdk}}))
+                  ;; Wait for future to complete (with timeout to not hang test)
+                  (deref f 500 nil))))))))))

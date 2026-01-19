@@ -753,50 +753,88 @@
         (is (= :error (:action result)))
         (is (re-find #"Unexpected.*response format" (:reason result)))))))
 
+(def ^:private successful-sdk-result
+  "SDK result indicating successful completion with actual output.
+   Structure matches what run-cli-with-prompt returns."
+  {:session-id "test-session"
+   :messages []
+   :result {:result "Task completed successfully"
+            :permission_denials []}})
+
+(def ^:private empty-sdk-result
+  "SDK result with no output, indicating CLI handoff needed."
+  {:session-id "test-session"
+   :messages []
+   :result {:result nil
+            :permission_denials []}})
+
+(def ^:private denied-sdk-result
+  "SDK result with permission denial, indicating CLI handoff needed."
+  {:session-id "test-session"
+   :messages []
+   :result {:result "Partial output"
+            :permission_denials [{:tool_name "SomeTool"}]}})
+
 (deftest story-flow-model-on-sdk-complete-test
   ;; Tests StoryFlowModel.on-sdk-complete for state transitions.
   ;; Contracts tested:
-  ;; - Re-queries mcp-tasks to get current state
-  ;; - Returns FlowDecision based on derived state
-  ;; - Handles query errors
+  ;; - When SDK makes progress, re-queries mcp-tasks and returns state-based decision
+  ;; - When SDK makes no progress (empty result or denials), hands to CLI
+  ;; - Handles query errors when SDK made progress
   (testing "StoryFlowModel on-sdk-complete"
-    (testing "re-derives state and returns appropriate decision"
-      (let [story {:id 42 :meta {:refined true}}
-            children [{:id 101 :status :open}]
-            fm (flow/story-flow-model (mock-story-query story children) 42)
-            result (flow/on-sdk-complete fm {} {})]
-        (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:execute-story-child (MCP) 42" (:prompt result)))))
+    (testing "when SDK made progress"
+      (testing "re-derives state and returns appropriate decision"
+        (let [story {:id 42 :meta {:refined true}}
+              children [{:id 101 :status :open}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-sdk-complete fm successful-sdk-result {})]
+          (is (= :continue-sdk (:action result)))
+          (is (= "/mcp-tasks:execute-story-child (MCP) 42" (:prompt result)))))
 
-    (testing "transitions to code-review when tasks complete"
-      (let [story {:id 42 :meta {:refined true}}
-            children [{:id 101 :status :closed}]
-            fm (flow/story-flow-model (mock-story-query story children) 42)
-            result (flow/on-sdk-complete fm {} {})]
-        (is (= :continue-sdk (:action result)))
-        (is (= "/mcp-tasks:review-story-implementation (MCP) 42" (:prompt result)))))
+      (testing "transitions to code-review when tasks complete"
+        (let [story {:id 42 :meta {:refined true}}
+              children [{:id 101 :status :closed}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-sdk-complete fm successful-sdk-result {})]
+          (is (= :continue-sdk (:action result)))
+          (is (= "/mcp-tasks:review-story-implementation (MCP) 42" (:prompt result)))))
 
-    (testing "returns :story-done when story complete"
-      (let [story {:id 42 :meta {:pr-merged? true}}
-            children [{:id 101 :status :closed}]
-            fm (flow/story-flow-model (mock-story-query story children) 42)
-            result (flow/on-sdk-complete fm {} {})]
-        (is (= :story-done (:action result)))))
+      (testing "returns :story-done when story complete"
+        (let [story {:id 42 :meta {:pr-merged? true}}
+              children [{:id 101 :status :closed}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-sdk-complete fm successful-sdk-result {})]
+          (is (= :story-done (:action result)))))
 
-    (testing "returns :hand-to-cli for manual-review state"
-      (let [story {:id 42 :meta {:refined true :code-reviewed "ts" :pr-num 99}}
-            children [{:id 101 :status :closed}]
-            fm (flow/story-flow-model (mock-story-query story children) 42)
-            result (flow/on-sdk-complete fm {} {})]
-        (is (= :hand-to-cli (:action result)))))
+      (testing "returns :hand-to-cli for manual-review state"
+        (let [story {:id 42 :meta {:refined true :code-reviewed "ts" :pr-num 99}}
+              children [{:id 101 :status :closed}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-sdk-complete fm successful-sdk-result {})]
+          (is (= :hand-to-cli (:action result)))))
 
-    (testing "handles query errors"
-      (let [fm (flow/story-flow-model
-                (fn [& _] {:error "Query failed"})
-                42)
-            result (flow/on-sdk-complete fm {} {})]
-        (is (= :error (:action result)))
-        (is (= "Query failed" (:reason result)))))
+      (testing "handles query errors"
+        (let [fm (flow/story-flow-model
+                  (fn [& _] {:error "Query failed"})
+                  42)
+              result (flow/on-sdk-complete fm successful-sdk-result {})]
+          (is (= :error (:action result)))
+          (is (= "Query failed" (:reason result))))))
+
+    (testing "when SDK made no progress"
+      (testing "returns :hand-to-cli for empty result"
+        (let [story {:id 42 :meta {:refined true}}
+              children [{:id 101 :status :open}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-sdk-complete fm empty-sdk-result {})]
+          (is (= :hand-to-cli (:action result)))))
+
+      (testing "returns :hand-to-cli for permission denial"
+        (let [story {:id 42 :meta {:refined true}}
+              children [{:id 101 :status :open}]
+              fm (flow/story-flow-model (mock-story-query story children) 42)
+              result (flow/on-sdk-complete fm denied-sdk-result {})]
+          (is (= :hand-to-cli (:action result))))))
 
     (testing "returns valid FlowDecision for all outcomes"
       (doseq [[desc story children]
@@ -812,7 +850,7 @@
                 [{:status :closed}]]
                ["complete" {:id 1 :meta {:pr-merged? true}} [{:status :closed}]]]]
         (let [fm (flow/story-flow-model (mock-story-query story children) 1)
-              result (flow/on-sdk-complete fm {} {})]
+              result (flow/on-sdk-complete fm successful-sdk-result {})]
           (is (flow/valid-decision? result)
               (str "Decision for " desc " should be valid")))))))
 
