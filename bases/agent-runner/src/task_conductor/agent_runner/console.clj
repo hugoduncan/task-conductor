@@ -391,7 +391,10 @@
    (transition! :needs-input)
    (transition! :running-cli)
    (let [session-id (:session-id @console-state)
-         {:keys [dev-env callback idle-callback prompt]} opts]
+         {:keys [dev-env callback idle-callback prompt]} opts
+         working-dir (or (:cwd @console-state)
+                         (System/getProperty "user.dir"))
+         handoff-path (str working-dir "/" handoff/hook-handoff-path)]
      (if dev-env
        ;; Async mode: watch file for status changes, delegate to dev-env
        (let [stop-watch-fn (atom nil)
@@ -422,22 +425,20 @@
                                                  {:status (if (= :completed (:status result))
                                                             :completed
                                                             :error)}))]
-         ;; Start watching handoff file for status changes
+         ;; Start watching handoff file for status changes (in working dir)
          (reset! stop-watch-fn
-                 (handoff/watch-hook-status-file watcher-callback))
+                 (handoff/watch-hook-status-file watcher-callback handoff-path))
          ;; Open CLI session with Emacs callback as backup
-         ;; Use the cwd where the session was created, not the current directory
          (dev-env/open-cli-session
           dev-env
           {:session-id session-id
            :prompt prompt
-           :working-dir (or (:cwd @console-state)
-                            (System/getProperty "user.dir"))}
+           :working-dir working-dir}
           emacs-callback)
          {:status :running})
        ;; Blocking mode: existing behavior
        (let [exit-code (launch-cli-resume session-id)
-             cli-status (handoff/read-hook-status)
+             cli-status (handoff/read-hook-status handoff-path)
              {:keys [error]} (determine-cli-result exit-code cli-status)
              new-state (if error
                          (transition! :error-recovery {:error error})

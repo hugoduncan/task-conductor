@@ -849,7 +849,7 @@
               watcher-callback-atom (atom nil)
               idle-callback-invoked? (atom false)]
           (with-redefs [handoff/watch-hook-status-file
-                        (fn [callback]
+                        (fn [callback _path]
                           (reset! watcher-callback-atom callback)
                           ;; Return a no-op stop function
                           (fn []))]
