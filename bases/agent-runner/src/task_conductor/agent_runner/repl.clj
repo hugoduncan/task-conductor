@@ -14,149 +14,171 @@
 ;;; Control Functions
 
 (defn start-story
-  "Begin executing a story's tasks.
+  "Begin executing a story's tasks for a workspace.
 
    Validates that the console is in :idle state, then transitions to
    :selecting-task with the given story-id.
+   Workspace can be: nil (focused), keyword alias, or string path.
 
    Returns the new state map on success.
    Throws if not in :idle state."
-  [story-id]
-  (let [current (console/current-state)]
-    (when (not= :idle current)
-      (throw (ex-info (str "Cannot start story: console is " current ", expected :idle")
-                      {:type :invalid-state
-                       :current-state current
-                       :required-state :idle})))
-    (let [new-state (console/transition! :selecting-task {:story-id story-id})]
-      (println (str "Started story " story-id))
-      new-state)))
+  ([story-id]
+   (start-story nil story-id))
+  ([workspace story-id]
+   (let [current (console/current-state workspace)]
+     (when (not= :idle current)
+       (throw (ex-info (str "Cannot start story: console is " current ", expected :idle")
+                       {:type :invalid-state
+                        :current-state current
+                        :required-state :idle})))
+     (let [new-state (console/transition! workspace :selecting-task {:story-id story-id})]
+       (println (str "Started story " story-id))
+       new-state))))
 
 (defn status
-  "Return current console status.
+  "Return current console status for a workspace.
 
    Returns a map with :state, :story-id, :current-task-id, and :paused.
-   Prints a human-readable summary."
-  []
-  (let [state @console/console-state
-        result {:state (:state state)
-                :story-id (:story-id state)
-                :current-task-id (:current-task-id state)
-                :paused (:paused state)}]
-    (println (str "State: " (:state result)))
-    (when (:story-id result)
-      (println (str "Story: " (:story-id result))))
-    (when (:current-task-id result)
-      (println (str "Task: " (:current-task-id result))))
-    (when (:paused result)
-      (println "PAUSED"))
-    result))
+   Prints a human-readable summary.
+
+   Workspace can be: nil (focused), keyword alias, or string path."
+  ([]
+   (status nil))
+  ([workspace]
+   (let [state (console/get-workspace-state workspace)
+         result {:state (:state state)
+                 :story-id (:story-id state)
+                 :current-task-id (:current-task-id state)
+                 :paused (:paused state)}]
+     (println (str "State: " (:state result)))
+     (when (:story-id result)
+       (println (str "Story: " (:story-id result))))
+     (when (:current-task-id result)
+       (println (str "Task: " (:current-task-id result))))
+     (when (:paused result)
+       (println "PAUSED"))
+     result)))
 
 (defn pause
-  "Set the pause flag.
+  "Set the pause flag for a workspace.
 
    The outer loop checks this flag before starting the next task.
+   Workspace can be: nil (focused), keyword alias, or string path.
    Returns the current state map."
-  []
-  (console/set-paused!)
-  (println "Paused - execution will stop after current task completes")
-  @console/console-state)
+  ([]
+   (pause nil))
+  ([workspace]
+   (console/set-paused! workspace)
+   (println "Paused - execution will stop after current task completes")
+   (console/get-workspace-state workspace)))
 
 (defn continue
-  "Clear the pause flag.
+  "Clear the pause flag for a workspace.
 
    Allows the outer loop to resume on the next iteration.
+   Workspace can be: nil (focused), keyword alias, or string path.
    Returns the current state map."
-  []
-  (console/clear-paused!)
-  (println "Resumed - execution will continue")
-  @console/console-state)
+  ([]
+   (continue nil))
+  ([workspace]
+   (console/clear-paused! workspace)
+   (println "Resumed - execution will continue")
+   (console/get-workspace-state workspace)))
 
 (defn abort
-  "Cancel execution and return to :idle state.
+  "Cancel execution and return to :idle state for a workspace.
 
    Transitions through :error-recovery to :idle, preserving history.
+   Workspace can be: nil (focused), keyword alias, or string path.
    Returns the new state map.
 
    If already :idle, prints a message and returns the current state.
    If in :story-complete, transitions directly to :idle."
-  []
-  (let [current (console/current-state)]
-    (cond
-      (= :idle current)
-      (do
-        (println "Already idle")
-        @console/console-state)
+  ([]
+   (abort nil))
+  ([workspace]
+   (let [current (console/current-state workspace)]
+     (cond
+       (= :idle current)
+       (do
+         (println "Already idle")
+         (console/get-workspace-state workspace))
 
-      (= :story-complete current)
-      (do
-        (console/clear-paused!)
-        (let [new-state (console/transition! :idle)]
-          (println "Aborted - returned to idle")
-          new-state))
+       (= :story-complete current)
+       (do
+         (console/clear-paused! workspace)
+         (let [new-state (console/transition! workspace :idle)]
+           (println "Aborted - returned to idle")
+           new-state))
 
-      :else
-      (do
-        (console/clear-paused!)
-        (console/transition! :error-recovery {:error {:type :user-abort}})
-        (let [new-state (console/transition! :idle)]
-          (println "Aborted - returned to idle")
-          new-state)))))
+       :else
+       (do
+         (console/clear-paused! workspace)
+         (console/transition! workspace :error-recovery {:error {:type :user-abort}})
+         (let [new-state (console/transition! workspace :idle)]
+           (println "Aborted - returned to idle")
+           new-state))))))
 
 ;;; Error Recovery Functions
 
 (defn retry
-  "Re-attempt the failed task.
+  "Re-attempt the failed task for a workspace.
 
    Transitions from :error-recovery back to :running-sdk with the same task.
+   Workspace can be: nil (focused), keyword alias, or string path.
    Throws if not in :error-recovery state.
 
    Returns the new state map."
-  []
-  (let [current (console/current-state)]
-    (when (not= :error-recovery current)
-      (throw (ex-info (str "Cannot retry: console is " current ", expected :error-recovery")
-                      {:type :invalid-state
-                       :current-state current
-                       :required-state :error-recovery})))
-    (let [state @console/console-state
-          task-id (:current-task-id state)
-          session-id (:session-id state)
-          new-state (console/transition! :running-sdk {:session-id session-id
-                                                       :current-task-id task-id})]
-      (println (str "Retrying task " task-id))
-      new-state)))
+  ([]
+   (retry nil))
+  ([workspace]
+   (let [current (console/current-state workspace)]
+     (when (not= :error-recovery current)
+       (throw (ex-info (str "Cannot retry: console is " current ", expected :error-recovery")
+                       {:type :invalid-state
+                        :current-state current
+                        :required-state :error-recovery})))
+     (let [state (console/get-workspace-state workspace)
+           task-id (:current-task-id state)
+           session-id (:session-id state)
+           new-state (console/transition! workspace :running-sdk {:session-id session-id
+                                                                  :current-task-id task-id})]
+       (println (str "Retrying task " task-id))
+       new-state))))
 
 (defn skip
-  "Skip the failed task and move to the next.
+  "Skip the failed task and move to the next for a workspace.
 
    Transitions from :error-recovery to :selecting-task.
+   Workspace can be: nil (focused), keyword alias, or string path.
    Throws if not in :error-recovery state.
 
    Returns the new state map."
-  []
-  (let [current (console/current-state)]
-    (when (not= :error-recovery current)
-      (throw (ex-info (str "Cannot skip: console is " current ", expected :error-recovery")
-                      {:type :invalid-state
-                       :current-state current
-                       :required-state :error-recovery})))
-    (let [state @console/console-state
-          task-id (:current-task-id state)
-          new-state (console/transition! :selecting-task)]
-      (println (str "Skipped task " task-id))
-      new-state)))
+  ([]
+   (skip nil))
+  ([workspace]
+   (let [current (console/current-state workspace)]
+     (when (not= :error-recovery current)
+       (throw (ex-info (str "Cannot skip: console is " current ", expected :error-recovery")
+                       {:type :invalid-state
+                        :current-state current
+                        :required-state :error-recovery})))
+     (let [state (console/get-workspace-state workspace)
+           task-id (:current-task-id state)
+           new-state (console/transition! workspace :selecting-task)]
+       (println (str "Skipped task " task-id))
+       new-state))))
 
 ;;; Context Management Functions
 
 (defn- validate-story-id
-  "Returns the current story-id or throws if not in a story."
-  []
-  (let [story-id (:story-id @console/console-state)]
+  "Returns the current story-id for a workspace, or throws if not in a story."
+  [workspace]
+  (let [story-id (:story-id (console/get-workspace-state workspace))]
     (when-not story-id
       (throw (ex-info "No active story"
                       {:type :no-active-story
-                       :current-state (console/current-state)})))
+                       :current-state (console/current-state workspace)})))
     story-id))
 
 (defn add-context
@@ -164,60 +186,69 @@
 
    Validates that a story is active, then shells out to mcp-tasks CLI
    to update the story's shared-context field.
+   Workspace can be: nil (focused), keyword alias, or string path.
 
    Returns the updated task on success.
    Throws if no active story or CLI call fails."
-  [text]
-  (let [story-id (validate-story-id)
-        result (orchestrator/run-mcp-tasks "update"
-                                           "--task-id" (str story-id)
-                                           "--shared-context" text)]
-    (println (str "Added context to story " story-id))
-    result))
+  ([text]
+   (add-context nil text))
+  ([workspace text]
+   (let [story-id (validate-story-id workspace)
+         result (orchestrator/run-mcp-tasks "update"
+                                            "--task-id" (str story-id)
+                                            "--shared-context" text)]
+     (println (str "Added context to story " story-id))
+     result)))
 
 (defn view-context
   "Display the current story's shared-context.
 
    Retrieves the story and prints its shared-context in a readable format.
+   Workspace can be: nil (focused), keyword alias, or string path.
 
    Returns the shared-context vector.
    Throws if no active story or CLI call fails."
-  []
-  (let [story-id (validate-story-id)
-        result (orchestrator/run-mcp-tasks "show"
-                                           "--task-id" (str story-id))
-        shared-context (get-in result [:task :shared-context])]
-    (println "Shared Context:")
-    (if (seq shared-context)
-      (doseq [[idx entry] (map-indexed vector shared-context)]
-        (println (str "  " (inc idx) ". " entry)))
-      (println "  (none)"))
-    shared-context))
+  ([]
+   (view-context nil))
+  ([workspace]
+   (let [story-id (validate-story-id workspace)
+         result (orchestrator/run-mcp-tasks "show"
+                                            "--task-id" (str story-id))
+         shared-context (get-in result [:task :shared-context])]
+     (println "Shared Context:")
+     (if (seq shared-context)
+       (doseq [[idx entry] (map-indexed vector shared-context)]
+         (println (str "  " (inc idx) ". " entry)))
+       (println "  (none)"))
+     shared-context)))
 
 ;;; Session Tracking
 
 (defn list-sessions
-  "List sessions for the current story.
+  "List sessions for the current story in a workspace.
 
    Retrieves session entries from console state filtered by the current
    story-id. Sessions are recorded with their associated story-id.
+   Workspace can be: nil (focused), keyword alias, or string path.
 
    Prints a formatted list with session-id, task-id, and timestamp.
 
    Returns the filtered sessions vector.
    Throws if no active story."
-  []
-  (let [story-id (validate-story-id)
-        sessions (->> (:sessions @console/console-state)
-                      (filter #(= story-id (:story-id %))))]
-    (println (str "Sessions for story " story-id ":"))
-    (if (seq sessions)
-      (doseq [[idx {:keys [session-id task-id timestamp]}]
-              (map-indexed vector sessions)]
-        (println (str "  " (inc idx) ". " session-id
-                      " (task " task-id ", " timestamp ")")))
-      (println "  (none)"))
-    (vec sessions)))
+  ([]
+   (list-sessions nil))
+  ([workspace]
+   (let [story-id (validate-story-id workspace)
+         sessions (->> (:sessions (console/get-workspace-state workspace))
+                       (filter #(= story-id (:story-id %))))]
+     (println (str "Sessions for story " story-id ":"))
+     (if (seq sessions)
+       (doseq [[idx {:keys [session-id task-id timestamp]}]
+               (map-indexed vector sessions)]
+         (println (str "  " (inc idx) ". " session-id
+                       " (task " task-id ", " timestamp ")")))
+       (println "  (none)"))
+     (vec sessions))))
 
 ;;; Story Execution
 

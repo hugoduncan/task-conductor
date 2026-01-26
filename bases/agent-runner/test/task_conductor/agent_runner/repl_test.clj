@@ -30,7 +30,7 @@
       (testing "sets story-id"
         (console/reset-state!)
         (repl/start-story 53)
-        (is (= 53 (:story-id @console/console-state))))
+        (is (= 53 (:story-id (console/get-workspace-state nil)))))
 
       (testing "returns new state map"
         (console/reset-state!)
@@ -285,12 +285,12 @@
       (testing "preserves task-id"
         (setup-error-recovery-state 53 "sess-1" 75)
         (repl/retry)
-        (is (= 75 (:current-task-id @console/console-state))))
+        (is (= 75 (:current-task-id (console/get-workspace-state nil)))))
 
       (testing "preserves session-id"
         (setup-error-recovery-state 53 "sess-1" 75)
         (repl/retry)
-        (is (= "sess-1" (:session-id @console/console-state))))
+        (is (= "sess-1" (:session-id (console/get-workspace-state nil)))))
 
       (testing "returns new state map"
         (setup-error-recovery-state 53 "sess-1" 75)
@@ -332,12 +332,12 @@
         ;; the outer loop selects and starts the next task
         (setup-error-recovery-state 53 "sess-1" 75)
         (repl/skip)
-        (is (= 75 (:current-task-id @console/console-state))))
+        (is (= 75 (:current-task-id (console/get-workspace-state nil)))))
 
       (testing "preserves story-id"
         (setup-error-recovery-state 53 "sess-1" 75)
         (repl/skip)
-        (is (= 53 (:story-id @console/console-state))))
+        (is (= 53 (:story-id (console/get-workspace-state nil)))))
 
       (testing "returns new state map"
         (setup-error-recovery-state 53 "sess-1" 75)

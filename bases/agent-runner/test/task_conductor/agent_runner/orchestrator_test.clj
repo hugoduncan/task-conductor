@@ -617,8 +617,8 @@
                               (successful-sdk-result))
                             console/hand-to-cli
                             (fn []
-                              (swap! console/console-state assoc :state :running-cli)
-                              {:state @console/console-state})]
+                              (console/update-workspace! nil {:state :running-cli})
+                              {:state (console/get-workspace-state nil)})]
                 (let [result (orchestrator/execute-story-with-flow-model fm 42)]
                   (is (= "/mcp-tasks:create-story-pr (MCP) 42"
                          (first @captured-prompts))
@@ -758,8 +758,8 @@
                             (successful-sdk-result))
                           console/hand-to-cli
                           (fn []
-                            (swap! console/console-state assoc :state :running-cli)
-                            {:state @console/console-state})]
+                            (console/update-workspace! nil {:state :running-cli})
+                            {:state (console/get-workspace-state nil)})]
               (let [result (orchestrator/execute-story-with-flow-model fm 42)]
                 ;; Should have called:
                 ;; 1. review-story-implementation (all complete, need review)

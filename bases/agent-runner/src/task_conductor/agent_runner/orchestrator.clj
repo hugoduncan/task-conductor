@@ -328,14 +328,14 @@
           {:next-prompt nil}))
       {:outcome :handed-to-cli
        :reason (:reason decision)
-       :state @console/console-state})
+       :state (console/get-workspace-state nil)})
 
     :story-done
     (do
       (console/transition! :story-complete)
       {:outcome :complete
        :reason (:reason decision)
-       :state @console/console-state})
+       :state (console/get-workspace-state nil)})
 
     :error
     (do
@@ -345,7 +345,7 @@
       {:outcome :error
        :error {:type :flow-error
                :message (:reason decision)}
-       :state @console/console-state})
+       :state (console/get-workspace-state nil)})
 
     ;; Default: treat as task-done, ask on-task-complete for next action
     (do
@@ -360,7 +360,7 @@
    Uses :cwd from opts, falling back to console-state :cwd or current directory."
   [prompt opts]
   (let [cwd (or (:cwd opts)
-                (:cwd @console/console-state)
+                (:cwd (console/get-workspace-state nil))
                 (System/getProperty "user.dir"))
         session-config (build-task-session-config {:worktree-path cwd} opts)]
     (println "[run-cli-with-prompt] Running CLI with prompt:" prompt)
@@ -391,8 +391,8 @@
       (console/transition! :running-sdk {:session-id nil})
       (let [sdk-result (run-cli-with-prompt (:prompt decision) opts)]
         ;; Store session-id for later handoff (cwd is set at story start)
-        (swap! console/console-state assoc :session-id (:session-id sdk-result))
-        (let [next-decision (flow/on-sdk-complete flow-model sdk-result @console/console-state)]
+        (console/update-workspace! nil {:session-id (:session-id sdk-result)})
+        (let [next-decision (flow/on-sdk-complete flow-model sdk-result (console/get-workspace-state nil))]
           (println "[handle-flow-decision] on-sdk-complete returned:" (pr-str next-decision))
           (derive-flow-decision next-decision opts))))
 
@@ -401,7 +401,7 @@
     ;; This happens when initial-prompt returns hand-to-cli (e.g., manual-review state)
     {:outcome :handed-to-cli
      :reason (:reason decision)
-     :state @console/console-state}
+     :state (console/get-workspace-state nil)}
 
     :story-done
     ;; Story is already complete (e.g., PR merged) - no SDK needed
@@ -410,7 +410,7 @@
       (console/transition! :story-complete)
       {:outcome :complete
        :reason (:reason decision)
-       :state @console/console-state})
+       :state (console/get-workspace-state nil)})
 
     :error
     (do
@@ -420,7 +420,7 @@
       {:outcome :error
        :error {:type :flow-error
                :message (:reason decision)}
-       :state @console/console-state})
+       :state (console/get-workspace-state nil)})
 
     ;; Unknown action - treat as error
     (do
@@ -430,7 +430,7 @@
       {:outcome :error
        :error {:type :unknown-action
                :action (:action decision)}
-       :state @console/console-state})))
+       :state (console/get-workspace-state nil)})))
 
 (defn- flow-model-loop
   "Main execution loop driven by FlowModel.
@@ -444,7 +444,7 @@
              "pending-prompt:" (some? pending-prompt))
     (if (console/paused?)
       {:outcome :paused
-       :state @console/console-state}
+       :state (console/get-workspace-state nil)}
       (let [decision (cond
                        ;; Use pending prompt from previous SDK completion
                        pending-prompt
@@ -452,11 +452,11 @@
 
                        ;; First iteration - get initial prompt
                        (zero? iteration)
-                       (flow/initial-prompt flow-model {} @console/console-state)
+                       (flow/initial-prompt flow-model {} (console/get-workspace-state nil))
 
                        ;; Subsequent iterations - ask flow model for next action
                        :else
-                       (flow/on-task-complete flow-model @console/console-state))
+                       (flow/on-task-complete flow-model (console/get-workspace-state nil)))
             _ (println "[flow-model-loop] Got decision:" (pr-str decision))
             result (handle-flow-decision decision flow-model opts)]
         (if (:outcome result)
@@ -475,7 +475,7 @@
     (println "[task-loop] Iteration:" iteration "paused?:" (console/paused?))
     (if (console/paused?)
       {:outcome :paused
-       :state @console/console-state}
+       :state (console/get-workspace-state nil)}
       (let [{:keys [status task progress blocked-tasks]} (select-next-task story-id)]
         (println "[task-loop] select-next-task returned status:" status)
         (case status
@@ -488,7 +488,7 @@
             (let [result (handle-task-execution task opts)]
               (println "[task-loop] Task execution complete, session-id:" (:session-id result))
               ;; Update session-id directly after SDK returns
-              (swap! console/console-state assoc :session-id (:session-id result))
+              (console/update-workspace! nil {:session-id (:session-id result)})
               (console/transition! :task-complete)
               (console/transition! :selecting-task))
             (recur (inc iteration)))
@@ -497,18 +497,18 @@
           {:outcome :blocked
            :blocked-tasks blocked-tasks
            :progress progress
-           :state @console/console-state}
+           :state (console/get-workspace-state nil)}
 
           :all-complete
           (do
             (console/transition! :story-complete)
             {:outcome :complete
              :progress progress
-             :state @console/console-state})
+             :state (console/get-workspace-state nil)})
 
           :no-tasks
           {:outcome :no-tasks
-           :state @console/console-state})))))
+           :state (console/get-workspace-state nil)})))))
 
 (defn execute-story-with-flow-model
   "Execute a story using a FlowModel for state-driven execution.
@@ -547,7 +547,7 @@
        (println "[execute-story-with-flow-model] Story worktree:" worktree-cwd)
        (console/transition! :selecting-task {:story-id story-id})
        (when worktree-cwd
-         (swap! console/console-state assoc :cwd worktree-cwd)))
+         (console/update-workspace! nil {:cwd worktree-cwd})))
      (println "[execute-story-with-flow-model] Calling flow-model-loop")
      (let [result (flow-model-loop flow-model opts)]
        (println "[execute-story-with-flow-model] Returned:" (:outcome result))
@@ -568,7 +568,7 @@
         :error {:type :exception
                 :message (ex-message e)
                 :data (ex-data e)}
-        :state @console/console-state}))))
+        :state (console/get-workspace-state nil)}))))
 
 (defn execute-story
   "Execute all tasks in a story sequentially.
@@ -640,7 +640,7 @@
             :error {:type :exception
                     :message (ex-message e)
                     :data (ex-data e)}
-            :state @console/console-state}))))))
+            :state (console/get-workspace-state nil)}))))))
 
 (comment
   ;; Example: Query unblocked children of story 57

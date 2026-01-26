@@ -342,7 +342,7 @@
       (console/transition! :selecting-task {:story-id 53})
       (is (= :selecting-task (console/current-state))
           "should update current state")
-      (is (= 53 (:story-id @console/console-state))
+      (is (= 53 (:story-id (console/get-workspace-state nil)))
           "should apply context"))
 
     (testing "records transition in history"
@@ -395,7 +395,7 @@
 
     (testing "throws on invalid transition without mutating"
       (console/reset-state!)
-      (let [state-before @console/console-state
+      (let [state-before (console/get-workspace-state nil)
             ex (try
                  (console/transition! :running-sdk)
                  nil
@@ -404,7 +404,7 @@
             "should throw exception")
         (is (= :invalid-transition (:type (ex-data ex)))
             "should have :invalid-transition type")
-        (is (= state-before @console/console-state)
+        (is (= state-before (console/get-workspace-state nil))
             "should not mutate state on failure")))))
 
 (deftest current-state-test
@@ -448,9 +448,9 @@
       (console/reset-state!)
       (is (= :idle (console/current-state))
           "should reset state to :idle")
-      (is (nil? (:story-id @console/console-state))
+      (is (nil? (:story-id (console/get-workspace-state nil)))
           "should clear story-id")
-      (is (nil? (:session-id @console/console-state))
+      (is (nil? (:session-id (console/get-workspace-state nil)))
           "should clear session-id"))
 
     (testing "clears history"
@@ -893,7 +893,7 @@
     (testing "sets :paused to true"
       (console/reset-state!)
       (console/set-paused!)
-      (is (true? (:paused @console/console-state))))
+      (is (true? (:paused (console/get-workspace-state nil)))))
 
     (testing "returns true"
       (console/reset-state!)
@@ -913,7 +913,7 @@
       (console/reset-state!)
       (console/set-paused!)
       (console/clear-paused!)
-      (is (false? (:paused @console/console-state))))
+      (is (false? (:paused (console/get-workspace-state nil)))))
 
     (testing "returns false"
       (console/reset-state!)
@@ -935,21 +935,21 @@
     (testing "appends session entry to :sessions"
       (console/reset-state!)
       (console/record-session! "sess-1" 42)
-      (is (= 1 (count (:sessions @console/console-state)))))
+      (is (= 1 (count (:sessions (console/get-workspace-state nil))))))
 
     (testing "accumulates multiple sessions"
       (console/reset-state!)
       (console/record-session! "sess-1" 42)
       (console/record-session! "sess-2" 43)
       (console/record-session! "sess-3" 44)
-      (is (= 3 (count (:sessions @console/console-state)))))
+      (is (= 3 (count (:sessions (console/get-workspace-state nil))))))
 
     (testing "creates entry with correct structure"
       (console/reset-state!)
       (console/transition! :selecting-task {:story-id 53})
       (let [ts (Instant/parse "2024-01-15T10:30:00Z")]
         (console/record-session! "sess-abc" 99 ts)
-        (let [entry (first (:sessions @console/console-state))]
+        (let [entry (first (:sessions (console/get-workspace-state nil)))]
           (is (= "sess-abc" (:session-id entry)))
           (is (= 99 (:task-id entry)))
           (is (= 53 (:story-id entry)))
@@ -958,13 +958,13 @@
     (testing "includes nil story-id when not in a story"
       (console/reset-state!)
       (console/record-session! "sess-xyz" 100)
-      (let [entry (first (:sessions @console/console-state))]
+      (let [entry (first (:sessions (console/get-workspace-state nil)))]
         (is (nil? (:story-id entry)))))
 
     (testing "generates timestamp when not provided"
       (console/reset-state!)
       (console/record-session! "sess-xyz" 100)
-      (let [entry (first (:sessions @console/console-state))]
+      (let [entry (first (:sessions (console/get-workspace-state nil)))]
         (is (instance? Instant (:timestamp entry)))))
 
     (testing "returns updated sessions vector"
@@ -988,6 +988,6 @@
       (console/reset-state!)
       (console/record-session! "sess-1" 42)
       (console/record-session! "sess-2" 43)
-      (is (= 2 (count (:sessions @console/console-state))))
+      (is (= 2 (count (:sessions (console/get-workspace-state nil)))))
       (console/reset-state!)
-      (is (= [] (:sessions @console/console-state))))))
+      (is (= [] (:sessions (console/get-workspace-state nil)))))))
