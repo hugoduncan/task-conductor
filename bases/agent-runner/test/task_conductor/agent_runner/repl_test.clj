@@ -15,7 +15,8 @@
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.orchestrator :as orchestrator]
-   [task-conductor.agent-runner.repl :as repl]))
+   [task-conductor.agent-runner.repl :as repl]
+   [task-conductor.workspace.interface :as workspace]))
 
 ;;; start-story Tests
 
@@ -699,4 +700,71 @@
                            :progress {:completed 1 :total 1}
                            :state {:state :story-complete}})]
             (repl/run-story 57)
-            (is (= 57 @captured-story-id))))))))
+            (is (= 57 @captured-story-id))))))
+
+    (testing "with workspace argument"
+      (testing "validates state for specified workspace"
+        (console/reset-state!)
+        ;; Set up non-idle state for workspace path
+        (console/transition! "/test/workspace" :selecting-task {:story-id 42})
+        (let [ex (try
+                   (repl/run-story "/test/workspace" 53)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? ex))
+          (is (= :invalid-state (:type (ex-data ex))))
+          (is (= :selecting-task (:current-state (ex-data ex))))))
+
+      (testing "temporarily sets focused-project for orchestrator"
+        (console/reset-state!)
+        (workspace/set-focused-project! "/original/path")
+        (workspace/add-project! "/test/workspace")
+        (let [focused-during-execution (atom nil)]
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id _opts]
+                          (reset! focused-during-execution (workspace/focused-project))
+                          {:outcome :complete
+                           :progress {:completed 1 :total 1}
+                           :state {:state :story-complete}})]
+            (repl/run-story "/test/workspace" 53)
+            (is (= "/test/workspace" @focused-during-execution))
+            ;; After execution, focused should be restored
+            (is (= "/original/path" (workspace/focused-project))))))
+
+      (testing "restores focused-project even on exception"
+        (console/reset-state!)
+        (workspace/set-focused-project! "/original/path")
+        (with-redefs [orchestrator/execute-story
+                      (fn [_story-id _opts]
+                        (throw (ex-info "Test error" {})))]
+          (try
+            (repl/run-story "/test/workspace" 53)
+            (catch clojure.lang.ExceptionInfo _))
+          (is (= "/original/path" (workspace/focused-project)))))
+
+      (testing "supports keyword alias"
+        (console/reset-state!)
+        (workspace/add-project! "/path/to/myproject")
+        (let [captured-focused (atom nil)]
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id _opts]
+                          (reset! captured-focused (workspace/focused-project))
+                          {:outcome :complete
+                           :progress {:completed 1 :total 1}
+                           :state {:state :story-complete}})]
+            (repl/run-story :myproject 53)
+            (is (= "/path/to/myproject" @captured-focused)))))
+
+      (testing "with nil workspace uses current focused"
+        (console/reset-state!)
+        (workspace/set-focused-project! "/focused/project")
+        (let [focused-during-execution (atom nil)]
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id _opts]
+                          (reset! focused-during-execution (workspace/focused-project))
+                          {:outcome :complete
+                           :progress {:completed 1 :total 1}
+                           :state {:state :story-complete}})]
+            (repl/run-story nil 53 {})
+            ;; Should NOT change focused project when nil workspace
+            (is (= "/focused/project" @focused-during-execution))))))))

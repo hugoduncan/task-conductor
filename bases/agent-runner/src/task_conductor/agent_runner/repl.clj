@@ -9,7 +9,8 @@
    [task-conductor.agent-runner.flow :as flow]
    [task-conductor.agent-runner.orchestrator :as orchestrator]
    [task-conductor.dev-env.emacs :as emacs]
-   [task-conductor.dev-env.interface :as dev-env]))
+   [task-conductor.dev-env.interface :as dev-env]
+   [task-conductor.workspace.interface :as workspace]))
 
 ;;; Control Functions
 
@@ -262,6 +263,15 @@
         (reset! dev-env-atom e)
         e)))
 
+(defn- resolve-workspace-path
+  "Resolves workspace argument to a full path.
+   Returns nil if workspace is nil (use focused)."
+  [workspace]
+  (when workspace
+    (cond
+      (keyword? workspace) (console/workspace-alias->path workspace)
+      (string? workspace) workspace)))
+
 (defn run-story
   "Execute all tasks in a story with automated orchestration.
 
@@ -273,7 +283,10 @@
    Validates that the console is in :idle state before starting.
    Prints progress information and final outcome.
 
+   Workspace can be: nil (focused), keyword alias, or string path.
+
    Arguments:
+   - workspace: Optional workspace (nil uses focused)
    - story-id: The ID of the story to execute
    - opts: Optional map of session configuration overrides
      - :flow-model - Custom flow model (defaults to StoryFlowModel)
@@ -285,54 +298,72 @@
 
    Throws if not in :idle state."
   ([story-id]
-   (run-story story-id {}))
-  ([story-id opts]
-   (let [current (console/current-state)]
+   (run-story nil story-id {}))
+  ([arg1 arg2]
+   ;; Disambiguate: (story-id opts) vs (workspace story-id)
+   (if (map? arg2)
+     (run-story nil arg1 arg2)
+     (run-story arg1 arg2 {})))
+  ([workspace story-id opts]
+   (let [resolved-path (resolve-workspace-path workspace)
+         current (console/current-state workspace)]
      (when (not= :idle current)
        (throw (ex-info (str "Cannot run story: console is " current ", expected :idle")
                        {:type :invalid-state
                         :current-state current
                         :required-state :idle})))
      (println (str "Running story " story-id "..."))
-     (let [dev-env (get-or-create-dev-env)
-           _ (when dev-env (println "[run-story] Using Emacs dev-env for CLI handoff"))
-           opts (cond-> opts
-                  (not (:flow-model opts))
-                  (assoc :flow-model (flow/story-flow-model orchestrator/run-mcp-tasks story-id))
-                  dev-env
-                  (assoc :dev-env dev-env))
-           result (orchestrator/execute-story story-id opts)]
-       (case (:outcome result)
-         :complete
-         (println (str "Story complete! ("
-                       (get-in result [:progress :completed])
-                       " tasks)"))
+     (let [run-impl
+           (fn []
+             (let [dev-env (get-or-create-dev-env)
+                   _ (when dev-env (println "[run-story] Using Emacs dev-env for CLI handoff"))
+                   opts (cond-> opts
+                          (not (:flow-model opts))
+                          (assoc :flow-model (flow/story-flow-model orchestrator/run-mcp-tasks story-id))
+                          dev-env
+                          (assoc :dev-env dev-env))
+                   result (orchestrator/execute-story story-id opts)]
+               (case (:outcome result)
+                 :complete
+                 (println (str "Story complete! ("
+                               (get-in result [:progress :completed])
+                               " tasks)"))
 
-         :paused
-         (println "Story paused - use (continue) then (run-story ...) to resume")
+                 :paused
+                 (println "Story paused - use (continue) then (run-story ...) to resume")
 
-         :blocked
-         (do
-           (println "Story blocked - all remaining tasks have dependencies:")
-           (doseq [{:keys [id title blocking-task-ids]}
-                   (:blocked-tasks result)]
-             (println (str "  Task " id ": " title))
-             (println (str "    Blocked by: " blocking-task-ids))))
+                 :blocked
+                 (do
+                   (println "Story blocked - all remaining tasks have dependencies:")
+                   (doseq [{:keys [id title blocking-task-ids]}
+                           (:blocked-tasks result)]
+                     (println (str "  Task " id ": " title))
+                     (println (str "    Blocked by: " blocking-task-ids))))
 
-         :no-tasks
-         (println "Story has no child tasks - create tasks or refine the story")
+                 :no-tasks
+                 (println "Story has no child tasks - create tasks or refine the story")
 
-         :handed-to-cli
-         (do
-           (println "Handed off to CLI for user interaction")
-           (println (str "Reason: " (:reason result)))
-           (println (str "Session ID: " (:session-id (:state result)))))
+                 :handed-to-cli
+                 (do
+                   (println "Handed off to CLI for user interaction")
+                   (println (str "Reason: " (:reason result)))
+                   (println (str "Session ID: " (:session-id (:state result)))))
 
-         :error
-         (do
-           (println "Story execution failed:")
-           (println (str "  " (get-in result [:error :message])))))
-       result))))
+                 :error
+                 (do
+                   (println "Story execution failed:")
+                   (println (str "  " (get-in result [:error :message])))))
+               result))]
+       (if resolved-path
+         ;; Workspace specified - temporarily set as focused for orchestrator
+         (let [old-focused (workspace/focused-project)]
+           (try
+             (workspace/set-focused-project! resolved-path)
+             (run-impl)
+             (finally
+               (workspace/set-focused-project! old-focused))))
+         ;; No workspace - use current focused
+         (run-impl))))))
 
 ;;; Dev-Env CLI Session Management
 
