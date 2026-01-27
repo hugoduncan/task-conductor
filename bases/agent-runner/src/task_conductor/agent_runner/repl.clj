@@ -9,8 +9,7 @@
    [task-conductor.agent-runner.flow :as flow]
    [task-conductor.agent-runner.orchestrator :as orchestrator]
    [task-conductor.dev-env.emacs :as emacs]
-   [task-conductor.dev-env.interface :as dev-env]
-   [task-conductor.workspace.interface :as workspace]))
+   [task-conductor.dev-env.interface :as dev-env]))
 
 ;;; Control Functions
 
@@ -313,57 +312,46 @@
                         :current-state current
                         :required-state :idle})))
      (println (str "Running story " story-id "..."))
-     (let [run-impl
-           (fn []
-             (let [dev-env (get-or-create-dev-env)
-                   _ (when dev-env (println "[run-story] Using Emacs dev-env for CLI handoff"))
-                   opts (cond-> opts
-                          (not (:flow-model opts))
-                          (assoc :flow-model (flow/story-flow-model orchestrator/run-mcp-tasks story-id))
-                          dev-env
-                          (assoc :dev-env dev-env))
-                   result (orchestrator/execute-story story-id opts)]
-               (case (:outcome result)
-                 :complete
-                 (println (str "Story complete! ("
-                               (get-in result [:progress :completed])
-                               " tasks)"))
+     (let [dev-env (get-or-create-dev-env)
+           _ (when dev-env (println "[run-story] Using Emacs dev-env for CLI handoff"))
+           opts (cond-> opts
+                  (not (:flow-model opts))
+                  (assoc :flow-model (flow/story-flow-model orchestrator/run-mcp-tasks story-id))
+                  dev-env
+                  (assoc :dev-env dev-env))
+           ;; Pass workspace path directly to orchestrator
+           result (orchestrator/execute-story story-id resolved-path opts)]
+       (case (:outcome result)
+         :complete
+         (println (str "Story complete! ("
+                       (get-in result [:progress :completed])
+                       " tasks)"))
 
-                 :paused
-                 (println "Story paused - use (continue) then (run-story ...) to resume")
+         :paused
+         (println "Story paused - use (continue) then (run-story ...) to resume")
 
-                 :blocked
-                 (do
-                   (println "Story blocked - all remaining tasks have dependencies:")
-                   (doseq [{:keys [id title blocking-task-ids]}
-                           (:blocked-tasks result)]
-                     (println (str "  Task " id ": " title))
-                     (println (str "    Blocked by: " blocking-task-ids))))
+         :blocked
+         (do
+           (println "Story blocked - all remaining tasks have dependencies:")
+           (doseq [{:keys [id title blocking-task-ids]}
+                   (:blocked-tasks result)]
+             (println (str "  Task " id ": " title))
+             (println (str "    Blocked by: " blocking-task-ids))))
 
-                 :no-tasks
-                 (println "Story has no child tasks - create tasks or refine the story")
+         :no-tasks
+         (println "Story has no child tasks - create tasks or refine the story")
 
-                 :handed-to-cli
-                 (do
-                   (println "Handed off to CLI for user interaction")
-                   (println (str "Reason: " (:reason result)))
-                   (println (str "Session ID: " (:session-id (:state result)))))
+         :handed-to-cli
+         (do
+           (println "Handed off to CLI for user interaction")
+           (println (str "Reason: " (:reason result)))
+           (println (str "Session ID: " (:session-id (:state result)))))
 
-                 :error
-                 (do
-                   (println "Story execution failed:")
-                   (println (str "  " (get-in result [:error :message])))))
-               result))]
-       (if resolved-path
-         ;; Workspace specified - temporarily set as focused for orchestrator
-         (let [old-focused (workspace/focused-project)]
-           (try
-             (workspace/set-focused-project! resolved-path)
-             (run-impl)
-             (finally
-               (workspace/set-focused-project! old-focused))))
-         ;; No workspace - use current focused
-         (run-impl))))))
+         :error
+         (do
+           (println "Story execution failed:")
+           (println (str "  " (get-in result [:error :message])))))
+       result))))
 
 ;;; Dev-Env CLI Session Management
 

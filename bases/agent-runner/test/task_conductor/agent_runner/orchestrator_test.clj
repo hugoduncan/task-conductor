@@ -188,12 +188,19 @@
           (is (= "/path/to/worktree" (:cwd result))
               "should set :cwd from worktree-path"))))
 
+    (testing "with workspace path"
+      (testing "uses workspace as fallback for :cwd"
+        (let [task-info {:task-id 110}
+              result (orchestrator/build-task-session-config
+                      task-info "/workspace/path")]
+          (is (= "/workspace/path" (:cwd result))
+              "should set :cwd from workspace"))))
+
     (testing "with custom options"
       (testing "merges opts over defaults"
         (let [task-info {:worktree-path "/path/to/worktree"}
               result (orchestrator/build-task-session-config
-                      task-info
-                      {:timeout-ms 180000})]
+                      task-info nil {:timeout-ms 180000})]
           (is (= "/path/to/worktree" (:cwd result))
               "should set :cwd from worktree-path")
           (is (= 180000 (:timeout-ms result))
@@ -203,8 +210,7 @@
       (testing "uses opts :cwd over task-info worktree-path"
         (let [task-info {:worktree-path "/path/to/worktree"}
               result (orchestrator/build-task-session-config
-                      task-info
-                      {:cwd "/custom/path"})]
+                      task-info nil {:cwd "/custom/path"})]
           (is (= "/custom/path" (:cwd result))
               "should use :cwd from opts"))))
 
@@ -287,7 +293,7 @@
           (let [task-info {:task-id 111
                            :parent-id 57
                            :worktree-path "/path/to/worktree"}]
-            (orchestrator/execute-task task-info {:timeout-ms 180000})
+            (orchestrator/execute-task task-info nil {:timeout-ms 180000})
             (is (= 180000 (:timeout-ms @captured-config))
                 "should pass custom opts to session config")))))
 
@@ -713,7 +719,7 @@
                 mock-fn (mock-story-query-fn [{:story story :children children}]
                                              (atom 0))
                 fm (flow/story-flow-model mock-fn 42)
-                result (orchestrator/execute-story 42 {:flow-model fm})]
+                result (orchestrator/execute-story 42 nil {:flow-model fm})]
             (is (= :complete (:outcome result))
                 "should return complete outcome")
             (is (some? (:reason result))
@@ -866,9 +872,9 @@
                   hand-to-cli-called (promise)
                   decision {:action :hand-to-cli :reason "Test handoff"}]
               ;; Setup: transition to :running-sdk state so hand-to-cli can be called
-              (console/transition! :selecting-task {:story-id 42})
-              (console/transition! :running-sdk {:session-id "test-sess"
-                                                 :current-task-id 101})
+              (console/transition! nil :selecting-task {:story-id 42})
+              (console/transition! nil :running-sdk {:session-id "test-sess"
+                                                     :current-task-id 101})
               (with-redefs [console/hand-to-cli
                             (fn [{:keys [idle-callback callback] :as _opts}]
                               (reset! captured-idle-callback idle-callback)
@@ -880,8 +886,7 @@
                             handoff/write-handoff-state (fn [& _] nil)]
                 ;; Call derive-flow-decision in a future - it will block waiting for callback
                 (let [f (future (#'orchestrator/derive-flow-decision
-                                 decision
-                                 {:dev-env mock-env}))]
+                                 decision nil {:dev-env mock-env}))]
                   ;; Wait for hand-to-cli to be called (with timeout)
                   (deref hand-to-cli-called 1000 nil)
                   ;; Verify idle-callback was passed to hand-to-cli

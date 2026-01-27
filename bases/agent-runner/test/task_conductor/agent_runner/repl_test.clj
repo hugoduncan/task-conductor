@@ -555,7 +555,7 @@
                              :progress {:completed 5 :total 5}
                              :state {:state :story-complete}}]
             (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _opts] mock-result)]
+                          (fn [_story-id _workspace _opts] mock-result)]
               (let [result (repl/run-story 53)]
                 (is (= :complete (:outcome result)))
                 (is (= {:completed 5 :total 5} (:progress result)))))))
@@ -563,7 +563,7 @@
         (testing "prints completion message with task count"
           (console/reset-state!)
           (with-redefs [orchestrator/execute-story
-                        (fn [_story-id _opts]
+                        (fn [_story-id _workspace _opts]
                           {:outcome :complete
                            :progress {:completed 5 :total 5}
                            :state {:state :story-complete}})]
@@ -577,14 +577,14 @@
           (let [mock-result {:outcome :paused
                              :state {:state :selecting-task}}]
             (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _opts] mock-result)]
+                          (fn [_story-id _workspace _opts] mock-result)]
               (let [result (repl/run-story 53)]
                 (is (= :paused (:outcome result)))))))
 
         (testing "prints pause message"
           (console/reset-state!)
           (with-redefs [orchestrator/execute-story
-                        (fn [_story-id _opts]
+                        (fn [_story-id _workspace _opts]
                           {:outcome :paused
                            :state {:state :selecting-task}})]
             (let [output (with-out-str (repl/run-story 53))]
@@ -602,7 +602,7 @@
                              :progress {:completed 1 :total 2}
                              :state {:state :selecting-task}}]
             (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _opts] mock-result)]
+                          (fn [_story-id _workspace _opts] mock-result)]
               (let [result (repl/run-story 53)]
                 (is (= :blocked (:outcome result)))
                 (is (= blocked-tasks (:blocked-tasks result)))))))
@@ -613,7 +613,7 @@
                                 :title "Blocked task"
                                 :blocking-task-ids [108]}]]
             (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _opts]
+                          (fn [_story-id _workspace _opts]
                             {:outcome :blocked
                              :blocked-tasks blocked-tasks
                              :state {:state :selecting-task}})]
@@ -629,14 +629,14 @@
           (let [mock-result {:outcome :no-tasks
                              :state {:state :selecting-task}}]
             (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _opts] mock-result)]
+                          (fn [_story-id _workspace _opts] mock-result)]
               (let [result (repl/run-story 53)]
                 (is (= :no-tasks (:outcome result)))))))
 
         (testing "prints no tasks message"
           (console/reset-state!)
           (with-redefs [orchestrator/execute-story
-                        (fn [_story-id _opts]
+                        (fn [_story-id _workspace _opts]
                           {:outcome :no-tasks
                            :state {:state :selecting-task}})]
             (let [output (with-out-str (repl/run-story 53))]
@@ -650,7 +650,7 @@
                                      :message "Test error"}
                              :state {:state :error-recovery}}]
             (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _opts] mock-result)]
+                          (fn [_story-id _workspace _opts] mock-result)]
               (let [result (repl/run-story 53)]
                 (is (= :error (:outcome result)))
                 (is (= "Test error" (-> result :error :message)))))))
@@ -658,7 +658,7 @@
         (testing "prints error message"
           (console/reset-state!)
           (with-redefs [orchestrator/execute-story
-                        (fn [_story-id _opts]
+                        (fn [_story-id _workspace _opts]
                           {:outcome :error
                            :error {:type :exception
                                    :message "Test error"}
@@ -670,7 +670,7 @@
       (testing "prints 'Running story' message"
         (console/reset-state!)
         (with-redefs [orchestrator/execute-story
-                      (fn [_story-id _opts]
+                      (fn [_story-id _workspace _opts]
                         {:outcome :complete
                          :progress {:completed 1 :total 1}
                          :state {:state :story-complete}})]
@@ -681,7 +681,7 @@
         (console/reset-state!)
         (let [captured-opts (atom nil)]
           (with-redefs [orchestrator/execute-story
-                        (fn [_story-id opts]
+                        (fn [_story-id _workspace opts]
                           (reset! captured-opts opts)
                           {:outcome :complete
                            :progress {:completed 1 :total 1}
@@ -694,7 +694,7 @@
         (console/reset-state!)
         (let [captured-story-id (atom nil)]
           (with-redefs [orchestrator/execute-story
-                        (fn [story-id _opts]
+                        (fn [story-id _workspace _opts]
                           (reset! captured-story-id story-id)
                           {:outcome :complete
                            :progress {:completed 1 :total 1}
@@ -715,56 +715,54 @@
           (is (= :invalid-state (:type (ex-data ex))))
           (is (= :selecting-task (:current-state (ex-data ex))))))
 
-      (testing "temporarily sets focused-project for orchestrator"
+      (testing "passes workspace path to orchestrator"
         (console/reset-state!)
-        (workspace/set-focused-project! "/original/path")
-        (workspace/add-project! "/test/workspace")
-        (let [focused-during-execution (atom nil)]
+        (let [captured-workspace (atom nil)]
           (with-redefs [orchestrator/execute-story
-                        (fn [_story-id _opts]
-                          (reset! focused-during-execution (workspace/focused-project))
+                        (fn [_story-id workspace _opts]
+                          (reset! captured-workspace workspace)
                           {:outcome :complete
                            :progress {:completed 1 :total 1}
                            :state {:state :story-complete}})]
             (repl/run-story "/test/workspace" 53)
-            (is (= "/test/workspace" @focused-during-execution))
-            ;; After execution, focused should be restored
-            (is (= "/original/path" (workspace/focused-project))))))
+            (is (= "/test/workspace" @captured-workspace)
+                "should pass workspace path directly to orchestrator"))))
 
-      (testing "restores focused-project even on exception"
+      (testing "propagates exception from orchestrator"
         (console/reset-state!)
-        (workspace/set-focused-project! "/original/path")
         (with-redefs [orchestrator/execute-story
-                      (fn [_story-id _opts]
+                      (fn [_story-id _workspace _opts]
                         (throw (ex-info "Test error" {})))]
-          (try
-            (repl/run-story "/test/workspace" 53)
-            (catch clojure.lang.ExceptionInfo _))
-          (is (= "/original/path" (workspace/focused-project)))))
+          (let [ex (try
+                     (repl/run-story "/test/workspace" 53)
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+            (is (some? ex) "should propagate exception")
+            (is (= "Test error" (ex-message ex))))))
 
       (testing "supports keyword alias"
         (console/reset-state!)
         (workspace/add-project! "/path/to/myproject")
-        (let [captured-focused (atom nil)]
+        (let [captured-workspace (atom nil)]
           (with-redefs [orchestrator/execute-story
-                        (fn [_story-id _opts]
-                          (reset! captured-focused (workspace/focused-project))
+                        (fn [_story-id workspace _opts]
+                          (reset! captured-workspace workspace)
                           {:outcome :complete
                            :progress {:completed 1 :total 1}
                            :state {:state :story-complete}})]
             (repl/run-story :myproject 53)
-            (is (= "/path/to/myproject" @captured-focused)))))
+            (is (= "/path/to/myproject" @captured-workspace)
+                "should resolve keyword alias to path and pass to orchestrator"))))
 
-      (testing "with nil workspace uses current focused"
+      (testing "with nil workspace passes nil to orchestrator"
         (console/reset-state!)
-        (workspace/set-focused-project! "/focused/project")
-        (let [focused-during-execution (atom nil)]
+        (let [captured-workspace (atom :not-set)]
           (with-redefs [orchestrator/execute-story
-                        (fn [_story-id _opts]
-                          (reset! focused-during-execution (workspace/focused-project))
+                        (fn [_story-id workspace _opts]
+                          (reset! captured-workspace workspace)
                           {:outcome :complete
                            :progress {:completed 1 :total 1}
                            :state {:state :story-complete}})]
             (repl/run-story nil 53 {})
-            ;; Should NOT change focused project when nil workspace
-            (is (= "/focused/project" @focused-during-execution))))))))
+            (is (nil? @captured-workspace)
+                "should pass nil workspace to orchestrator")))))))
