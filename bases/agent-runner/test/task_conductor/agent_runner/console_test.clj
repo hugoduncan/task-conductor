@@ -9,12 +9,14 @@
   ;; - launch-cli-resume constructs correct command and returns exit code
   ;; - hand-to-cli orchestrates state transitions and handles CLI exit
   ;; - hand-to-cli async mode with dev-env returns immediately
+  ;; - workspace-scoped state isolation and alias resolution
   (:require
    [babashka.process :as p]
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.console :as console]
    [task-conductor.agent-runner.handoff :as handoff]
-   [task-conductor.dev-env.interface :as dev-env])
+   [task-conductor.dev-env.interface :as dev-env]
+   [task-conductor.workspace.interface :as workspace])
   (:import
    [java.io File]
    [java.time Instant]))
@@ -991,3 +993,183 @@
       (is (= 2 (count (:sessions (console/get-workspace-state nil)))))
       (console/reset-state!)
       (is (= [] (:sessions (console/get-workspace-state nil)))))))
+
+;;; Workspace-Scoped State Tests
+
+(deftest workspace-alias->path-test
+  ;; Tests workspace alias resolution from keyword to full path.
+  ;; The alias is the final segment of the path (e.g., :foo resolves to /a/b/foo).
+  (testing "workspace-alias->path"
+    (testing "resolves keyword alias to full path"
+      (console/reset-state!)
+      (workspace/add-project! "/path/to/myproject")
+      (is (= "/path/to/myproject"
+             (console/workspace-alias->path :myproject))
+          "should resolve :myproject to /path/to/myproject")
+      (workspace/remove-project! "/path/to/myproject"))
+
+    (testing "returns nil when no matching project"
+      (console/reset-state!)
+      (is (nil? (console/workspace-alias->path :nonexistent))
+          "should return nil for unregistered alias"))
+
+    (testing "handles multiple projects with different aliases"
+      (console/reset-state!)
+      (workspace/add-project! "/projects/foo")
+      (workspace/add-project! "/work/bar")
+      (is (= "/projects/foo" (console/workspace-alias->path :foo)))
+      (is (= "/work/bar" (console/workspace-alias->path :bar)))
+      (workspace/remove-project! "/projects/foo")
+      (workspace/remove-project! "/work/bar"))))
+
+(deftest get-workspace-state-test
+  ;; Tests get-workspace-state returns correct state for different workspace args.
+  (testing "get-workspace-state"
+    (testing "with nil returns focused workspace state"
+      (console/reset-state!)
+      (workspace/set-focused-project! "/focused/project")
+      (console/transition! "/focused/project" :selecting-task {:story-id 99})
+      (is (= :selecting-task (:state (console/get-workspace-state nil)))
+          "nil should use focused-project")
+      (is (= 99 (:story-id (console/get-workspace-state nil)))))
+
+    (testing "with string path returns state for that path"
+      (console/reset-state!)
+      (console/transition! "/workspace/a" :selecting-task {:story-id 42})
+      (let [state (console/get-workspace-state "/workspace/a")]
+        (is (= :selecting-task (:state state)))
+        (is (= 42 (:story-id state)))))
+
+    (testing "with keyword alias resolves and returns state"
+      (console/reset-state!)
+      (workspace/add-project! "/path/to/myalias")
+      (console/transition! "/path/to/myalias" :selecting-task {:story-id 77})
+      (let [state (console/get-workspace-state :myalias)]
+        (is (= :selecting-task (:state state)))
+        (is (= 77 (:story-id state))))
+      (workspace/remove-project! "/path/to/myalias"))
+
+    (testing "returns initial state for new workspace"
+      (console/reset-state!)
+      (let [state (console/get-workspace-state "/brand/new/workspace")]
+        (is (= :idle (:state state))
+            "new workspace should be in :idle state")
+        (is (nil? (:story-id state))
+            "new workspace should have nil story-id")
+        (is (= [] (:history state))
+            "new workspace should have empty history")))))
+
+(deftest transition!-with-workspace-test
+  ;; Tests transition! correctly scopes state changes to specified workspace.
+  (testing "transition!"
+    (testing "with workspace path"
+      (testing "updates only specified workspace"
+        (console/reset-state!)
+        (console/transition! "/workspace/a" :selecting-task {:story-id 42})
+        (console/transition! "/workspace/b" :selecting-task {:story-id 99})
+        (is (= 42 (:story-id (console/get-workspace-state "/workspace/a")))
+            "workspace A should have story-id 42")
+        (is (= 99 (:story-id (console/get-workspace-state "/workspace/b")))
+            "workspace B should have story-id 99")))
+
+    (testing "with keyword alias"
+      (testing "resolves alias and updates correct workspace"
+        (console/reset-state!)
+        (workspace/add-project! "/projects/myproj")
+        (console/transition! :myproj :selecting-task {:story-id 55})
+        (is (= :selecting-task
+               (:state (console/get-workspace-state "/projects/myproj")))
+            "should update state via alias")
+        (is (= 55
+               (:story-id (console/get-workspace-state "/projects/myproj")))
+            "should set story-id via alias")
+        (workspace/remove-project! "/projects/myproj")))
+
+    (testing "maintains independent history per workspace"
+      (console/reset-state!)
+      (console/transition! "/workspace/a" :selecting-task {:story-id 1})
+      (console/transition! "/workspace/a" :running-sdk {:session-id "s1"
+                                                        :current-task-id 10})
+      (console/transition! "/workspace/b" :selecting-task {:story-id 2})
+      (is (= 2 (count (console/state-history "/workspace/a")))
+          "workspace A should have 2 history entries")
+      (is (= 1 (count (console/state-history "/workspace/b")))
+          "workspace B should have 1 history entry"))))
+
+(deftest concurrent-workspace-state-test
+  ;; Tests that multiple workspaces can operate independently with different states.
+  (testing "concurrent workspace operations"
+    (testing "two workspaces in different states simultaneously"
+      (console/reset-state!)
+      ;; Workspace A: advance to running-sdk
+      (console/transition! "/ws/a" :selecting-task {:story-id 10})
+      (console/transition! "/ws/a" :running-sdk {:session-id "sa"
+                                                 :current-task-id 100})
+      ;; Workspace B: stay in selecting-task
+      (console/transition! "/ws/b" :selecting-task {:story-id 20})
+      ;; Verify both have correct independent states
+      (is (= :running-sdk (console/current-state "/ws/a"))
+          "workspace A should be in :running-sdk")
+      (is (= :selecting-task (console/current-state "/ws/b"))
+          "workspace B should be in :selecting-task")
+      ;; Verify data isolation
+      (is (= 10 (:story-id (console/get-workspace-state "/ws/a"))))
+      (is (= 20 (:story-id (console/get-workspace-state "/ws/b"))))
+      (is (= "sa" (:session-id (console/get-workspace-state "/ws/a"))))
+      (is (nil? (:session-id (console/get-workspace-state "/ws/b")))))
+
+    (testing "pausing one workspace does not affect another"
+      (console/reset-state!)
+      (console/transition! "/ws/a" :selecting-task {:story-id 1})
+      (console/transition! "/ws/b" :selecting-task {:story-id 2})
+      (console/set-paused! "/ws/a")
+      (is (true? (console/paused? "/ws/a"))
+          "workspace A should be paused")
+      (is (false? (console/paused? "/ws/b"))
+          "workspace B should not be paused"))
+
+    (testing "recording sessions in one workspace does not affect another"
+      (console/reset-state!)
+      (console/transition! "/ws/a" :selecting-task {:story-id 1})
+      (console/transition! "/ws/b" :selecting-task {:story-id 2})
+      (console/record-session! "/ws/a" "sess-a" 100 (Instant/now))
+      (console/record-session! "/ws/a" "sess-a2" 101 (Instant/now))
+      (console/record-session! "/ws/b" "sess-b" 200 (Instant/now))
+      (is (= 2 (count (:sessions (console/get-workspace-state "/ws/a"))))
+          "workspace A should have 2 sessions")
+      (is (= 1 (count (:sessions (console/get-workspace-state "/ws/b"))))
+          "workspace B should have 1 session"))))
+
+(deftest reset-state!-workspace-scoped-test
+  ;; Tests reset-state! behavior with workspace argument.
+  (testing "reset-state!"
+    (testing "with no args clears all workspaces"
+      (console/reset-state!)
+      (console/transition! "/ws/a" :selecting-task {:story-id 1})
+      (console/transition! "/ws/b" :selecting-task {:story-id 2})
+      (console/reset-state!)
+      (is (= :idle (console/current-state "/ws/a"))
+          "workspace A should be reset to idle")
+      (is (= :idle (console/current-state "/ws/b"))
+          "workspace B should be reset to idle"))
+
+    (testing "with workspace arg resets only that workspace"
+      (console/reset-state!)
+      (console/transition! "/ws/a" :selecting-task {:story-id 1})
+      (console/transition! "/ws/b" :selecting-task {:story-id 2})
+      (console/reset-state! "/ws/a")
+      (is (= :idle (console/current-state "/ws/a"))
+          "workspace A should be reset to idle")
+      (is (= :selecting-task (console/current-state "/ws/b"))
+          "workspace B should retain its state")
+      (is (= 2 (:story-id (console/get-workspace-state "/ws/b")))
+          "workspace B should retain its story-id"))
+
+    (testing "with keyword alias resets correct workspace"
+      (console/reset-state!)
+      (workspace/add-project! "/path/to/proj")
+      (console/transition! "/path/to/proj" :selecting-task {:story-id 55})
+      (console/reset-state! :proj)
+      (is (= :idle (console/current-state "/path/to/proj"))
+          "should reset workspace via alias")
+      (workspace/remove-project! "/path/to/proj"))))

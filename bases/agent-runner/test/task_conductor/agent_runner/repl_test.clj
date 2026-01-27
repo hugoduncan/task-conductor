@@ -766,3 +766,83 @@
             (repl/run-story nil 53 {})
             (is (nil? @captured-workspace)
                 "should pass nil workspace to orchestrator")))))))
+
+;;; Workspace Argument Tests for Other REPL Functions
+
+(deftest status-with-workspace-test
+  ;; Tests status function with workspace argument.
+  (testing "status"
+    (testing "with workspace path"
+      (testing "returns state for specified workspace"
+        (console/reset-state!)
+        (console/transition! "/test/ws" :selecting-task {:story-id 42})
+        (let [result (repl/status "/test/ws")]
+          (is (= :selecting-task (:state result)))
+          (is (= 42 (:story-id result))))))
+
+    (testing "with keyword alias"
+      (testing "resolves alias and returns state"
+        (console/reset-state!)
+        (workspace/add-project! "/path/to/myws")
+        (console/transition! "/path/to/myws" :selecting-task {:story-id 99})
+        (let [result (repl/status :myws)]
+          (is (= :selecting-task (:state result)))
+          (is (= 99 (:story-id result))))
+        (workspace/remove-project! "/path/to/myws")))))
+
+(deftest pause-continue-with-workspace-test
+  ;; Tests pause/continue functions with workspace argument.
+  (testing "pause and continue"
+    (testing "with workspace path"
+      (testing "affects only specified workspace"
+        (console/reset-state!)
+        (repl/pause "/ws/a")
+        (is (true? (console/paused? "/ws/a"))
+            "workspace A should be paused")
+        (is (false? (console/paused? "/ws/b"))
+            "workspace B should not be paused")
+        (repl/continue "/ws/a")
+        (is (false? (console/paused? "/ws/a"))
+            "workspace A should be resumed")))
+
+    (testing "with keyword alias"
+      (testing "resolves alias correctly"
+        (console/reset-state!)
+        (workspace/add-project! "/test/proj")
+        (repl/pause :proj)
+        (is (true? (console/paused? "/test/proj")))
+        (repl/continue :proj)
+        (is (false? (console/paused? "/test/proj")))
+        (workspace/remove-project! "/test/proj")))))
+
+(deftest abort-with-workspace-test
+  ;; Tests abort function with workspace argument.
+  (testing "abort"
+    (testing "with workspace path"
+      (testing "aborts only specified workspace"
+        (console/reset-state!)
+        (console/transition! "/ws/a" :selecting-task {:story-id 1})
+        (console/transition! "/ws/b" :selecting-task {:story-id 2})
+        (repl/abort "/ws/a")
+        (is (= :idle (console/current-state "/ws/a"))
+            "workspace A should be idle")
+        (is (= :selecting-task (console/current-state "/ws/b"))
+            "workspace B should retain its state")))))
+
+(deftest start-story-with-workspace-test
+  ;; Tests start-story function with workspace argument.
+  (testing "start-story"
+    (testing "with workspace path"
+      (testing "starts story in specified workspace"
+        (console/reset-state!)
+        (repl/start-story "/test/ws" 99)
+        (is (= :selecting-task (console/current-state "/test/ws")))
+        (is (= 99 (:story-id (console/get-workspace-state "/test/ws"))))))
+
+    (testing "validates state for specified workspace only"
+      (console/reset-state!)
+      (console/transition! "/ws/a" :selecting-task {:story-id 1})
+      ;; workspace B is still idle
+      (repl/start-story "/ws/b" 2)
+      (is (= :selecting-task (console/current-state "/ws/b")))
+      (is (= 2 (:story-id (console/get-workspace-state "/ws/b")))))))
