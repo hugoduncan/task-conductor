@@ -10,6 +10,7 @@
   ;; - hand-to-cli orchestrates state transitions and handles CLI exit
   ;; - hand-to-cli async mode with dev-env returns immediately
   ;; - workspace-scoped state isolation and alias resolution
+  ;; - update-workspace! merges arbitrary fields into workspace state
   (:require
    [babashka.process :as p]
    [clojure.test :refer [deftest is testing]]
@@ -1139,6 +1140,89 @@
           "workspace A should have 2 sessions")
       (is (= 1 (count (:sessions (console/get-workspace-state "/ws/b"))))
           "workspace B should have 1 session"))))
+
+(deftest update-workspace!-test
+  ;; Tests update-workspace! merges arbitrary fields into workspace state.
+  ;; Verifies:
+  ;; - Merges updates into existing workspace state
+  ;; - Workspace resolution: nil (focused), keyword alias, string path
+  ;; - Initializes new workspace if it doesn't exist
+  ;; - Returns the updated workspace state
+  ;; - Multiple updates accumulate
+  (testing "update-workspace!"
+    (testing "merges updates into existing workspace state"
+      (console/reset-state!)
+      (console/transition! "/ws/test" :selecting-task {:story-id 42})
+      (console/update-workspace! "/ws/test" {:session-id "sess-123"})
+      (let [state (console/get-workspace-state "/ws/test")]
+        (is (= "sess-123" (:session-id state))
+            "should merge session-id into state")
+        (is (= 42 (:story-id state))
+            "should preserve existing story-id")
+        (is (= :selecting-task (:state state))
+            "should preserve existing state")))
+
+    (testing "with nil workspace resolves to focused workspace"
+      (console/reset-state!)
+      (workspace/set-focused-project! "/focused/ws")
+      (console/transition! "/focused/ws" :selecting-task {:story-id 55})
+      (console/update-workspace! nil {:cwd "/some/path"})
+      (let [state (console/get-workspace-state "/focused/ws")]
+        (is (= "/some/path" (:cwd state))
+            "should update focused workspace when nil passed")
+        (is (= 55 (:story-id state))
+            "should preserve existing state in focused workspace")))
+
+    (testing "with keyword alias resolves to full path"
+      (console/reset-state!)
+      (workspace/add-project! "/projects/myalias")
+      (console/transition! "/projects/myalias" :selecting-task {:story-id 77})
+      (console/update-workspace! :myalias {:custom-field "value"})
+      (let [state (console/get-workspace-state "/projects/myalias")]
+        (is (= "value" (:custom-field state))
+            "should update workspace via alias")
+        (is (= 77 (:story-id state))
+            "should preserve existing state via alias"))
+      (workspace/remove-project! "/projects/myalias"))
+
+    (testing "initializes new workspace if not exists"
+      (console/reset-state!)
+      (console/update-workspace! "/brand/new/ws" {:custom "data"})
+      (let [state (console/get-workspace-state "/brand/new/ws")]
+        (is (= "data" (:custom state))
+            "should set custom field")
+        (is (= :idle (:state state))
+            "should have initial :idle state from merge with initial-workspace-state")))
+
+    (testing "returns the updated workspace state"
+      (console/reset-state!)
+      (console/transition! "/ws/ret" :selecting-task {:story-id 88})
+      (let [result (console/update-workspace! "/ws/ret" {:foo "bar"})]
+        (is (map? result)
+            "should return a map")
+        (is (= "bar" (:foo result))
+            "returned state should include new field")
+        (is (= :selecting-task (:state result))
+            "returned state should include existing state")
+        (is (= 88 (:story-id result))
+            "returned state should include existing story-id")))
+
+    (testing "multiple updates accumulate"
+      (console/reset-state!)
+      (console/update-workspace! "/ws/accum" {:a 1})
+      (console/update-workspace! "/ws/accum" {:b 2})
+      (console/update-workspace! "/ws/accum" {:c 3})
+      (let [state (console/get-workspace-state "/ws/accum")]
+        (is (= 1 (:a state)) "should have :a from first update")
+        (is (= 2 (:b state)) "should have :b from second update")
+        (is (= 3 (:c state)) "should have :c from third update")))
+
+    (testing "later updates override earlier values for same key"
+      (console/reset-state!)
+      (console/update-workspace! "/ws/override" {:value "first"})
+      (console/update-workspace! "/ws/override" {:value "second"})
+      (is (= "second" (:value (console/get-workspace-state "/ws/override")))
+          "should use the later value"))))
 
 (deftest reset-state!-workspace-scoped-test
   ;; Tests reset-state! behavior with workspace argument.
