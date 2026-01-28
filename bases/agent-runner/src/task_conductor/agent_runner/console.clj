@@ -221,7 +221,7 @@
         projects (workspace/list-projects)]
     (first (filter #(= alias-name (last (str/split % #"/"))) projects))))
 
-(defn- resolve-workspace
+(defn resolve-workspace
   "Resolves workspace argument to a full path.
    - nil → focused-project
    - keyword → workspace-alias->path

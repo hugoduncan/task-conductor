@@ -262,15 +262,6 @@
         (reset! dev-env-atom e)
         e)))
 
-(defn- resolve-workspace-path
-  "Resolves workspace argument to a full path.
-   Returns nil if workspace is nil (use focused)."
-  [workspace]
-  (when workspace
-    (cond
-      (keyword? workspace) (console/workspace-alias->path workspace)
-      (string? workspace) workspace)))
-
 (defn run-story
   "Execute all tasks in a story with automated orchestration.
 
@@ -304,7 +295,7 @@
      (run-story nil arg1 arg2)
      (run-story arg1 arg2 {})))
   ([workspace story-id opts]
-   (let [resolved-path (resolve-workspace-path workspace)
+   (let [resolved-path (console/resolve-workspace workspace)
          current (console/current-state workspace)]
      (when (not= :idle current)
        (throw (ex-info (str "Cannot run story: console is " current ", expected :idle")
