@@ -174,26 +174,31 @@
 (defn build-task-session-config
   "Build session options for executing a task via CLI.
 
-   Takes task-info and optional opts map. Returns a config map used by
-   run-cli-session. CLI sessions read CLAUDE.md and .mcp.json from :cwd.
+   Takes task-info, optional workspace path, and optional opts map.
+   Returns a config map used by run-cli-session.
+   CLI sessions read CLAUDE.md and .mcp.json from :cwd.
 
    Options used by CLI:
-   - :cwd - from opts, task-info :worktree-path, or current directory
+   - :cwd - from opts, workspace, task-info :worktree-path, or current directory
    - :timeout-ms - CLI timeout (default: 120000ms)
 
    Note: Tasks from select-next-task don't include :worktree-path. When
-   not provided, falls back to the current working directory. The agent
-   session typically calls mcp-tasks work-on which sets up the worktree.
+   not provided, falls back to workspace path or current working directory.
+   The agent session typically calls mcp-tasks work-on which sets up the worktree.
 
    Example:
      (build-task-session-config
        {:worktree-path \"/path/to/worktree\" :task-id 110}
+       \"/workspace/path\"
        {:timeout-ms 180000})"
   ([task-info]
-   (build-task-session-config task-info {}))
-  ([task-info opts]
+   (build-task-session-config task-info nil {}))
+  ([task-info workspace]
+   (build-task-session-config task-info workspace {}))
+  ([task-info workspace opts]
    (let [cwd (or (:cwd opts)
                  (:worktree-path task-info)
+                 workspace
                  (System/getProperty "user.dir"))]
      (merge {:cwd cwd} opts))))
 
@@ -235,6 +240,7 @@
 
    Arguments:
    - task-info: Map from work-on tool with :task-id, :parent-id, :worktree-path
+   - workspace: Workspace path for session working directory (optional)
    - opts: Optional session configuration overrides
 
    Returns a map with:
@@ -251,10 +257,12 @@
                     :parent-id 57
                     :worktree-path \"/path/to/worktree\"})"
   ([task-info]
-   (execute-task task-info {}))
-  ([task-info opts]
+   (execute-task task-info nil {}))
+  ([task-info workspace]
+   (execute-task task-info workspace {}))
+  ([task-info workspace opts]
    (println "[execute-task] task-info:" task-info)
-   (let [session-config (build-task-session-config task-info opts)
+   (let [session-config (build-task-session-config task-info workspace opts)
          _ (println "[execute-task] Built session-config:" (pr-str session-config))
          prompt (build-task-prompt task-info)
          _ (println "[execute-task] Built prompt:" prompt)
@@ -280,20 +288,20 @@
 (defn- handle-task-execution
   "Execute a single task and handle handoff if needed.
    Returns the execution result from execute-task."
-  [task opts]
+  [task workspace opts]
   (println "[handle-task-execution] Task:" (:id task) "parent:" (:parent-id task))
   (let [task-info {:task-id (:id task)
                    :parent-id (:parent-id task)
                    :worktree-path (:worktree-path task)}
         _ (println "[handle-task-execution] Calling execute-task with:" task-info)
-        result (execute-task task-info opts)]
+        result (execute-task task-info workspace opts)]
     (println "[handle-task-execution] execute-task returned session-id:" (:session-id result))
-    (console/record-session! (:session-id result) (:id task))
+    (console/record-session! workspace (:session-id result) (:id task) (java.time.Instant/now))
     ;; TODO: Implement handoff detection in execute-task once SDK supports
     ;; detecting when agent requests CLI handoff (Story #54).
     ;; Currently :handoff-requested? is always false.
     (when (:handoff-requested? result)
-      (console/hand-to-cli))
+      (console/hand-to-cli {:workspace workspace}))
     result))
 
 ;;; Flow Model Story Execution
@@ -303,18 +311,19 @@
    Handles transition to CLI, story completion, errors, and continuation.
    Returns {:next-prompt prompt} or {:outcome ...}.
    opts may contain :dev-env for async CLI handoff."
-  [decision opts]
+  [decision workspace opts]
   (case (:action decision)
     :continue-sdk
     (do
-      (console/transition! :task-complete)
-      (console/transition! :selecting-task)
+      (console/transition! workspace :task-complete)
+      (console/transition! workspace :selecting-task)
       {:next-prompt (:prompt decision)})
 
     :hand-to-cli
     (if-let [dev-env-instance (:dev-env opts)]
       (let [completion-promise (promise)]
-        (console/hand-to-cli {:dev-env dev-env-instance
+        (console/hand-to-cli {:workspace workspace
+                              :dev-env dev-env-instance
                               :idle-callback
                               (fn [_hook-status]
                                 (dev-env/notify
@@ -328,41 +337,42 @@
           {:next-prompt nil}))
       {:outcome :handed-to-cli
        :reason (:reason decision)
-       :state @console/console-state})
+       :state (console/get-workspace-state workspace)})
 
     :story-done
     (do
-      (console/transition! :story-complete)
+      (console/transition! workspace :story-complete)
       {:outcome :complete
        :reason (:reason decision)
-       :state @console/console-state})
+       :state (console/get-workspace-state workspace)})
 
     :error
     (do
-      (console/transition! :error-recovery
+      (console/transition! workspace :error-recovery
                            {:error {:type :flow-error
                                     :message (:reason decision)}})
       {:outcome :error
        :error {:type :flow-error
                :message (:reason decision)}
-       :state @console/console-state})
+       :state (console/get-workspace-state workspace)})
 
     ;; Default: treat as task-done, ask on-task-complete for next action
     (do
-      (console/transition! :task-complete)
-      (console/transition! :selecting-task)
+      (console/transition! workspace :task-complete)
+      (console/transition! workspace :selecting-task)
       {:next-prompt nil})))
 
 (defn- run-cli-with-prompt
   "Run CLI session with the given prompt and config.
    Returns {:session-id string :messages vector :result map}.
 
-   Uses :cwd from opts, falling back to console-state :cwd or current directory."
-  [prompt opts]
+   Uses :cwd from opts, workspace, console-state :cwd, or current directory."
+  [prompt workspace opts]
   (let [cwd (or (:cwd opts)
-                (:cwd @console/console-state)
+                (:cwd (console/get-workspace-state workspace))
+                workspace
                 (System/getProperty "user.dir"))
-        session-config (build-task-session-config {:worktree-path cwd} opts)]
+        session-config (build-task-session-config {:worktree-path cwd} workspace opts)]
     (println "[run-cli-with-prompt] Running CLI with prompt:" prompt)
     (println "[run-cli-with-prompt] Using cwd:" cwd)
     (let [{:keys [result session-id]} (run-cli-session session-config prompt)]
@@ -383,68 +393,68 @@
    Returns:
    - {:next-prompt prompt} if loop should continue with that prompt
    - {:outcome ...} map if loop should exit"
-  [decision flow-model opts]
+  [decision flow-model workspace opts]
   (println "[handle-flow-decision] Decision:" (pr-str decision))
   (case (:action decision)
     :continue-sdk
     (do
-      (console/transition! :running-sdk {:session-id nil})
-      (let [sdk-result (run-cli-with-prompt (:prompt decision) opts)]
+      (console/transition! workspace :running-sdk {:session-id nil})
+      (let [sdk-result (run-cli-with-prompt (:prompt decision) workspace opts)]
         ;; Store session-id for later handoff (cwd is set at story start)
-        (swap! console/console-state assoc :session-id (:session-id sdk-result))
-        (let [next-decision (flow/on-sdk-complete flow-model sdk-result @console/console-state)]
+        (console/update-workspace! workspace {:session-id (:session-id sdk-result)})
+        (let [next-decision (flow/on-sdk-complete flow-model sdk-result (console/get-workspace-state workspace))]
           (println "[handle-flow-decision] on-sdk-complete returned:" (pr-str next-decision))
-          (derive-flow-decision next-decision opts))))
+          (derive-flow-decision next-decision workspace opts))))
 
     :hand-to-cli
     ;; Don't call console/hand-to-cli here - we haven't run SDK yet.
     ;; This happens when initial-prompt returns hand-to-cli (e.g., manual-review state)
     {:outcome :handed-to-cli
      :reason (:reason decision)
-     :state @console/console-state}
+     :state (console/get-workspace-state workspace)}
 
     :story-done
     ;; Story is already complete (e.g., PR merged) - no SDK needed
     ;; Transition :selecting-task → :story-complete is valid
     (do
-      (console/transition! :story-complete)
+      (console/transition! workspace :story-complete)
       {:outcome :complete
        :reason (:reason decision)
-       :state @console/console-state})
+       :state (console/get-workspace-state workspace)})
 
     :error
     (do
-      (console/transition! :error-recovery
+      (console/transition! workspace :error-recovery
                            {:error {:type :flow-error
                                     :message (:reason decision)}})
       {:outcome :error
        :error {:type :flow-error
                :message (:reason decision)}
-       :state @console/console-state})
+       :state (console/get-workspace-state workspace)})
 
     ;; Unknown action - treat as error
     (do
-      (console/transition! :error-recovery
+      (console/transition! workspace :error-recovery
                            {:error {:type :unknown-action
                                     :action (:action decision)}})
       {:outcome :error
        :error {:type :unknown-action
                :action (:action decision)}
-       :state @console/console-state})))
+       :state (console/get-workspace-state workspace)})))
 
 (defn- flow-model-loop
   "Main execution loop driven by FlowModel.
    Runs until story complete, handed to CLI, or error.
    Returns outcome map."
-  [flow-model opts]
+  [flow-model workspace opts]
   (println "[flow-model-loop] Starting flow model loop")
   (loop [iteration 0
          pending-prompt nil]
-    (println "[flow-model-loop] Iteration:" iteration "paused?:" (console/paused?)
+    (println "[flow-model-loop] Iteration:" iteration "paused?:" (console/paused? workspace)
              "pending-prompt:" (some? pending-prompt))
-    (if (console/paused?)
+    (if (console/paused? workspace)
       {:outcome :paused
-       :state @console/console-state}
+       :state (console/get-workspace-state workspace)}
       (let [decision (cond
                        ;; Use pending prompt from previous SDK completion
                        pending-prompt
@@ -452,13 +462,13 @@
 
                        ;; First iteration - get initial prompt
                        (zero? iteration)
-                       (flow/initial-prompt flow-model {} @console/console-state)
+                       (flow/initial-prompt flow-model {} (console/get-workspace-state workspace))
 
                        ;; Subsequent iterations - ask flow model for next action
                        :else
-                       (flow/on-task-complete flow-model @console/console-state))
+                       (flow/on-task-complete flow-model (console/get-workspace-state workspace)))
             _ (println "[flow-model-loop] Got decision:" (pr-str decision))
-            result (handle-flow-decision decision flow-model opts)]
+            result (handle-flow-decision decision flow-model workspace opts)]
         (if (:outcome result)
           ;; Terminal result - return it
           result
@@ -469,46 +479,46 @@
   "Main task selection and execution loop.
    Runs until story complete, paused, blocked, or error.
    Returns outcome map."
-  [story-id opts]
+  [story-id workspace opts]
   (println "[task-loop] Starting loop for story-id:" story-id)
   (loop [iteration 0]
-    (println "[task-loop] Iteration:" iteration "paused?:" (console/paused?))
-    (if (console/paused?)
+    (println "[task-loop] Iteration:" iteration "paused?:" (console/paused? workspace))
+    (if (console/paused? workspace)
       {:outcome :paused
-       :state @console/console-state}
+       :state (console/get-workspace-state workspace)}
       (let [{:keys [status task progress blocked-tasks]} (select-next-task story-id)]
         (println "[task-loop] select-next-task returned status:" status)
         (case status
           :task-available
           (do
             (println "[task-loop] Running task:" (:id task) (:title task))
-            (console/transition! :running-sdk
+            (console/transition! workspace :running-sdk
                                  {:session-id nil
                                   :current-task-id (:id task)})
-            (let [result (handle-task-execution task opts)]
+            (let [result (handle-task-execution task workspace opts)]
               (println "[task-loop] Task execution complete, session-id:" (:session-id result))
               ;; Update session-id directly after SDK returns
-              (swap! console/console-state assoc :session-id (:session-id result))
-              (console/transition! :task-complete)
-              (console/transition! :selecting-task))
+              (console/update-workspace! workspace {:session-id (:session-id result)})
+              (console/transition! workspace :task-complete)
+              (console/transition! workspace :selecting-task))
             (recur (inc iteration)))
 
           :all-blocked
           {:outcome :blocked
            :blocked-tasks blocked-tasks
            :progress progress
-           :state @console/console-state}
+           :state (console/get-workspace-state workspace)}
 
           :all-complete
           (do
-            (console/transition! :story-complete)
+            (console/transition! workspace :story-complete)
             {:outcome :complete
              :progress progress
-             :state @console/console-state})
+             :state (console/get-workspace-state workspace)})
 
           :no-tasks
           {:outcome :no-tasks
-           :state @console/console-state})))))
+           :state (console/get-workspace-state workspace)})))))
 
 (defn execute-story-with-flow-model
   "Execute a story using a FlowModel for state-driven execution.
@@ -520,6 +530,7 @@
    Arguments:
    - flow-model: A FlowModel implementation (e.g., StoryFlowModel)
    - story-id: The ID of the story to execute
+   - workspace: Workspace path (optional, nil uses focused)
    - opts: Optional map of session configuration overrides
 
    Returns a map with:
@@ -538,18 +549,20 @@
      ;;     :reason \"Story complete - PR merged\"
      ;;     :state {...}}"
   ([flow-model story-id]
-   (execute-story-with-flow-model flow-model story-id {}))
-  ([flow-model story-id opts]
-   (println "[execute-story-with-flow-model] Starting story-id:" story-id)
+   (execute-story-with-flow-model flow-model story-id nil {}))
+  ([flow-model story-id workspace]
+   (execute-story-with-flow-model flow-model story-id workspace {}))
+  ([flow-model story-id workspace opts]
+   (println "[execute-story-with-flow-model] Starting story-id:" story-id "workspace:" workspace)
    (try
      ;; Look up worktree for story and store in console-state
      (let [worktree-cwd (find-worktree-for-task story-id)]
        (println "[execute-story-with-flow-model] Story worktree:" worktree-cwd)
-       (console/transition! :selecting-task {:story-id story-id})
+       (console/transition! workspace :selecting-task {:story-id story-id})
        (when worktree-cwd
-         (swap! console/console-state assoc :cwd worktree-cwd)))
+         (console/update-workspace! workspace {:cwd worktree-cwd})))
      (println "[execute-story-with-flow-model] Calling flow-model-loop")
-     (let [result (flow-model-loop flow-model opts)]
+     (let [result (flow-model-loop flow-model workspace opts)]
        (println "[execute-story-with-flow-model] Returned:" (:outcome result))
        result)
      (catch Exception e
@@ -558,7 +571,7 @@
        (println "[execute-story-with-flow-model] ex-data:" (ex-data e))
        (.printStackTrace e)
        (try
-         (console/transition! :error-recovery
+         (console/transition! workspace :error-recovery
                               {:error {:type :exception
                                        :message (ex-message e)
                                        :data (ex-data e)}})
@@ -568,7 +581,7 @@
         :error {:type :exception
                 :message (ex-message e)
                 :data (ex-data e)}
-        :state @console/console-state}))))
+        :state (console/get-workspace-state workspace)}))))
 
 (defn execute-story
   "Execute all tasks in a story sequentially.
@@ -578,6 +591,7 @@
 
    Arguments:
    - story-id: The ID of the story to execute
+   - workspace: Workspace path (optional, nil uses focused)
    - opts: Optional map of session configuration overrides
      - :flow-model - If provided, uses flow-model-driven execution
                      via execute-story-with-flow-model
@@ -609,18 +623,20 @@
      ;;     :reason \"Story complete - PR merged\"
      ;;     :state {...}}"
   ([story-id]
-   (execute-story story-id {}))
-  ([story-id opts]
+   (execute-story story-id nil {}))
+  ([story-id workspace]
+   (execute-story story-id workspace {}))
+  ([story-id workspace opts]
    (if-let [flow-model (:flow-model opts)]
      ;; Flow model mode - delegate to execute-story-with-flow-model
-     (execute-story-with-flow-model flow-model story-id (dissoc opts :flow-model))
+     (execute-story-with-flow-model flow-model story-id workspace (dissoc opts :flow-model))
      ;; Legacy mode - use task-loop with select-next-task
      (do
-       (println "[execute-story] Starting story-id:" story-id)
+       (println "[execute-story] Starting story-id:" story-id "workspace:" workspace)
        (try
-         (console/transition! :selecting-task {:story-id story-id})
+         (console/transition! workspace :selecting-task {:story-id story-id})
          (println "[execute-story] Transitioned to :selecting-task, calling task-loop")
-         (let [result (task-loop story-id opts)]
+         (let [result (task-loop story-id workspace opts)]
            (println "[execute-story] task-loop returned:" (:outcome result))
            result)
          (catch Exception e
@@ -630,7 +646,7 @@
            (println "[execute-story] stacktrace:")
            (.printStackTrace e)
            (try
-             (console/transition! :error-recovery
+             (console/transition! workspace :error-recovery
                                   {:error {:type :exception
                                            :message (ex-message e)
                                            :data (ex-data e)}})
@@ -640,7 +656,7 @@
             :error {:type :exception
                     :message (ex-message e)
                     :data (ex-data e)}
-            :state @console/console-state}))))))
+            :state (console/get-workspace-state workspace)}))))))
 
 (comment
   ;; Example: Query unblocked children of story 57

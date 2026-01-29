@@ -98,7 +98,9 @@
                      (:exit @(p/process ["bash" ~script-path-sym]
                                         {:inherit true})))
                    handoff/read-hook-status
-                   (fn [] (original-read-hook-status# ~handoff-path-sym))]
+                   (fn
+                     ([] (original-read-hook-status# ~handoff-path-sym))
+                     ([_path#] (original-read-hook-status# ~handoff-path-sym)))]
        ~@body)))
 
 ;;; Babashka Process API Tests

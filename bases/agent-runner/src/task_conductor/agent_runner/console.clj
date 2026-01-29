@@ -3,11 +3,16 @@
 
    Manages workflow state transitions between SDK agent execution,
    CLI handoff, and task completion. This namespace provides pure
-   transition functions and mutable wrappers with history tracking."
+   transition functions and mutable wrappers with history tracking.
+
+   State is scoped by workspace path. Each workspace has independent
+   state allowing concurrent story execution across projects."
   (:require
    [babashka.process :as p]
+   [clojure.string :as str]
    [task-conductor.agent-runner.handoff :as handoff]
-   [task-conductor.dev-env.interface :as dev-env]))
+   [task-conductor.dev-env.interface :as dev-env]
+   [task-conductor.workspace.interface :as workspace]))
 
 ;;; State Machine Definition
 
@@ -93,8 +98,9 @@
 ;; - → :story-complete: {} (clears task/session)
 ;; - → :idle from anywhere: {} (resets to initial)
 
-(def initial-state
-  "Initial state map structure."
+(defn initial-workspace-state
+  "Returns the initial state map structure for a workspace."
+  []
   {:state :idle
    :story-id nil
    :current-task-id nil
@@ -133,7 +139,7 @@
   (let [history (:history state [])]
     (case to-state
       :idle
-      (-> initial-state
+      (-> (initial-workspace-state)
           (assoc :history history)
           (merge (select-keys context [:story-id])))
 
@@ -200,8 +206,49 @@
 
 ;;; Mutable State Management
 
+;; Atom holding workspace-keyed state: {workspace-path → state-map}
 (defonce console-state
-  (atom initial-state))
+  (atom {}))
+
+;;; Workspace Resolution
+
+(defn workspace-alias->path
+  "Resolves a workspace alias keyword to a full path.
+   Given :foo, finds the registered project whose path ends with 'foo'.
+   Returns nil if no matching project is found."
+  [alias]
+  (let [alias-name (name alias)
+        projects (workspace/list-projects)]
+    (first (filter #(= alias-name (last (str/split % #"/"))) projects))))
+
+(defn resolve-workspace
+  "Resolves workspace argument to a full path string.
+
+   Resolution rules:
+   - nil     → workspace/focused-project (the current active workspace)
+   - keyword → workspace-alias->path (e.g., :foo → /full/path/to/foo)
+   - string  → used as-is (assumed to be a full path)
+
+   All public console functions accept a workspace argument that passes
+   through this function. The nil-to-focused-project resolution happens
+   here, so callers can rely on nil meaning 'the focused workspace'
+   without tracking the focused state themselves.
+
+   This is the single point of workspace resolution. Do not duplicate
+   this logic elsewhere—if you need a resolved path, call this function."
+  [workspace]
+  (cond
+    (nil? workspace) (workspace/focused-project)
+    (keyword? workspace) (workspace-alias->path workspace)
+    (string? workspace) workspace))
+
+(defn get-workspace-state
+  "Returns the state map for a workspace path.
+   Automatically initializes state for new workspaces.
+   Workspace can be: nil (focused), keyword alias, or string path."
+  [workspace]
+  (let [path (resolve-workspace workspace)]
+    (get @console-state path (initial-workspace-state))))
 
 (defn- make-history-entry
   "Creates a history entry for a transition."
@@ -220,84 +267,138 @@
       (handoff/write-handoff-state handoff-state *handoff-path*))))
 
 (defn transition!
-  "Transitions console state atom to a new state.
+  "Transitions console state atom to a new state for a workspace.
 
    Validates transition, updates atom, appends to history, and writes
    handoff file for states that require it.
    Returns the new state map.
 
    Arguments:
+   - workspace: Workspace path, keyword alias, or nil for focused workspace
    - to-state: Target state keyword
    - context: Optional map of context to apply during transition
 
    Throws ex-info on invalid transition (see `transition` for details)."
   ([to-state]
-   (transition! to-state {}))
-  ([to-state context]
-   (let [[pre-state new-state]
+   (transition! nil to-state {}))
+  ([workspace-or-to-state to-state-or-context]
+   (if (keyword? workspace-or-to-state)
+     ;; Called as (transition! :to-state context) - backward compat
+     (transition! nil workspace-or-to-state to-state-or-context)
+     ;; Called as (transition! workspace :to-state)
+     (transition! workspace-or-to-state to-state-or-context {})))
+  ([workspace to-state context]
+   (let [path (resolve-workspace workspace)
+         [pre-all-state new-all-state]
          (swap-vals! console-state
-                     (fn [current]
-                       (let [from-state (:state current)
+                     (fn [all-state]
+                       (let [current (get all-state path (initial-workspace-state))
+                             from-state (:state current)
                              transitioned (transition current to-state context)
-                             entry (make-history-entry from-state to-state context)]
-                         (update transitioned :history conj entry))))]
+                             entry (make-history-entry from-state to-state context)
+                             new-ws-state (update transitioned :history conj entry)]
+                         (assoc all-state path new-ws-state))))
+         pre-state (get pre-all-state path (initial-workspace-state))
+         new-state (get new-all-state path)]
      (maybe-write-handoff! pre-state new-state to-state)
      new-state)))
 
 ;;; Query Functions
 
 (defn current-state
-  "Returns the current state keyword."
-  []
-  (:state @console-state))
+  "Returns the current state keyword for a workspace.
+   Workspace can be: nil (focused), keyword alias, or string path."
+  ([]
+   (current-state nil))
+  ([workspace]
+   (:state (get-workspace-state workspace))))
 
 (defn state-history
-  "Returns the history vector of transitions."
-  []
-  (:history @console-state))
+  "Returns the history vector of transitions for a workspace.
+   Workspace can be: nil (focused), keyword alias, or string path."
+  ([]
+   (state-history nil))
+  ([workspace]
+   (:history (get-workspace-state workspace))))
 
 (defn reset-state!
-  "Resets the console state to initial values.
-   Clears history. For testing and dev use."
-  []
-  (reset! console-state initial-state))
+  "Resets the console state.
+   With no args: resets all workspaces to empty.
+   With workspace arg: resets only that workspace to initial state.
+   For testing and dev use."
+  ([]
+   (reset! console-state {}))
+  ([workspace]
+   (let [path (resolve-workspace workspace)]
+     (swap! console-state dissoc path))))
 
 ;;; Pause Control
 
 (defn paused?
-  "Returns true if execution is paused."
-  []
-  (:paused @console-state))
+  "Returns true if execution is paused for a workspace.
+   Workspace can be: nil (focused), keyword alias, or string path."
+  ([]
+   (paused? nil))
+  ([workspace]
+   (:paused (get-workspace-state workspace))))
 
 (defn set-paused!
-  "Sets the paused flag to true."
-  []
-  (swap! console-state assoc :paused true)
-  true)
+  "Sets the paused flag to true for a workspace.
+   Workspace can be: nil (focused), keyword alias, or string path."
+  ([]
+   (set-paused! nil))
+  ([workspace]
+   (let [path (resolve-workspace workspace)]
+     (swap! console-state update path
+            (fn [ws-state]
+              (assoc (or ws-state (initial-workspace-state)) :paused true)))
+     true)))
 
 (defn clear-paused!
-  "Sets the paused flag to false."
-  []
-  (swap! console-state assoc :paused false)
-  false)
+  "Sets the paused flag to false for a workspace.
+   Workspace can be: nil (focused), keyword alias, or string path."
+  ([]
+   (clear-paused! nil))
+  ([workspace]
+   (let [path (resolve-workspace workspace)]
+     (swap! console-state update path
+            (fn [ws-state]
+              (assoc (or ws-state (initial-workspace-state)) :paused false)))
+     false)))
 
 ;;; Session Tracking
 
 (defn record-session!
-  "Records a session entry to the :sessions vector.
-   Takes a session-id, task-id, and optional timestamp (defaults to now).
+  "Records a session entry to the :sessions vector for a workspace.
    Automatically includes the current story-id for filtering.
+   Workspace can be: nil (focused), keyword alias, or string path.
    Returns the updated sessions vector."
   ([session-id task-id]
-   (record-session! session-id task-id (java.time.Instant/now)))
-  ([session-id task-id timestamp]
-   (let [story-id (:story-id @console-state)
+   (record-session! nil session-id task-id (java.time.Instant/now)))
+  ([workspace session-id task-id timestamp]
+   (let [path (resolve-workspace workspace)
+         story-id (:story-id (get-workspace-state workspace))
          entry {:session-id session-id
                 :task-id task-id
                 :story-id story-id
                 :timestamp timestamp}]
-     (swap! console-state update :sessions conj entry)
-     (:sessions @console-state))))
+     (swap! console-state update path
+            (fn [ws-state]
+              (update (or ws-state (initial-workspace-state)) :sessions conj entry)))
+     (:sessions (get-workspace-state workspace)))))
+
+(defn update-workspace!
+  "Updates arbitrary fields in a workspace's state map.
+   Takes workspace (nil/keyword/string) and a map of updates.
+   Merges the updates into the workspace's state.
+   Workspace can be: nil (focused), keyword alias, or string path.
+   Returns the updated workspace state."
+  [workspace updates]
+  (let [path (resolve-workspace workspace)]
+    (swap! console-state update path
+           (fn [ws-state]
+             (merge (or ws-state (initial-workspace-state)) updates)))
+    (get-workspace-state workspace)))
 
 ;;; CLI Handoff
 
@@ -355,6 +456,7 @@
 
    Arguments:
    - opts: Optional map with:
+     :workspace      - Workspace path, keyword alias, or nil for focused
      :dev-env        - DevEnv instance for async operation
      :idle-callback  - Function called when CLI becomes idle (async only)
      :callback       - Function called when session completes (async only)
@@ -382,65 +484,68 @@
   ([]
    (hand-to-cli {}))
   ([opts]
-   (let [current (:state @console-state)]
+   (let [{:keys [workspace dev-env callback idle-callback prompt]} opts
+         ws-state (get-workspace-state workspace)
+         current (:state ws-state)]
      (when (not= :running-sdk current)
        (throw (ex-info (str "hand-to-cli requires :running-sdk state, got " current)
                        {:type :invalid-state
                         :current-state current
-                        :required-state :running-sdk}))))
-   (transition! :needs-input)
-   (transition! :running-cli)
-   (let [session-id (:session-id @console-state)
-         {:keys [dev-env callback idle-callback prompt]} opts]
-     (if dev-env
-       ;; Async mode: watch file for status changes, delegate to dev-env
-       (let [stop-watch-fn (atom nil)
-             completed? (atom false)
-             ;; Shared completion handler - only fires once
-             handle-completion (fn [source hook-status]
-                                 (when (compare-and-set! completed? false true)
-                                   (println "[hand-to-cli] Completion detected via" source)
-                                   (when-let [stop-fn @stop-watch-fn]
-                                     (stop-fn))
-                                   (let [new-state (if (= :error (:status hook-status))
-                                                     (transition! :error-recovery
-                                                                  {:error {:type :hook-error
-                                                                           :hook-status hook-status}})
-                                                     (transition! :running-sdk))]
-                                     (when callback
-                                       (callback {:state new-state
-                                                  :cli-status hook-status})))))
-             watcher-callback (fn [hook-status]
-                                (case (:status hook-status)
-                                  :idle (when idle-callback (idle-callback hook-status))
-                                  :completed (handle-completion :file-watcher hook-status)
-                                  :error (handle-completion :file-watcher hook-status)
-                                  nil))
-             emacs-callback (fn [result]
-                              (println "[hand-to-cli] Emacs callback fired:" (pr-str result))
-                              (handle-completion :emacs-callback
-                                                 {:status (if (= :completed (:status result))
-                                                            :completed
-                                                            :error)}))]
-         ;; Start watching handoff file for status changes
-         (reset! stop-watch-fn
-                 (handoff/watch-hook-status-file watcher-callback))
-         ;; Open CLI session with Emacs callback as backup
-         ;; Use the cwd where the session was created, not the current directory
-         (dev-env/open-cli-session
-          dev-env
-          {:session-id session-id
-           :prompt prompt
-           :working-dir (or (:cwd @console-state)
-                            (System/getProperty "user.dir"))}
-          emacs-callback)
-         {:status :running})
-       ;; Blocking mode: existing behavior
-       (let [exit-code (launch-cli-resume session-id)
-             cli-status (handoff/read-hook-status)
-             {:keys [error]} (determine-cli-result exit-code cli-status)
-             new-state (if error
-                         (transition! :error-recovery {:error error})
-                         (transition! :running-sdk))]
-         {:state new-state
-          :cli-status cli-status})))))
+                        :required-state :running-sdk})))
+     (transition! workspace :needs-input)
+     (transition! workspace :running-cli)
+     (let [ws-state' (get-workspace-state workspace)
+           session-id (:session-id ws-state')
+           working-dir (or (:cwd ws-state')
+                           (System/getProperty "user.dir"))
+           handoff-path (.getPath (java.io.File. working-dir handoff/hook-handoff-path))]
+       (if dev-env
+         ;; Async mode: watch file for status changes, delegate to dev-env
+         (let [stop-watch-fn (atom nil)
+               completed? (atom false)
+               ;; Shared completion handler - only fires once
+               handle-completion (fn [source hook-status]
+                                   (when (compare-and-set! completed? false true)
+                                     (println "[hand-to-cli] Completion detected via" source)
+                                     (when-let [stop-fn @stop-watch-fn]
+                                       (stop-fn))
+                                     (let [new-state (if (= :error (:status hook-status))
+                                                       (transition! workspace :error-recovery
+                                                                    {:error {:type :hook-error
+                                                                             :hook-status hook-status}})
+                                                       (transition! workspace :running-sdk))]
+                                       (when callback
+                                         (callback {:state new-state
+                                                    :cli-status hook-status})))))
+               watcher-callback (fn [hook-status]
+                                  (case (:status hook-status)
+                                    :idle (when idle-callback (idle-callback hook-status))
+                                    :completed (handle-completion :file-watcher hook-status)
+                                    :error (handle-completion :file-watcher hook-status)
+                                    nil))
+               emacs-callback (fn [result]
+                                (println "[hand-to-cli] Emacs callback fired:" (pr-str result))
+                                (handle-completion :emacs-callback
+                                                   {:status (if (= :completed (:status result))
+                                                              :completed
+                                                              :error)}))]
+           ;; Start watching handoff file for status changes (in working dir)
+           (reset! stop-watch-fn
+                   (handoff/watch-hook-status-file watcher-callback handoff-path))
+           ;; Open CLI session with Emacs callback as backup
+           (dev-env/open-cli-session
+            dev-env
+            {:session-id session-id
+             :prompt prompt
+             :working-dir working-dir}
+            emacs-callback)
+           {:status :running})
+         ;; Blocking mode: existing behavior
+         (let [exit-code (launch-cli-resume session-id)
+               cli-status (handoff/read-hook-status handoff-path)
+               {:keys [error]} (determine-cli-result exit-code cli-status)
+               new-state (if error
+                           (transition! workspace :error-recovery {:error error})
+                           (transition! workspace :running-sdk))]
+           {:state new-state
+            :cli-status cli-status}))))))
