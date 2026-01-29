@@ -352,3 +352,82 @@
                         (println "[events] Error processing message:" (ex-message e)))))]
      {:callback callback
       :context-atom context-atom})))
+
+;;; Event Watch Support
+
+(defn add-event-watch!
+  "Add a watch function to the event buffer.
+
+   The watch-fn receives (key atom old-state new-state) as with add-watch.
+   Returns the watch key for use with remove-event-watch!."
+  [key watch-fn]
+  (add-watch event-buffer key watch-fn)
+  key)
+
+(defn remove-event-watch!
+  "Remove a watch function from the event buffer.
+   Returns the event-buffer atom."
+  [key]
+  (remove-watch event-buffer key))
+
+;;; Event Formatting
+
+(def ^:private type-colors
+  "ANSI color codes for event types."
+  {:text-block        "\u001b[32m"   ; green
+   :thinking-block    "\u001b[36m"   ; cyan
+   :tool-use-block    "\u001b[33m"   ; yellow
+   :tool-result-block "\u001b[34m"   ; blue
+   :result-message    "\u001b[35m"}) ; magenta
+
+(def ^:private ansi-reset "\u001b[0m")
+
+(defn- truncate-string
+  "Truncate string to max-len chars, adding ... if truncated."
+  [s max-len]
+  (if (and s (> (count s) max-len))
+    (str (subs s 0 (- max-len 3)) "...")
+    s))
+
+(defn- extract-content-preview
+  "Extract a preview string from event content."
+  [event]
+  (let [content (:content event)]
+    (cond
+      (nil? content) ""
+      (string? content) content
+      (map? content)
+      (or (:text content)
+          (:name content)
+          (when-let [c (:content content)]
+            (if (string? c) c (pr-str c)))
+          (pr-str content))
+      :else (pr-str content))))
+
+(defn- format-timestamp
+  "Format timestamp as HH:mm:ss."
+  [^Instant inst]
+  (let [formatter (java.time.format.DateTimeFormatter/ofPattern "HH:mm:ss")
+        zoned (.atZone inst (java.time.ZoneId/systemDefault))]
+    (.format formatter zoned)))
+
+(defn format-event-line
+  "Format an event as a single readable line.
+
+   Options:
+   - :color? - Use ANSI colors (default true)
+   - :max-content-len - Max content preview length (default 80)
+
+   Returns a formatted string."
+  ([event]
+   (format-event-line event {}))
+  ([event opts]
+   (let [color? (get opts :color? true)
+         max-len (get opts :max-content-len 80)
+         ts (format-timestamp (:timestamp event))
+         event-type (:type event)
+         type-str (name event-type)
+         preview (truncate-string (extract-content-preview event) max-len)
+         color (when color? (get type-colors event-type ""))
+         reset (when color? ansi-reset)]
+     (str ts " " color "[" type-str "]" reset " " preview))))

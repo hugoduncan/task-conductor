@@ -545,3 +545,54 @@
       :by-type (frequencies (map :type evts))
       :by-session (frequencies (map :session-id evts))
       :by-story (frequencies (map :story-id evts))})))
+
+(defn tail-events
+  "Live tail of events as they arrive, similar to `tail -f`.
+
+   Prints each new event as it's added to the buffer. Returns a stop
+   function that ends tailing when called.
+
+   Arguments:
+   - filter-pred: Optional predicate function (event -> boolean).
+                  Only events where (filter-pred event) is truthy are printed.
+   - opts: Optional map with:
+     - :color? - Use ANSI colors (default true)
+     - :max-content-len - Max content preview length (default 80)
+
+   Returns a zero-arg stop function. Call it to stop tailing.
+
+   Example:
+     (def stop (tail-events))           ; tail all events
+     (def stop (tail-events #(= :text-block (:type %)))) ; only text
+     (stop)                             ; stop tailing
+
+   Manual Testing:
+   1. Start tailing: (def stop (tail-events))
+   2. In another thread or REPL, add events:
+      (require '[task-conductor.agent-runner.events :as events])
+      (events/add-event! (events/create-event \"test-session\" 1 :text-block \"Hello\"))
+   3. Observe printed output
+   4. Stop tailing: (stop)"
+  ([]
+   (tail-events nil {}))
+  ([filter-pred]
+   (tail-events filter-pred {}))
+  ([filter-pred opts]
+   (let [watch-key (gensym "tail-events-")
+         pred (or filter-pred (constantly true))
+         format-opts (select-keys opts [:color? :max-content-len])
+         watch-fn (fn [_key _atom old-state new-state]
+                    ;; Find new events (those in new-state but not in old-state)
+                    (let [old-count (count old-state)
+                          new-count (count new-state)]
+                      (when (> new-count old-count)
+                        (doseq [event (subvec new-state old-count)]
+                          (when (pred event)
+                            (println (events/format-event-line event format-opts)))))))]
+     (events/add-event-watch! watch-key watch-fn)
+     (println "Tailing events... (call returned function to stop)")
+     ;; Return stop function
+     (fn []
+       (events/remove-event-watch! watch-key)
+       (println "Stopped tailing events")
+       nil))))
