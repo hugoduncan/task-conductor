@@ -20,6 +20,14 @@
 
 ;;; Stream JSON Parsing
 
+(defn extract-session-id
+  "Extract session-id from a stream-json message.
+   Returns the session-id string if this is a system/init message, nil otherwise."
+  [msg]
+  (when (and (= "system" (:type msg))
+             (= "init" (:subtype msg)))
+    (:session_id msg)))
+
 (defn parse-stream-json-line
   "Parse a single line from Claude CLI stream-json output.
 
@@ -60,7 +68,7 @@
   "Convert a stream-json message to a vector of event-compatible maps.
 
    Message type handling:
-   - system/init: Returns {:session-id <id>} metadata (not an event vector)
+   - system: Returns [] (session-id extraction handled by extract-session-id)
    - assistant: Returns vector of events, one per content block
    - result: Returns [{:type :result-message :usage <usage>}]
    - other: Returns [] (logs at debug level)
@@ -73,11 +81,10 @@
   [msg]
   (case (:type msg)
     "system"
-    (if (= "init" (:subtype msg))
-      {:session-id (:session_id msg)}
-      (do
-        (log/debug {:subtype (:subtype msg)} "Unrecognized system message subtype")
-        []))
+    (do
+      (when-not (= "init" (:subtype msg))
+        (log/debug {:subtype (:subtype msg)} "Unrecognized system message subtype"))
+      [])
 
     "assistant"
     (into []
@@ -108,24 +115,19 @@
    - event-callback: Optional function to call with each event map"
   [line session-id-atom result-atom event-callback]
   (when-let [parsed (parse-stream-json-line line)]
-    (let [mapped (map-stream-message-to-events parsed)]
-      ;; Check if this is session-id metadata (not an event vector)
-      (if (and (map? mapped) (:session-id mapped))
-        (do
-          (reset! session-id-atom (:session-id mapped))
-          ;; Notify callback of session-id discovery
-          (when event-callback
-            (event-callback {:type :session-id-update
-                             :session-id (:session-id mapped)})))
-        ;; Otherwise it's a vector of events
-        (do
-          ;; Track result message for return value
-          (when (some #(= :result-message (:type %)) mapped)
-            (reset! result-atom parsed))
-          ;; Call event-callback for each event
-          (when event-callback
-            (doseq [event mapped]
-              (event-callback event))))))))
+    ;; Extract session-id if this is an init message
+    (when-let [session-id (extract-session-id parsed)]
+      (reset! session-id-atom session-id)
+      (when event-callback
+        (event-callback {:type :session-id-update
+                         :session-id session-id})))
+    ;; Map to events and process
+    (let [events (map-stream-message-to-events parsed)]
+      (when (some #(= :result-message (:type %)) events)
+        (reset! result-atom parsed))
+      (when event-callback
+        (doseq [event events]
+          (event-callback event))))))
 
 (defn- stream-reader
   "Read lines from an InputStream, printing with prefix.

@@ -4,10 +4,11 @@
   ;; Contracts tested:
   ;; - parse-stream-json-line returns parsed JSON for valid input
   ;; - parse-stream-json-line returns nil for invalid/empty input
-  ;; - map-stream-message-to-events extracts session-id from system/init
+  ;; - extract-session-id returns session-id from system/init messages
+  ;; - extract-session-id returns nil for other message types
   ;; - map-stream-message-to-events maps assistant content blocks to events
   ;; - map-stream-message-to-events maps result messages to result-message events
-  ;; - map-stream-message-to-events returns empty vector for unrecognized types
+  ;; - map-stream-message-to-events returns empty vector for system and unrecognized types
   ;; - create-session-via-cli returns session-id and result on success
   ;; - create-session-via-cli calls event-callback for each event
   ;; - create-session-via-cli flushes events after completion
@@ -122,14 +123,39 @@
     (testing "returns nil for invalid JSON and logs warning"
       (is (nil? (cli/parse-stream-json-line "{invalid json"))))))
 
+;;; extract-session-id Tests
+
+(deftest extract-session-id-test
+  ;; Tests that session-id is extracted from system/init messages only.
+  (testing "extract-session-id"
+    (testing "given system/init message"
+      (testing "returns session-id"
+        (is (= "abc-123"
+               (cli/extract-session-id
+                {:type "system"
+                 :subtype "init"
+                 :session_id "abc-123"})))))
+
+    (testing "given system message with other subtype"
+      (testing "returns nil"
+        (is (nil? (cli/extract-session-id
+                   {:type "system"
+                    :subtype "other"})))))
+
+    (testing "given non-system message"
+      (testing "returns nil"
+        (is (nil? (cli/extract-session-id
+                   {:type "assistant"
+                    :message {:content []}})))))))
+
 ;;; map-stream-message-to-events Tests
 
-(deftest map-stream-message-to-events-system-init-test
-  ;; Tests that system/init messages extract session-id metadata.
+(deftest map-stream-message-to-events-system-test
+  ;; Tests that system messages return empty vector (session-id handled separately).
   (testing "map-stream-message-to-events"
     (testing "given system/init message"
-      (testing "returns session-id metadata"
-        (is (= {:session-id "abc-123"}
+      (testing "returns empty vector"
+        (is (= []
                (cli/map-stream-message-to-events
                 {:type "system"
                  :subtype "init"
