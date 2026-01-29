@@ -19,15 +19,17 @@
 
 (defn- build-cli-opts
   "Build CLI options map from session config/opts and prompt.
-  Handles :cwd/:working-dir normalization and :timeout-ms."
+  Handles :cwd/:working-dir normalization, :timeout-ms, and :event-callback."
   [opts prompt]
   (let [working-dir (or (:cwd opts)
                         (:working-dir opts)
                         (System/getProperty "user.dir"))
-        timeout-ms (:timeout-ms opts)]
+        timeout-ms (:timeout-ms opts)
+        event-callback (:event-callback opts)]
     (cond-> {:working-dir working-dir
              :prompt prompt}
-      timeout-ms (assoc :timeout-ms timeout-ms))))
+      timeout-ms (assoc :timeout-ms timeout-ms)
+      event-callback (assoc :event-callback event-callback))))
 
 (defn run-and-capture-session
   "Run a prompt and capture the session-id for later resumption.

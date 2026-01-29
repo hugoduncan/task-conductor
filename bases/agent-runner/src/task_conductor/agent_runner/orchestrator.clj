@@ -17,6 +17,7 @@
    [clojure.java.shell :as shell]
    [clojure.string :as str]
    [task-conductor.agent-runner.console :as console]
+   [task-conductor.agent-runner.events :as events]
    [task-conductor.agent-runner.flow :as flow]
    [task-conductor.agent-runner.session :as session]
    [task-conductor.dev-env.interface :as dev-env]))
@@ -217,6 +218,44 @@
 
 ;;; Task Execution
 
+(defn- make-cli-event-callback
+  "Create an event callback for CLI session event capture.
+
+   Unlike SDK callbacks which receive raw Python messages, CLI callbacks
+   receive already-mapped event maps from stream-json parsing. This function
+   creates a callback that adds the required context fields and stores events
+   in the event buffer.
+
+   Arguments:
+   - context: Map with :story-id (required) and optional :task-id
+   - opts: Optional map with :session-id (initial session-id, will be updated)
+
+   Returns a map with:
+   - :callback - Function to pass to CLI :event-callback option
+   - :session-id-atom - Atom updated when session-id is discovered"
+  ([context]
+   (make-cli-event-callback context {}))
+  ([context opts]
+   (let [session-id-atom (atom (or (:session-id opts)
+                                   (str (java.util.UUID/randomUUID))))
+         story-id (:story-id context)
+         task-id (:task-id context)
+         callback (fn [event-map]
+                    (let [session-id @session-id-atom
+                          event (cond-> {:timestamp (java.time.Instant/now)
+                                         :session-id session-id
+                                         :story-id story-id
+                                         :type (:type event-map)
+                                         :content (dissoc event-map :type)}
+                                  task-id (assoc :task-id task-id))]
+                      (try
+                        (events/add-event! event)
+                        (catch Exception e
+                          (println "[make-cli-event-callback] Failed to add event:"
+                                   (.getMessage e))))))]
+     {:callback callback
+      :session-id-atom session-id-atom})))
+
 (defn- build-task-prompt
   "Build the prompt string for executing a task.
 
@@ -275,7 +314,14 @@
    (execute-task task-info workspace {}))
   ([task-info workspace opts]
    (println "[execute-task] task-info:" task-info)
-   (let [session-config (build-task-session-config task-info workspace opts)
+   (let [;; Create event callback with story-id and task-id context
+         event-context {:story-id (:parent-id task-info)
+                        :task-id (:task-id task-info)}
+         {:keys [callback]} (make-cli-event-callback event-context)
+         ;; Build session config with event callback
+         session-config (build-task-session-config
+                         task-info workspace
+                         (assoc opts :event-callback callback))
          _ (println "[execute-task] Built session-config:" (pr-str session-config))
          prompt (build-task-prompt task-info)
          _ (println "[execute-task] Built prompt:" prompt)

@@ -6,6 +6,7 @@
    [clojure.java.shell :as shell]
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.console :as console]
+   [task-conductor.agent-runner.events :as events]
    [task-conductor.agent-runner.flow :as flow]
    [task-conductor.agent-runner.handoff :as handoff]
    [task-conductor.agent-runner.orchestrator :as orchestrator]
@@ -309,6 +310,60 @@
             (orchestrator/execute-task task-info)
             (is (= "/path/to/worktree" (:cwd @captured-config))
                 "should set cwd from worktree-path")))))))
+
+(deftest execute-task-event-callback-test
+  ;; Verifies that execute-task creates and wires an event callback
+  ;; with story-id and task-id context, and that events are captured.
+  (testing "execute-task event callback wiring"
+    (testing "creates event callback with story-id and task-id"
+      (let [captured-callback (atom nil)]
+        (with-redefs [orchestrator/run-cli-session
+                      (fn [config _prompt]
+                        (reset! captured-callback (:event-callback config))
+                        {:session-id "sess-123"
+                         :messages []
+                         :result {}})]
+          (let [task-info {:task-id 111
+                           :parent-id 57
+                           :worktree-path "/path/worktree"}]
+            (orchestrator/execute-task task-info)
+            (is (fn? @captured-callback)
+                "should pass event-callback function to session")))))
+
+    (testing "captures events to events buffer"
+      (events/clear-events!)
+      (try
+        (let [captured-callback (atom nil)]
+          (with-redefs [orchestrator/run-cli-session
+                        (fn [config _prompt]
+                          (reset! captured-callback (:event-callback config))
+                          ;; Simulate CLI emitting events during execution
+                          (let [callback (:event-callback config)]
+                            (callback {:type :text-block :text "Hello"})
+                            (callback {:type :tool-use-block
+                                       :name "Read" :id "tu-1"
+                                       :input {:file "foo.clj"}}))
+                          {:session-id "sess-456"
+                           :messages []
+                           :result {}})]
+            (let [task-info {:task-id 222
+                             :parent-id 99
+                             :worktree-path "/path/worktree"}]
+              (orchestrator/execute-task task-info)
+              ;; Verify events were captured with correct context
+              (let [evts (events/get-events {:story-id 99})]
+                (is (= 2 (count evts))
+                    "should capture both events")
+                (is (every? #(= 99 (:story-id %)) evts)
+                    "should set story-id from parent-id")
+                (is (every? #(= 222 (:task-id %)) evts)
+                    "should set task-id")
+                (is (= :text-block (:type (first evts)))
+                    "first event should be text-block")
+                (is (= :tool-use-block (:type (second evts)))
+                    "second event should be tool-use-block")))))
+        (finally
+          (events/clear-events!))))))
 
 (defn- with-clean-console-state
   "Helper to run body with clean console state and no handoff file I/O."
