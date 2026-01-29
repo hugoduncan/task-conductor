@@ -1,6 +1,7 @@
 #kaocha/v1
  {:kaocha.hooks/pre-run [task-conductor.kaocha-hooks/pre-run]
-  :kaocha/plugins [:kaocha.plugin/hooks]
+  :kaocha/plugins [:kaocha.plugin/hooks :kaocha.plugin/filter]
+
   :tests [{:id           :unit
            :source-paths ["test-support"
                           "bases/agent-runner/src"

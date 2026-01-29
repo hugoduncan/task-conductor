@@ -210,7 +210,7 @@
 
 ;;; File Watching Tests
 
-(deftest watch-handoff-file-test
+(deftest ^:slow watch-handoff-file-test
   (with-file-watcher-skip
     (testing "watch-handoff-file"
       (testing "invokes callback when file is created"
@@ -295,7 +295,7 @@
 
 ;;; Default Path Tests
 
-(deftest default-path-test
+(deftest ^:slow default-path-test
   (testing "default-handoff-path usage"
     (testing "when no path provided"
       (let [default-path handoff/default-handoff-path

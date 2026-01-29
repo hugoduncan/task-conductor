@@ -10,4 +10,7 @@
   :nrepl {:extra-deps {nrepl/nrepl {:mvn/version "1.5.1"}}}
   :test {:extra-paths ["test-support"]
          :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
-         :main-opts ["-m" "kaocha.runner"]}}}
+         :main-opts ["-m" "kaocha.runner" "--skip-meta" ":slow"]}
+  :test-all {:extra-paths ["test-support"]
+             :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+             :main-opts ["-m" "kaocha.runner"]}}}

@@ -9,8 +9,11 @@ task-conductor orchestrates multiple Claude agents for complex task execution. U
 ## Build/Test Commands
 
 ```bash
-# Run all tests
+# Run tests (skips slow file watcher tests)
 clj -M:test
+
+# Run all tests including slow file watcher tests
+clj -M:test-all
 
 # Run specific test namespace
 clj -M:test --focus task-conductor.agent-runner.foo-test
