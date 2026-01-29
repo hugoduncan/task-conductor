@@ -57,12 +57,15 @@ From the REPL:
 ;; Initialize the Python SDK (required once per JVM session)
 (sdk/initialize! {:venv-path "components/claude-agent-sdk/.venv"})
 
-;; Execute a story (uses focused workspace)
-(repl/run-story 123)
+;; Execute a story (non-blocking, returns immediately)
+(repl/run-story 123)  ;; => {:status :started, :story-id 123}
 
 ;; Or specify workspace explicitly
 (repl/run-story "/path/to/project" 123)
 (repl/run-story :project-alias 123)  ;; keyword matching last path segment
+
+;; Block until completion if needed
+(repl/await-completion)  ;; => {:outcome :complete, :progress {...}, ...}
 ```
 
 For resetting console state:
@@ -78,7 +81,7 @@ For resetting console state:
 All control functions accept an optional workspace argument (nil uses focused):
 
 ```clojure
-(repl/status)      ;; Check current state
+(repl/status)      ;; Check state, :executing?, and :outcome
 (repl/pause)       ;; Pause after current task completes
 (repl/continue)    ;; Resume paused execution
 (repl/abort)       ;; Cancel and return to idle

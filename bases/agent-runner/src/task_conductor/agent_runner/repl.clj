@@ -11,6 +11,11 @@
    [task-conductor.dev-env.emacs :as emacs]
    [task-conductor.dev-env.interface :as dev-env]))
 
+;;; Execution State
+
+;; Stores execution futures per workspace path: {workspace-path {:future <future> :story-id <id>}}
+(defonce ^:private execution-atom (atom {}))
+
 ;;; Control Functions
 
 (defn start-story
@@ -38,18 +43,27 @@
 (defn status
   "Return current console status for a workspace.
 
-   Returns a map with :state, :story-id, :current-task-id, and :paused.
+   Returns a map with :state, :story-id, :current-task-id, :paused,
+   :executing?, and :outcome (if execution completed).
    Prints a human-readable summary.
 
    Workspace can be: nil (focused), keyword alias, or string path."
   ([]
    (status nil))
   ([workspace]
-   (let [state (console/get-workspace-state workspace)
-         result {:state (:state state)
-                 :story-id (:story-id state)
-                 :current-task-id (:current-task-id state)
-                 :paused (:paused state)}]
+   (let [path (console/resolve-workspace workspace)
+         state (console/get-workspace-state workspace)
+         exec (get @execution-atom path)
+         executing? (and exec (not (realized? (:future exec))))
+         outcome (when (and exec (realized? (:future exec)))
+                   (let [res @(:future exec)]
+                     (:outcome res)))
+         result (cond-> {:state (:state state)
+                         :story-id (:story-id state)
+                         :current-task-id (:current-task-id state)
+                         :paused (:paused state)
+                         :executing? executing?}
+                  outcome (assoc :outcome outcome))]
      (println (str "State: " (:state result)))
      (when (:story-id result)
        (println (str "Story: " (:story-id result))))
@@ -57,6 +71,10 @@
        (println (str "Task: " (:current-task-id result))))
      (when (:paused result)
        (println "PAUSED"))
+     (when (:executing? result)
+       (println "EXECUTING"))
+     (when (:outcome result)
+       (println (str "Outcome: " (:outcome result))))
      result)))
 
 (defn pause
@@ -262,8 +280,45 @@
         (reset! dev-env-atom e)
         e)))
 
+(defn- print-outcome
+  "Print execution outcome for user feedback."
+  [result]
+  (case (:outcome result)
+    :complete
+    (println (str "Story complete! ("
+                  (get-in result [:progress :completed])
+                  " tasks)"))
+
+    :paused
+    (println "Story paused - use (continue) then (run-story ...) to resume")
+
+    :blocked
+    (do
+      (println "Story blocked - all remaining tasks have dependencies:")
+      (doseq [{:keys [id title blocking-task-ids]}
+              (:blocked-tasks result)]
+        (println (str "  Task " id ": " title))
+        (println (str "    Blocked by: " blocking-task-ids))))
+
+    :no-tasks
+    (println "Story has no child tasks - create tasks or refine the story")
+
+    :handed-to-cli
+    (do
+      (println "Handed off to CLI for user interaction")
+      (println (str "Reason: " (:reason result)))
+      (println (str "Session ID: " (:session-id (:state result)))))
+
+    :error
+    (do
+      (println "Story execution failed:")
+      (println (str "  " (get-in result [:error :message]))))
+
+    ;; Default for unknown outcomes
+    (println (str "Execution ended with outcome: " (:outcome result)))))
+
 (defn run-story
-  "Execute all tasks in a story with automated orchestration.
+  "Execute all tasks in a story with automated orchestration (non-blocking).
 
    Uses the StoryFlowModel by default, which auto-refines unrefined stories
    and creates child tasks as needed. Creates fresh Claude SDK sessions for
@@ -271,7 +326,8 @@
    or blocked.
 
    Validates that the console is in :idle state before starting.
-   Prints progress information and final outcome.
+   Returns immediately after spawning the execution thread.
+   Use (status) to poll execution progress.
 
    Workspace can be: nil (focused), keyword alias, or string path.
 
@@ -281,12 +337,11 @@
    - opts: Optional map of session configuration overrides
      - :flow-model - Custom flow model (defaults to StoryFlowModel)
 
-   Returns the result map from orchestrator/execute-story with:
-   - :outcome - One of :complete, :paused, :blocked, :no-tasks, :error
-   - :progress - {:completed N :total M} (when applicable)
-   - :state - Final console state map
+   Returns {:status :started, :story-id <id>} immediately.
+   Use (status) to check progress and final outcome.
+   Use (await-completion) if blocking is desired.
 
-   Throws if not in :idle state."
+   Throws if not in :idle state or if execution is already running."
   ([story-id]
    (run-story nil story-id {}))
   ([arg1 arg2]
@@ -295,13 +350,19 @@
      (run-story nil arg1 arg2)
      (run-story arg1 arg2 {})))
   ([workspace story-id opts]
-   (let [current (console/current-state workspace)]
+   (let [path (console/resolve-workspace workspace)
+         current (console/current-state workspace)]
      (when (not= :idle current)
        (throw (ex-info (str "Cannot run story: console is " current ", expected :idle")
                        {:type :invalid-state
                         :current-state current
                         :required-state :idle})))
-     (println (str "Running story " story-id "..."))
+     (when-let [exec (get @execution-atom path)]
+       (when-not (realized? (:future exec))
+         (throw (ex-info (str "Execution already running for story " (:story-id exec))
+                         {:type :already-running
+                          :story-id (:story-id exec)}))))
+     (println (str "Starting story " story-id "..."))
      (let [dev-env (get-or-create-dev-env)
            _ (when dev-env (println "[run-story] Using Emacs dev-env for CLI handoff"))
            opts (cond-> opts
@@ -309,39 +370,37 @@
                   (assoc :flow-model (flow/story-flow-model orchestrator/run-mcp-tasks story-id))
                   dev-env
                   (assoc :dev-env dev-env))
-           ;; Pass workspace directly - orchestrator/console functions resolve internally
-           result (orchestrator/execute-story story-id workspace opts)]
-       (case (:outcome result)
-         :complete
-         (println (str "Story complete! ("
-                       (get-in result [:progress :completed])
-                       " tasks)"))
+           exec-future (future
+                         (try
+                           (let [result (orchestrator/execute-story story-id workspace opts)]
+                             (print-outcome result)
+                             result)
+                           (catch Exception e
+                             (println (str "Execution error: " (.getMessage e)))
+                             {:outcome :error
+                              :error {:message (.getMessage e)
+                                      :exception e}})))]
+       (swap! execution-atom assoc path {:future exec-future :story-id story-id})
+       {:status :started :story-id story-id}))))
 
-         :paused
-         (println "Story paused - use (continue) then (run-story ...) to resume")
+(defn await-completion
+  "Block until story execution completes.
 
-         :blocked
-         (do
-           (println "Story blocked - all remaining tasks have dependencies:")
-           (doseq [{:keys [id title blocking-task-ids]}
-                   (:blocked-tasks result)]
-             (println (str "  Task " id ": " title))
-             (println (str "    Blocked by: " blocking-task-ids))))
+   Waits for the execution future to complete and returns the result.
+   Workspace can be: nil (focused), keyword alias, or string path.
 
-         :no-tasks
-         (println "Story has no child tasks - create tasks or refine the story")
+   Returns the result map from orchestrator/execute-story with:
+   - :outcome - One of :complete, :paused, :blocked, :no-tasks, :error
+   - :progress - {:completed N :total M} (when applicable)
+   - :state - Final console state map
 
-         :handed-to-cli
-         (do
-           (println "Handed off to CLI for user interaction")
-           (println (str "Reason: " (:reason result)))
-           (println (str "Session ID: " (:session-id (:state result)))))
-
-         :error
-         (do
-           (println "Story execution failed:")
-           (println (str "  " (get-in result [:error :message])))))
-       result))))
+   Returns nil if no execution is running."
+  ([]
+   (await-completion nil))
+  ([workspace]
+   (let [path (console/resolve-workspace workspace)]
+     (when-let [exec (get @execution-atom path)]
+       @(:future exec)))))
 
 ;;; Dev-Env CLI Session Management
 
