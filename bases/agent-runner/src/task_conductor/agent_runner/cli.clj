@@ -196,9 +196,7 @@
                                           :result-atom result-atom
                                           :event-callback event-callback}))
           stderr-thread (future
-                          (stream-reader (:err proc) "[claude:err]"
-                                         {:session-id-atom (atom nil)
-                                          :result-atom (atom nil)}))]
+                          (stream-reader (:err proc) "[claude:err]" {}))]
       (println "[create-session-via-cli] Process started, pid:" (.pid (:proc proc)))
       (println "[create-session-via-cli] Waiting for completion (timeout:" timeout "ms)...")
       (let [proc-result (deref proc timeout ::timeout)]
