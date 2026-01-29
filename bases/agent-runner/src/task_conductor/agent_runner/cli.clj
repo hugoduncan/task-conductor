@@ -48,6 +48,9 @@
                 :id (:id block)
                 :name (:name block)
                 :input (:input block)}
+    "tool_result" {:type :tool-result-block
+                   :tool_use_id (:tool_use_id block)
+                   :content (:content block)}
     "thinking" {:type :thinking-block :thinking (:thinking block)}
     (do
       (log/debug {:block-type (:type block)} "Unrecognized content block type")
@@ -65,6 +68,7 @@
    Content block mappings:
    - {type: \"text\"} -> {:type :text-block :text <text>}
    - {type: \"tool_use\"} -> {:type :tool-use-block :id <id> :name <name> :input <input>}
+   - {type: \"tool_result\"} -> {:type :tool-result-block :tool_use_id <id> :content <content>}
    - {type: \"thinking\"} -> {:type :thinking-block :thinking <text>}"
   [msg]
   (case (:type msg)

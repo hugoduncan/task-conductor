@@ -175,6 +175,17 @@
                  :message {:content [{:type "thinking"
                                       :thinking "Let me think"}]}})))))
 
+    (testing "given assistant message with tool_result block"
+      (testing "returns tool-result-block event"
+        (is (= [{:type :tool-result-block
+                 :tool_use_id "tool-1"
+                 :content "Success"}]
+               (cli/map-stream-message-to-events
+                {:type "assistant"
+                 :message {:content [{:type "tool_result"
+                                      :tool_use_id "tool-1"
+                                      :content "Success"}]}})))))
+
     (testing "given assistant message with multiple blocks"
       (testing "returns one event per block"
         (is (= [{:type :thinking-block :thinking "hmm"}
