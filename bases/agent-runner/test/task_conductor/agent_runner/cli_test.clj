@@ -18,22 +18,21 @@
    [babashka.process :as p]
    [clojure.data.json :as json]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is testing use-fixtures]]
+   [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.cli :as cli]
    [task-conductor.agent-runner.events :as events])
   (:import
    [java.io ByteArrayInputStream]))
 
-;;; Test Fixtures
-
-(defn clear-events-fixture [f]
-  (events/clear-events!)
-  (f)
-  (events/clear-events!))
-
-(use-fixtures :each clear-events-fixture)
-
 ;;; Test Utilities
+
+(defmacro with-events-cleared
+  "Execute body with events buffer cleared before and after."
+  [& body]
+  `(try
+     (events/clear-events!)
+     ~@body
+     (finally (events/clear-events!))))
 
 (defn- string->stream
   "Convert a string to an InputStream."
@@ -325,46 +324,48 @@
   (testing "create-session-via-cli"
     (testing "given event-callback option"
       (testing "calls callback for each event"
-        (let [captured-events (atom [])
-              stream-out (stream-json-output
-                          {:type "system" :subtype "init" :session_id "ses-1"}
-                          {:type "assistant"
-                           :message {:content [{:type "text" :text "Hi"}
-                                               {:type "tool_use" :id "t1"
-                                                :name "Bash" :input {}}]}}
-                          {:type "result" :subtype "success"
-                           :usage {:input_tokens 10 :output_tokens 5}})]
-          (with-redefs [p/process (fn [_ & _]
-                                    (mock-process {:out stream-out}))]
-            (cli/create-session-via-cli
-             {:working-dir "/tmp"
-              :prompt "Hi"
-              :event-callback #(swap! captured-events conj %)})
-            (is (= 4 (count @captured-events))
-                "should emit session-id-update plus 3 content events")
-            (is (= :session-id-update (:type (first @captured-events)))
-                "first event should be session-id-update")
-            (is (= "ses-1" (:session-id (first @captured-events)))
-                "session-id-update should contain the session-id")
-            (is (= :text-block (:type (second @captured-events))))
-            (is (= :tool-use-block (:type (nth @captured-events 2))))
-            (is (= :result-message (:type (nth @captured-events 3))))))))))
+        (with-events-cleared
+          (let [captured-events (atom [])
+                stream-out (stream-json-output
+                            {:type "system" :subtype "init" :session_id "ses-1"}
+                            {:type "assistant"
+                             :message {:content [{:type "text" :text "Hi"}
+                                                 {:type "tool_use" :id "t1"
+                                                  :name "Bash" :input {}}]}}
+                            {:type "result" :subtype "success"
+                             :usage {:input_tokens 10 :output_tokens 5}})]
+            (with-redefs [p/process (fn [_ & _]
+                                      (mock-process {:out stream-out}))]
+              (cli/create-session-via-cli
+               {:working-dir "/tmp"
+                :prompt "Hi"
+                :event-callback #(swap! captured-events conj %)})
+              (is (= 4 (count @captured-events))
+                  "should emit session-id-update plus 3 content events")
+              (is (= :session-id-update (:type (first @captured-events)))
+                  "first event should be session-id-update")
+              (is (= "ses-1" (:session-id (first @captured-events)))
+                  "session-id-update should contain the session-id")
+              (is (= :text-block (:type (second @captured-events))))
+              (is (= :tool-use-block (:type (nth @captured-events 2))))
+              (is (= :result-message (:type (nth @captured-events 3)))))))))))
 
 (deftest create-session-via-cli-flush-events-test
   ;; Tests that events are flushed to persistent storage after completion.
   (testing "create-session-via-cli"
     (testing "flushes events after successful completion"
-      (let [flushed-session-id (atom nil)
-            stream-out (stream-json-output
-                        {:type "system" :subtype "init" :session_id "flush-test"}
-                        {:type "result" :subtype "success"})]
-        (with-redefs [p/process (fn [_ & _]
-                                  (mock-process {:out stream-out}))
-                      events/flush-events! (fn [sid]
-                                             (reset! flushed-session-id sid)
-                                             0)]
-          (cli/create-session-via-cli {:working-dir "/tmp" :prompt "Hi"})
-          (is (= "flush-test" @flushed-session-id)))))))
+      (with-events-cleared
+        (let [flushed-session-id (atom nil)
+              stream-out (stream-json-output
+                          {:type "system" :subtype "init" :session_id "flush-test"}
+                          {:type "result" :subtype "success"})]
+          (with-redefs [p/process (fn [_ & _]
+                                    (mock-process {:out stream-out}))
+                        events/flush-events! (fn [sid]
+                                               (reset! flushed-session-id sid)
+                                               0)]
+            (cli/create-session-via-cli {:working-dir "/tmp" :prompt "Hi"})
+            (is (= "flush-test" @flushed-session-id))))))))
 
 ;;; Error Tests
 
