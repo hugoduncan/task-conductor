@@ -95,3 +95,63 @@
                  (some? content)
                  (assoc :content content))]
      (validate-event! event))))
+
+;;; Ring Buffer Storage
+
+(def ^:dynamic *max-buffer-size*
+  "Maximum number of events to keep in the in-memory buffer.
+   When exceeded, oldest events are dropped."
+  1000)
+
+(defonce ^{:private true
+           :doc "In-memory ring buffer for events. Stores a vector of events."}
+  event-buffer
+  (atom []))
+
+(defn add-event!
+  "Add a validated event to the buffer.
+   Drops oldest events when buffer exceeds *max-buffer-size*.
+   Returns the added event.
+
+   Throws ex-info if event fails validation."
+  [event]
+  (validate-event! event)
+  (swap! event-buffer
+         (fn [buf]
+           (let [new-buf (conj buf event)]
+             (if (> (count new-buf) *max-buffer-size*)
+               (subvec new-buf (- (count new-buf) *max-buffer-size*))
+               new-buf))))
+  event)
+
+(defn get-events
+  "Retrieve events from the buffer.
+   Optional filter map supports:
+   - :type - filter by event type keyword
+   - :session-id - filter by session ID string
+   - :story-id - filter by story ID integer
+
+   Returns a vector of matching events."
+  ([]
+   @event-buffer)
+  ([filters]
+   (let [events @event-buffer]
+     (if (empty? filters)
+       events
+       (filterv (fn [event]
+                  (and (if-let [t (:type filters)]
+                         (= t (:type event))
+                         true)
+                       (if-let [s (:session-id filters)]
+                         (= s (:session-id event))
+                         true)
+                       (if-let [st (:story-id filters)]
+                         (= st (:story-id event))
+                         true)))
+                events)))))
+
+(defn clear-events!
+  "Clear all events from the buffer. Returns nil."
+  []
+  (reset! event-buffer [])
+  nil)
