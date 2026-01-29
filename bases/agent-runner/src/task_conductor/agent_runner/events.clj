@@ -6,8 +6,10 @@
   (:require
    [clojure.edn :as edn]
    [clojure.java.io :as io]
+   [clojure.tools.logging :as log]
    [malli.core :as m]
    [malli.error :as me]
+   [task-conductor.agent-runner.logging]
    [task-conductor.claude-agent-sdk.interface :as sdk])
   (:import
    [java.io File PushbackReader]
@@ -349,7 +351,9 @@
                       (catch Exception e
                         ;; Log but don't propagate - callback errors shouldn't
                         ;; break the SDK flow
-                        (println "[events] Error processing message:" (ex-message e)))))]
+                        (log/warn e "Error processing SDK message"
+                                  {:story-id (:story-id @context-atom)
+                                   :session-id (:session-id @context-atom)}))))]
      {:callback callback
       :context-atom context-atom})))
 
