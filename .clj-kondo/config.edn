@@ -9,7 +9,10 @@
   task-conductor.dev-env.socket-test
   {:linters {:unresolved-symbol {:level :off}}}
   task-conductor.dev-env.emacs-test
+  {:linters {:unresolved-symbol {:level :off}}}
+  task-conductor.agent-runner.events-test
   {:linters {:unresolved-symbol {:level :off}}}}
+ ;; The macro with-temp-events-dir introduces temp-dir binding that kondo can't see
 
  :linters
  {:unresolved-namespace

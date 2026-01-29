@@ -4,8 +4,15 @@
    Captures and validates all SDK message types during story execution,
    enabling real-time monitoring and post-hoc analysis."
   (:require
+   [clojure.edn :as edn]
+   [clojure.java.io :as io]
    [malli.core :as m]
-   [malli.error :as me]))
+   [malli.error :as me])
+  (:import
+   [java.io File PushbackReader]
+   [java.nio.file Files StandardCopyOption]
+   [java.time Instant]
+   [java.time.format DateTimeFormatter]))
 
 ;;; Event Types
 
@@ -155,3 +162,112 @@
   []
   (reset! event-buffer [])
   nil)
+
+;;; Timestamp Serialization
+
+(defn instant->iso8601
+  "Convert java.time.Instant to ISO-8601 string."
+  [^Instant inst]
+  (.format DateTimeFormatter/ISO_INSTANT inst))
+
+(defn iso8601->instant
+  "Parse ISO-8601 string to java.time.Instant."
+  [^String s]
+  (Instant/parse s))
+
+(defn- serialize-event
+  "Convert event with Instant timestamp to EDN-writable form."
+  [event]
+  (update event :timestamp instant->iso8601))
+
+(defn- deserialize-event
+  "Convert EDN-read event back to domain form with Instant timestamp."
+  [event]
+  (update event :timestamp iso8601->instant))
+
+;;; Persistent File Storage
+
+(def default-events-dir
+  "Default directory for event files, relative to project root."
+  ".task-conductor/events")
+
+(defn- ensure-dir!
+  "Create directory if it doesn't exist. Returns the directory File."
+  [^String path]
+  (let [dir (File. path)]
+    (when-not (.exists dir)
+      (.mkdirs dir))
+    dir))
+
+(defn- session-file-path
+  "Returns the file path for a session's events file."
+  [events-dir session-id]
+  (str events-dir "/" session-id ".edn"))
+
+(defn flush-events!
+  "Write events for a session to persistent storage.
+
+   Filters current buffer for the given session-id and writes all matching
+   events to `<events-dir>/<session-id>.edn`. Each event is written
+   as a separate EDN form on its own line.
+
+   Uses atomic write (temp file + rename) to prevent partial writes.
+
+   Options:
+   - :events-dir - directory for event files (default: .task-conductor/events)
+
+   Returns the number of events written."
+  ([session-id]
+   (flush-events! session-id {}))
+  ([session-id opts]
+   (let [events-dir (or (:events-dir opts) default-events-dir)]
+     (ensure-dir! events-dir)
+     (let [session-events (get-events {:session-id session-id})
+           target-file (File. ^String (session-file-path events-dir session-id))
+           temp-file (File/createTempFile "events" ".edn.tmp" (File. events-dir))]
+       (try
+         (with-open [w (io/writer temp-file)]
+           (doseq [event session-events]
+             (.write w (pr-str (serialize-event event)))
+             (.write w "\n")))
+         (Files/move (.toPath temp-file)
+                     (.toPath target-file)
+                     (into-array [StandardCopyOption/ATOMIC_MOVE
+                                  StandardCopyOption/REPLACE_EXISTING]))
+         (count session-events)
+         (catch Exception e
+           (.delete temp-file)
+           (throw e)))))))
+
+(defn load-session-events
+  "Load events from persistent storage for a session.
+
+   Reads events from `<events-dir>/<session-id>.edn`.
+   Returns a vector of validated event maps with Instant timestamps.
+
+   Options:
+   - :events-dir - directory for event files (default: .task-conductor/events)
+
+   Returns nil if the file doesn't exist.
+   Throws ex-info on parse errors."
+  ([session-id]
+   (load-session-events session-id {}))
+  ([session-id opts]
+   (let [events-dir (or (:events-dir opts) default-events-dir)
+         file (File. ^String (session-file-path events-dir session-id))]
+     (when (.exists file)
+       (with-open [rdr (PushbackReader. (io/reader file))]
+         (loop [events []]
+           (let [form (try
+                        (edn/read {:eof ::eof} rdr)
+                        (catch Exception e
+                          (throw (ex-info "Failed to parse events file"
+                                          {:type :parse-error
+                                           :session-id session-id
+                                           :path (str file)}
+                                          e))))]
+             (if (= ::eof form)
+               events
+               (let [event (deserialize-event form)]
+                 (validate-event! event)
+                 (recur (conj events event)))))))))))

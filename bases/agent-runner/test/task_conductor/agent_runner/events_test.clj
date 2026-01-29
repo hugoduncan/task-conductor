@@ -9,9 +9,15 @@
   ;; - validate-event! throws on invalid, returns event on valid
   ;; - create-event generates valid events with automatic timestamp
   ;; - create-event accepts optional :task-id and :content
+  ;; - flush-events! writes session events to file
+  ;; - load-session-events reads events from file with round-trip fidelity
   (:require
    [clojure.test :refer [deftest is testing]]
-   [task-conductor.agent-runner.events :as events]))
+   [task-conductor.agent-runner.events :as events])
+  (:import
+   [java.io File]
+   [java.nio.file Files]
+   [java.nio.file.attribute FileAttribute]))
 
 ;;; Event Schema Validation Tests
 
@@ -290,3 +296,140 @@
       (is (seq (events/get-events)))
       (is (nil? (events/clear-events!)))
       (is (empty? (events/get-events))))))
+
+;;; Timestamp Serialization Tests
+
+(deftest timestamp-serialization-test
+  ;; Tests timestamp conversion round-trip.
+  ;; Contract: instant->iso8601 and iso8601->instant are inverse operations.
+  (testing "timestamp serialization"
+    (testing "round-trips Instant through ISO-8601"
+      (let [original (java.time.Instant/now)
+            serialized (events/instant->iso8601 original)
+            deserialized (events/iso8601->instant serialized)]
+        (is (string? serialized))
+        (is (inst? deserialized))
+        (is (= original deserialized))))
+
+    (testing "produces valid ISO-8601 format"
+      (let [inst (java.time.Instant/parse "2024-01-15T10:30:00Z")
+            result (events/instant->iso8601 inst)]
+        (is (= "2024-01-15T10:30:00Z" result))))))
+
+;;; File I/O Tests
+
+(defn- create-temp-dir
+  "Create a temporary directory for testing. Returns the path as a string."
+  []
+  (str (Files/createTempDirectory "events-test"
+                                  (into-array FileAttribute []))))
+
+(defn- delete-recursive
+  "Recursively delete a directory and its contents."
+  [^File f]
+  (when (.isDirectory f)
+    (doseq [child (.listFiles f)]
+      (delete-recursive child)))
+  (.delete f))
+
+(defmacro with-temp-events-dir
+  "Execute body with a temporary events directory. Cleans up after."
+  [[dir-sym] & body]
+  `(let [~dir-sym (create-temp-dir)]
+     (try
+       ~@body
+       (finally
+         (delete-recursive (File. ~dir-sym))))))
+
+(deftest flush-events!-test
+  ;; Tests writing events to persistent storage.
+  ;; Contracts:
+  ;; - Writes session events to file
+  ;; - Returns count of events written
+  ;; - Creates directory if needed
+  ;; - Only writes events for specified session
+  (testing "flush-events!"
+    (with-temp-events-dir [temp-dir]
+      (events/clear-events!)
+
+      (testing "writes session events to file"
+        (let [e1 (events/create-event "sess-A" 42 :text-block "hello")
+              e2 (events/create-event "sess-A" 42 :tool-use-block {:tool "Read"})]
+          (events/add-event! e1)
+          (events/add-event! e2)
+          (let [count (events/flush-events! "sess-A" {:events-dir temp-dir})]
+            (is (= 2 count))
+            (is (.exists (File. (str temp-dir "/sess-A.edn")))))))
+
+      (testing "returns 0 for session with no events"
+        (is (= 0 (events/flush-events! "no-such" {:events-dir temp-dir}))))
+
+      (testing "only writes events for specified session"
+        (events/clear-events!)
+        (events/add-event! (events/create-event "sess-X" 1 :text-block))
+        (events/add-event! (events/create-event "sess-Y" 2 :text-block))
+        (events/add-event! (events/create-event "sess-X" 1 :tool-use-block))
+        (let [count (events/flush-events! "sess-X" {:events-dir temp-dir})]
+          (is (= 2 count)))))))
+
+(deftest load-session-events-test
+  ;; Tests reading events from persistent storage.
+  ;; Contracts:
+  ;; - Returns nil for non-existent file
+  ;; - Reads events with correct types and timestamps
+  ;; - Validates loaded events
+  (testing "load-session-events"
+    (with-temp-events-dir [temp-dir]
+      (events/clear-events!)
+
+      (testing "returns nil for non-existent session"
+        (is (nil? (events/load-session-events "no-file" {:events-dir temp-dir}))))
+
+      (testing "reads events written by flush-events!"
+        (let [e1 (events/create-event "round-trip" 100 :text-block "content1")
+              e2 (events/create-event "round-trip" 100 :thinking-block "thought")]
+          (events/add-event! e1)
+          (events/add-event! e2)
+          (events/flush-events! "round-trip" {:events-dir temp-dir})
+          (events/clear-events!)
+          (let [loaded (events/load-session-events "round-trip"
+                                                   {:events-dir temp-dir})]
+            (is (= 2 (count loaded)))
+            (is (= "round-trip" (:session-id (first loaded))))
+            (is (= :text-block (:type (first loaded))))
+            (is (= "content1" (:content (first loaded))))
+            (is (inst? (:timestamp (first loaded))))
+            (is (= :thinking-block (:type (second loaded)))))))
+
+      (testing "validates loaded events"
+        ;; Event has valid timestamp format but invalid :type keyword
+        (spit (str temp-dir "/invalid.edn")
+              "{:timestamp \"2024-01-15T10:30:00Z\" :session-id \"x\" :story-id 1 :type :bad-type}\n")
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                              #"Invalid Event"
+                              (events/load-session-events "invalid"
+                                                          {:events-dir temp-dir})))))))
+
+(deftest file-io-round-trip-test
+  ;; Tests complete round-trip: create -> add -> flush -> clear -> load.
+  ;; Contract: events survive persistence with full fidelity.
+  (testing "file I/O round-trip"
+    (with-temp-events-dir [temp-dir]
+      (events/clear-events!)
+
+      (testing "preserves all event fields through persistence"
+        (let [original (events/create-event "fidelity" 999 :tool-result-block
+                                            {:result "success" :code 0}
+                                            {:task-id 555})]
+          (events/add-event! original)
+          (events/flush-events! "fidelity" {:events-dir temp-dir})
+          (events/clear-events!)
+
+          (let [[loaded] (events/load-session-events "fidelity"
+                                                     {:events-dir temp-dir})]
+            (is (= (:session-id original) (:session-id loaded)))
+            (is (= (:story-id original) (:story-id loaded)))
+            (is (= (:task-id original) (:task-id loaded)))
+            (is (= (:type original) (:type loaded)))
+            (is (= (:content original) (:content loaded)))
+            (is (= (:timestamp original) (:timestamp loaded)))))))))
