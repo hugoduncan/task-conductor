@@ -17,10 +17,15 @@ class ClientSessionRunner:
     This ensures all async operations run in the same task context,
     which is required by anyio's cancel scope tracking. Commands are
     sent via a thread-safe queue and results returned via futures.
+
+    Optionally accepts an event_callback function that is called for
+    each message received during query operations, enabling real-time
+    event capture for monitoring and debugging.
     """
 
-    def __init__(self, client):
+    def __init__(self, client, event_callback=None):
         self.client = client
+        self.event_callback = event_callback
         self.loop = asyncio.new_event_loop()
         self._command_queue = queue.Queue()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -60,6 +65,12 @@ class ClientSessionRunner:
                     messages = []
                     async for msg in self.client.receive_response():
                         messages.append(msg)
+                        if self.event_callback:
+                            try:
+                                self.event_callback(msg)
+                            except Exception:
+                                # Don't let callback errors break the flow
+                                pass
                     result_future.set_result(messages)
 
                 elif cmd_type == "disconnect":

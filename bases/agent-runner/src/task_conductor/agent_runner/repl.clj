@@ -9,7 +9,8 @@
    [task-conductor.agent-runner.flow :as flow]
    [task-conductor.agent-runner.orchestrator :as orchestrator]
    [task-conductor.dev-env.emacs :as emacs]
-   [task-conductor.dev-env.interface :as dev-env]))
+   [task-conductor.dev-env.interface :as dev-env]
+   [task-conductor.agent-runner.events :as events]))
 
 ;;; Execution State
 
@@ -483,3 +484,119 @@
     (reset! dev-env-atom nil)
     (println "Disconnected from Emacs dev-env"))
   nil)
+
+;;; Events Query API
+
+(defn events
+  "Query events from the in-memory buffer or file storage.
+
+   Arities:
+   - (events) - All events for current session
+   - (events session-id) - Events for a specific session (string)
+   - (events filter-map) - Filter by :type, :session-id, or :story-id
+   - (events workspace arg) - Workspace-scoped query
+
+   The optional workspace parameter comes first (workspace-first convention).
+   Workspace can be: nil (focused), keyword alias, or string path.
+
+   When called with no args, uses the current session-id from console state.
+   Returns a vector of event maps.
+
+   For historical events, use load-session-events directly with a session-id."
+  ([]
+   (events nil))
+  ([arg]
+   (events nil arg))
+  ([workspace arg]
+   (cond
+     ;; No arg: use current session
+     (nil? arg)
+     (let [session-id (:session-id (console/get-workspace-state workspace))]
+       (if session-id
+         (events/get-events {:session-id session-id})
+         (do
+           (println "No active session")
+           [])))
+
+     ;; String: session-id
+     (string? arg)
+     (events/get-events {:session-id arg})
+
+     ;; Map: filter
+     (map? arg)
+     (events/get-events arg)
+
+     :else
+     (throw (ex-info "Invalid argument: expected session-id string or filter map"
+                     {:type :invalid-argument
+                      :arg arg})))))
+
+(defn event-stats
+  "Summary statistics for events in the buffer.
+
+   Returns a map with:
+   - :total - Total event count
+   - :by-type - Map of event type to count
+   - :by-session - Map of session-id to count
+   - :by-story - Map of story-id to count
+
+   Optionally takes a filter map (same as `events`) to scope the stats."
+  ([]
+   (event-stats {}))
+  ([filters]
+   (let [evts (events/get-events filters)]
+     {:total (count evts)
+      :by-type (frequencies (map :type evts))
+      :by-session (frequencies (map :session-id evts))
+      :by-story (frequencies (map :story-id evts))})))
+
+(defn tail-events
+  "Live tail of events as they arrive, similar to `tail -f`.
+
+   Prints each new event as it's added to the buffer. Returns a stop
+   function that ends tailing when called.
+
+   Arguments:
+   - filter-pred: Optional predicate function (event -> boolean).
+                  Only events where (filter-pred event) is truthy are printed.
+   - opts: Optional map with:
+     - :color? - Use ANSI colors (default true)
+     - :max-content-len - Max content preview length (default 80)
+
+   Returns a zero-arg stop function. Call it to stop tailing.
+
+   Example:
+     (def stop (tail-events))           ; tail all events
+     (def stop (tail-events #(= :text-block (:type %)))) ; only text
+     (stop)                             ; stop tailing
+
+   Manual Testing:
+   1. Start tailing: (def stop (tail-events))
+   2. In another thread or REPL, add events:
+      (require '[task-conductor.agent-runner.events :as events])
+      (events/add-event! (events/create-event \"test-session\" 1 :text-block \"Hello\"))
+   3. Observe printed output
+   4. Stop tailing: (stop)"
+  ([]
+   (tail-events nil {}))
+  ([filter-pred]
+   (tail-events filter-pred {}))
+  ([filter-pred opts]
+   (let [watch-key (gensym "tail-events-")
+         pred (or filter-pred (constantly true))
+         format-opts (select-keys opts [:color? :max-content-len])
+         watch-fn (fn [_key _atom old-state new-state]
+                    ;; Find new events (those in new-state but not in old-state)
+                    (let [old-count (count old-state)
+                          new-count (count new-state)]
+                      (when (> new-count old-count)
+                        (doseq [event (subvec new-state old-count)]
+                          (when (pred event)
+                            (println (events/format-event-line event format-opts)))))))]
+     (events/add-event-watch! watch-key watch-fn)
+     (println "Tailing events... (call returned function to stop)")
+     ;; Return stop function
+     (fn []
+       (events/remove-event-watch! watch-key)
+       (println "Stopped tailing events")
+       nil))))

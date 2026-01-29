@@ -91,7 +91,11 @@
    - :resume - session ID string to resume a previous session
    - :model - model name
 
-   See make-options for the complete list of supported options.
+   Event capture (not passed to SDK):
+   - :event-callback - Optional function called for each raw Python message
+                       received during query. Use for real-time event capture.
+
+   See make-options for the complete list of SDK options.
 
    Returns a ManagedClient. Use make-tracked-client to add session-id
    tracking, or with-session for automatic lifecycle management."
