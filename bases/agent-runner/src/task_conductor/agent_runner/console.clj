@@ -498,7 +498,7 @@
            session-id (:session-id ws-state')
            working-dir (or (:cwd ws-state')
                            (System/getProperty "user.dir"))
-           handoff-path (str working-dir "/" handoff/hook-handoff-path)]
+           handoff-path (.getPath (java.io.File. working-dir handoff/hook-handoff-path))]
        (if dev-env
          ;; Async mode: watch file for status changes, delegate to dev-env
          (let [stop-watch-fn (atom nil)
