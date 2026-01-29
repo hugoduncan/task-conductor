@@ -222,10 +222,20 @@
     (first (filter #(= alias-name (last (str/split % #"/"))) projects))))
 
 (defn resolve-workspace
-  "Resolves workspace argument to a full path.
-   - nil → focused-project
-   - keyword → workspace-alias->path
-   - string → used as-is"
+  "Resolves workspace argument to a full path string.
+
+   Resolution rules:
+   - nil     → workspace/focused-project (the current active workspace)
+   - keyword → workspace-alias->path (e.g., :foo → /full/path/to/foo)
+   - string  → used as-is (assumed to be a full path)
+
+   All public console functions accept a workspace argument that passes
+   through this function. The nil-to-focused-project resolution happens
+   here, so callers can rely on nil meaning 'the focused workspace'
+   without tracking the focused state themselves.
+
+   This is the single point of workspace resolution. Do not duplicate
+   this logic elsewhere—if you need a resolved path, call this function."
   [workspace]
   (cond
     (nil? workspace) (workspace/focused-project)
