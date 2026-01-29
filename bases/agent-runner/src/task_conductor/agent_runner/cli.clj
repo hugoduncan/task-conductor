@@ -6,13 +6,36 @@
   (:require
    [babashka.process :as p]
    [clojure.data.json :as json]
-   [clojure.java.io :as io])
+   [clojure.java.io :as io]
+   [clojure.string :as str]
+   [clojure.tools.logging :as log]
+   [task-conductor.agent-runner.logging])
   (:import
    [java.io BufferedReader]))
 
 (def ^:private default-timeout-ms
   "Default timeout for CLI operations: 5 minutes."
   300000)
+
+;;; Stream JSON Parsing
+
+(defn parse-stream-json-line
+  "Parse a single line from Claude CLI stream-json output.
+
+   Returns the parsed JSON as a map with keyword keys, or nil if:
+   - Line is nil, empty, or blank
+   - Line doesn't start with '{'
+   - JSON parsing fails (logs warning with line content for debugging)"
+  [line]
+  (when (and line
+             (not (str/blank? line))
+             (str/starts-with? (str/triml line) "{"))
+    (try
+      (json/read-str line :key-fn keyword)
+      (catch Exception e
+        (log/warn {:line line :error (.getMessage e)}
+                  "Failed to parse stream-json line")
+        nil))))
 
 (defn- stream-reader
   "Read lines from an InputStream, printing with prefix and accumulating.

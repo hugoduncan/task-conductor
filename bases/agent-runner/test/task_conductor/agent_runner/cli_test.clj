@@ -1,7 +1,9 @@
 (ns task-conductor.agent-runner.cli-test
-  ;; Tests for CLI session creation.
+  ;; Tests for CLI session creation and stream-json parsing.
   ;;
   ;; Contracts tested:
+  ;; - parse-stream-json-line returns parsed JSON for valid input
+  ;; - parse-stream-json-line returns nil for invalid/empty input
   ;; - create-session-via-cli returns session-id and response on success
   ;; - Throws :cli/timeout when process exceeds timeout
   ;; - Throws :cli/non-zero-exit when process fails
@@ -59,6 +61,44 @@
           (do
             (when delay-ms (Thread/sleep (min delay-ms timeout-ms)))
             deref-result))))))
+
+;;; parse-stream-json-line Tests
+
+(deftest parse-stream-json-line-valid-json-test
+  (testing "parse-stream-json-line"
+    (testing "parses valid JSON object"
+      (is (= {:type "system" :subtype "init"}
+             (cli/parse-stream-json-line "{\"type\":\"system\",\"subtype\":\"init\"}"))))
+
+    (testing "parses JSON with nested structures"
+      (is (= {:type "assistant"
+              :message {:content [{:type "text" :text "Hello"}]}}
+             (cli/parse-stream-json-line
+              "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}]}}"))))
+
+    (testing "parses JSON with leading whitespace"
+      (is (= {:key "value"}
+             (cli/parse-stream-json-line "  {\"key\":\"value\"}"))))))
+
+(deftest parse-stream-json-line-invalid-input-test
+  (testing "parse-stream-json-line"
+    (testing "returns nil for nil input"
+      (is (nil? (cli/parse-stream-json-line nil))))
+
+    (testing "returns nil for empty string"
+      (is (nil? (cli/parse-stream-json-line ""))))
+
+    (testing "returns nil for blank string with spaces"
+      (is (nil? (cli/parse-stream-json-line "   "))))
+
+    (testing "returns nil for non-JSON text"
+      (is (nil? (cli/parse-stream-json-line "not json at all"))))
+
+    (testing "returns nil for text starting with non-brace"
+      (is (nil? (cli/parse-stream-json-line "[1,2,3]"))))
+
+    (testing "returns nil for invalid JSON and logs warning"
+      (is (nil? (cli/parse-stream-json-line "{invalid json"))))))
 
 ;;; Success Tests
 
