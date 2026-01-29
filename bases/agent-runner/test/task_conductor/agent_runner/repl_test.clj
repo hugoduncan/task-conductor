@@ -6,6 +6,7 @@
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.console :as console]
+   [task-conductor.agent-runner.events :as events]
    [task-conductor.agent-runner.flow :as flow]
    [task-conductor.agent-runner.orchestrator :as orchestrator]
    [task-conductor.agent-runner.repl :as repl]
@@ -655,3 +656,163 @@
               (repl/await-completion)
               (is (nil? @captured-workspace)
                   "should pass nil workspace to orchestrator"))))))))
+
+;;; Events Query API Tests
+
+;; Tests the events function which retrieves events from the buffer.
+;; Contract: Returns events filtered by session-id, filter map, or current session.
+;; Uses console state to determine current session when called with no args.
+
+(defmacro with-events-buffer
+  "Execute body with a cleared events buffer, resetting afterward."
+  [& body]
+  `(try
+     (events/clear-events!)
+     ~@body
+     (finally
+       (events/clear-events!))))
+
+(deftest events-test
+  (testing "events"
+    (testing "when called with no args and no active session"
+      (testing "returns empty vector with message"
+        (with-console-state
+          (with-events-buffer
+            (let [result (repl/events)]
+              (is (= [] result)))))))
+
+    (testing "when called with no args and active session"
+      (testing "returns events for current session"
+        (with-console-state
+          (with-events-buffer
+            (console/transition! nil :selecting-task {:story-id 42})
+            (console/transition! nil :running-sdk {:current-task-id 1
+                                                   :session-id "active-session"})
+            (events/add-event! {:timestamp (java.time.Instant/now)
+                                :session-id "active-session"
+                                :story-id 42
+                                :type :text-block
+                                :content {:text "hello"}})
+            (events/add-event! {:timestamp (java.time.Instant/now)
+                                :session-id "other-session"
+                                :story-id 42
+                                :type :text-block
+                                :content {:text "other"}})
+            (let [result (repl/events)]
+              (is (= 1 (count result)))
+              (is (= "active-session" (:session-id (first result)))))))))
+
+    (testing "when called with session-id string"
+      (testing "returns events for that session"
+        (with-console-state
+          (with-events-buffer
+            (events/add-event! {:timestamp (java.time.Instant/now)
+                                :session-id "session-a"
+                                :story-id 1
+                                :type :text-block})
+            (events/add-event! {:timestamp (java.time.Instant/now)
+                                :session-id "session-b"
+                                :story-id 2
+                                :type :tool-use-block})
+            (let [result (repl/events "session-a")]
+              (is (= 1 (count result)))
+              (is (= "session-a" (:session-id (first result)))))))))
+
+    (testing "when called with filter map"
+      (testing "returns events matching the filter"
+        (with-console-state
+          (with-events-buffer
+            (events/add-event! {:timestamp (java.time.Instant/now)
+                                :session-id "s1"
+                                :story-id 1
+                                :type :text-block})
+            (events/add-event! {:timestamp (java.time.Instant/now)
+                                :session-id "s1"
+                                :story-id 1
+                                :type :tool-use-block})
+            (events/add-event! {:timestamp (java.time.Instant/now)
+                                :session-id "s1"
+                                :story-id 1
+                                :type :text-block})
+            (let [result (repl/events {:type :text-block})]
+              (is (= 2 (count result)))
+              (is (every? #(= :text-block (:type %)) result)))))))
+
+    (testing "when called with invalid argument"
+      (testing "throws an exception"
+        (with-console-state
+          (with-events-buffer
+            (is (thrown-with-msg?
+                 clojure.lang.ExceptionInfo
+                 #"Invalid argument"
+                 (repl/events 123)))))))
+
+    (testing "workspace integration"
+      (testing "uses session from specified workspace"
+        (with-console-state
+          (with-events-buffer
+            (workspace/add-project! "/path/to/proj")
+            (console/transition! :proj :selecting-task {:story-id 99})
+            (console/transition! :proj :running-sdk {:current-task-id 1
+                                                     :session-id "ws-session"})
+            (events/add-event! {:timestamp (java.time.Instant/now)
+                                :session-id "ws-session"
+                                :story-id 99
+                                :type :text-block})
+            (let [result (repl/events :proj nil)]
+              (is (= 1 (count result)))
+              (is (= "ws-session" (:session-id (first result)))))))))))
+
+;;; event-stats Tests
+
+;; Tests the event-stats function which provides summary statistics.
+;; Contract: Returns counts by type, session, and story.
+
+(deftest event-stats-test
+  (testing "event-stats"
+    (testing "returns zero counts for empty buffer"
+      (with-events-buffer
+        (let [result (repl/event-stats)]
+          (is (= 0 (:total result)))
+          (is (= {} (:by-type result)))
+          (is (= {} (:by-session result)))
+          (is (= {} (:by-story result))))))
+
+    (testing "returns correct counts for populated buffer"
+      (with-events-buffer
+        (events/add-event! {:timestamp (java.time.Instant/now)
+                            :session-id "s1"
+                            :story-id 1
+                            :type :text-block})
+        (events/add-event! {:timestamp (java.time.Instant/now)
+                            :session-id "s1"
+                            :story-id 1
+                            :type :text-block})
+        (events/add-event! {:timestamp (java.time.Instant/now)
+                            :session-id "s1"
+                            :story-id 2
+                            :type :tool-use-block})
+        (events/add-event! {:timestamp (java.time.Instant/now)
+                            :session-id "s2"
+                            :story-id 2
+                            :type :result-message})
+        (let [result (repl/event-stats)]
+          (is (= 4 (:total result)))
+          (is (= {:text-block 2 :tool-use-block 1 :result-message 1}
+                 (:by-type result)))
+          (is (= {"s1" 3 "s2" 1} (:by-session result)))
+          (is (= {1 2 2 2} (:by-story result))))))
+
+    (testing "respects filter parameter"
+      (with-events-buffer
+        (events/add-event! {:timestamp (java.time.Instant/now)
+                            :session-id "s1"
+                            :story-id 1
+                            :type :text-block})
+        (events/add-event! {:timestamp (java.time.Instant/now)
+                            :session-id "s2"
+                            :story-id 1
+                            :type :text-block})
+        (let [result (repl/event-stats {:session-id "s1"})]
+          (is (= 1 (:total result)))
+          (is (= {"s1" 1} (:by-session result))))))))
