@@ -816,3 +816,154 @@
         (let [result (repl/event-stats {:session-id "s1"})]
           (is (= 1 (:total result)))
           (is (= {"s1" 1} (:by-session result))))))))
+
+;;; tail-events Tests
+
+;; Tests the tail-events function which provides real-time event monitoring.
+;; Contract: Returns a stop function, uses add-event-watch! internally,
+;; respects filter predicate, and passes opts to format-event-line.
+
+(deftest tail-events-test
+  (testing "tail-events"
+    (testing "returns a callable stop function"
+      (with-events-buffer
+        (let [stop (repl/tail-events)]
+          (is (fn? stop))
+          (stop))))
+
+    (testing "stop function removes the watch"
+      ;; Watch functions capture println at creation time, so we must
+      ;; use a single with-redefs scope covering all operations
+      (with-events-buffer
+        (let [printed (atom [])]
+          (with-redefs [println (fn [& args]
+                                  (swap! printed conj (apply str args)))]
+            (let [stop (repl/tail-events)]
+              (reset! printed [])
+              ;; Add event while watching
+              (events/add-event! {:timestamp (java.time.Instant/now)
+                                  :session-id "watch-test"
+                                  :story-id 1
+                                  :type :text-block
+                                  :content {:text "before stop"}})
+              ;; Verify event was printed while watching
+              (is (pos? (count @printed))
+                  "should print event while watching")
+              ;; Stop watching
+              (stop)
+              (reset! printed [])
+              ;; Add another event after stopping
+              (events/add-event! {:timestamp (java.time.Instant/now)
+                                  :session-id "watch-test"
+                                  :story-id 1
+                                  :type :text-block
+                                  :content {:text "after stop"}})
+              ;; Should not have printed new event (stop message was captured
+              ;; before reset)
+              (is (zero? (count @printed))
+                  "should not print events after stop"))))))
+
+    (testing "prints new events as they arrive"
+      (with-events-buffer
+        (let [printed (atom [])]
+          (with-redefs [println (fn [& args]
+                                  (swap! printed conj (apply str args)))]
+            (let [stop (repl/tail-events)]
+              (reset! printed [])
+              (events/add-event! {:timestamp (java.time.Instant/now)
+                                  :session-id "print-test"
+                                  :story-id 1
+                                  :type :text-block
+                                  :content {:text "hello world"}})
+              (is (= 1 (count @printed))
+                  "should print exactly one line per event")
+              (is (re-find #"text-block" (first @printed))
+                  "should include event type in output")
+              (stop))))))
+
+    (testing "respects filter predicate"
+      (with-events-buffer
+        (let [printed (atom [])
+              ;; Only capture :tool-use-block events
+              pred #(= :tool-use-block (:type %))]
+          (with-redefs [println (fn [& args]
+                                  (swap! printed conj (apply str args)))]
+            (let [stop (repl/tail-events pred)]
+              (reset! printed [])
+              ;; Add text-block - should be filtered out
+              (events/add-event! {:timestamp (java.time.Instant/now)
+                                  :session-id "filter-test"
+                                  :story-id 1
+                                  :type :text-block
+                                  :content {:text "filtered"}})
+              ;; Add tool-use-block - should pass filter
+              (events/add-event! {:timestamp (java.time.Instant/now)
+                                  :session-id "filter-test"
+                                  :story-id 1
+                                  :type :tool-use-block
+                                  :content {:name "test-tool"}})
+              (is (= 1 (count @printed))
+                  "should only print events matching predicate")
+              (is (re-find #"tool-use-block" (first @printed))
+                  "printed event should be the filtered type")
+              (stop))))))
+
+    (testing "respects :color? false option"
+      (with-events-buffer
+        (let [printed (atom [])]
+          (with-redefs [println (fn [& args]
+                                  (swap! printed conj (apply str args)))]
+            (let [stop (repl/tail-events nil {:color? false})]
+              (reset! printed [])
+              (events/add-event! {:timestamp (java.time.Instant/now)
+                                  :session-id "color-test"
+                                  :story-id 1
+                                  :type :text-block
+                                  :content {:text "no color"}})
+              ;; Without colors, should not contain ANSI escape codes
+              (let [output (first @printed)]
+                (is (not (re-find #"\u001b\[" output))
+                    "should not contain ANSI escape codes when color? is false"))
+              (stop))))))
+
+    (testing "respects :max-content-len option"
+      (with-events-buffer
+        (let [printed (atom [])]
+          (with-redefs [println (fn [& args]
+                                  (swap! printed conj (apply str args)))]
+            (let [stop (repl/tail-events nil {:max-content-len 10})]
+              (reset! printed [])
+              (events/add-event! {:timestamp (java.time.Instant/now)
+                                  :session-id "len-test"
+                                  :story-id 1
+                                  :type :text-block
+                                  :content {:text "this is a very long text"}})
+              ;; With max-content-len 10, content should be truncated with ...
+              (let [output (first @printed)]
+                (is (re-find #"\.\.\." output)
+                    "should truncate long content with ellipsis"))
+              (stop))))))
+
+    (testing "handles multiple events in quick succession"
+      (with-events-buffer
+        (let [printed (atom [])]
+          (with-redefs [println (fn [& args]
+                                  (swap! printed conj (apply str args)))]
+            (let [stop (repl/tail-events)]
+              (reset! printed [])
+              ;; Add multiple events in quick succession
+              (events/add-event! {:timestamp (java.time.Instant/now)
+                                  :session-id "multi-test"
+                                  :story-id 1
+                                  :type :text-block})
+              (events/add-event! {:timestamp (java.time.Instant/now)
+                                  :session-id "multi-test"
+                                  :story-id 1
+                                  :type :tool-use-block})
+              (events/add-event! {:timestamp (java.time.Instant/now)
+                                  :session-id "multi-test"
+                                  :story-id 1
+                                  :type :result-message})
+              (is (= 3 (count @printed))
+                  "should print each event separately")
+              (stop))))))))
