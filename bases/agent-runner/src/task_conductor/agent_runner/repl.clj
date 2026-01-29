@@ -295,8 +295,7 @@
      (run-story nil arg1 arg2)
      (run-story arg1 arg2 {})))
   ([workspace story-id opts]
-   (let [resolved-path (console/resolve-workspace workspace)
-         current (console/current-state workspace)]
+   (let [current (console/current-state workspace)]
      (when (not= :idle current)
        (throw (ex-info (str "Cannot run story: console is " current ", expected :idle")
                        {:type :invalid-state
@@ -310,8 +309,8 @@
                   (assoc :flow-model (flow/story-flow-model orchestrator/run-mcp-tasks story-id))
                   dev-env
                   (assoc :dev-env dev-env))
-           ;; Pass workspace path directly to orchestrator
-           result (orchestrator/execute-story story-id resolved-path opts)]
+           ;; Pass workspace directly - orchestrator/console functions resolve internally
+           result (orchestrator/execute-story story-id workspace opts)]
        (case (:outcome result)
          :complete
          (println (str "Story complete! ("

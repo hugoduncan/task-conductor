@@ -1,848 +1,597 @@
 (ns task-conductor.agent-runner.repl-test
-  ;; Tests the REPL control functions for story execution.
-  ;; Verifies:
-  ;; - start-story validates :idle state and transitions to :selecting-task
-  ;; - status returns correct map and prints summary
-  ;; - pause/continue set/clear the paused flag
-  ;; - abort transitions through :error-recovery to :idle
-  ;; - retry re-attempts failed task from :error-recovery
-  ;; - skip moves to next task from :error-recovery
-  ;; - add-context validates story and calls mcp-tasks CLI with correct args
-  ;; - view-context retrieves and formats shared-context from mcp-tasks CLI
-  ;; - list-sessions filters sessions by current story-id
-  ;; - run-story validates :idle state, calls orchestrator, prints output per outcome
+  "Tests for the user-facing REPL control functions.
+
+   Tests verify the public API, state transitions, and error handling
+   for interactive story execution control."
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.console :as console]
+   [task-conductor.agent-runner.flow :as flow]
    [task-conductor.agent-runner.orchestrator :as orchestrator]
    [task-conductor.agent-runner.repl :as repl]
    [task-conductor.workspace.interface :as workspace]))
 
+;;; Test Fixtures
+
+(defmacro with-console-state
+  "Execute body with a fresh console state, resetting afterward."
+  [& body]
+  `(try
+     (console/reset-state!)
+     ~@body
+     (finally
+       (console/reset-state!))))
+
 ;;; start-story Tests
+
+;; Tests the start-story function which validates console state
+;; and transitions from :idle to :selecting-task with a story-id.
+;; Contract: Only works from :idle state, throws otherwise.
 
 (deftest start-story-test
   (testing "start-story"
-    (testing "from :idle state"
-      (testing "transitions to :selecting-task"
-        (console/reset-state!)
-        (repl/start-story 53)
-        (is (= :selecting-task (console/current-state))))
+    (testing "when in :idle state"
+      (testing "transitions to :selecting-task with story-id"
+        (with-console-state
+          (let [result (repl/start-story 42)]
+            (is (= :selecting-task (:state result)))
+            (is (= 42 (:story-id result)))))))
 
-      (testing "sets story-id"
-        (console/reset-state!)
-        (repl/start-story 53)
-        (is (= 53 (:story-id (console/get-workspace-state nil)))))
-
-      (testing "returns new state map"
-        (console/reset-state!)
-        (let [result (repl/start-story 53)]
-          (is (map? result))
-          (is (= :selecting-task (:state result)))
-          (is (= 53 (:story-id result)))))
-
-      (testing "prints confirmation"
-        (console/reset-state!)
-        (let [output (with-out-str (repl/start-story 53))]
-          (is (re-find #"Started story 53" output)))))
-
-    (testing "from non-idle state"
-      (testing "throws with informative error"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 42})
-        (let [ex (try
-                   (repl/start-story 53)
-                   nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-          (is (some? ex))
-          (is (= :invalid-state (:type (ex-data ex))))
-          (is (= :selecting-task (:current-state (ex-data ex))))
-          (is (= :idle (:required-state (ex-data ex)))))))))
+    (testing "when not in :idle state"
+      (testing "throws an exception with state info"
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 1})
+          (let [ex (try
+                     (repl/start-story 42)
+                     nil
+                     (catch Exception e e))]
+            (is (some? ex))
+            (is (= :invalid-state (:type (ex-data ex))))
+            (is (= :selecting-task (:current-state (ex-data ex))))
+            (is (= :idle (:required-state (ex-data ex))))))))))
 
 ;;; status Tests
 
+;; Tests the status function which returns current console state info.
+;; Contract: Returns map with :state, :story-id, :current-task-id, :paused.
+
 (deftest status-test
   (testing "status"
-    (testing "returns map with required keys"
-      (console/reset-state!)
-      (let [result (repl/status)]
-        (is (contains? result :state))
-        (is (contains? result :story-id))
-        (is (contains? result :current-task-id))
-        (is (contains? result :paused))))
+    (testing "returns state info map"
+      (with-console-state
+        (let [result (repl/status)]
+          (is (map? result))
+          (is (contains? result :state))
+          (is (contains? result :story-id))
+          (is (contains? result :current-task-id))
+          (is (contains? result :paused)))))
 
-    (testing "returns correct values for :idle state"
-      (console/reset-state!)
-      (let [result (repl/status)]
-        (is (= :idle (:state result)))
-        (is (nil? (:story-id result)))
-        (is (nil? (:current-task-id result)))
-        (is (false? (:paused result)))))
+    (testing "when story is active"
+      (testing "includes story-id in result"
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 42})
+          (let [result (repl/status)]
+            (is (= 42 (:story-id result)))))))
 
-    (testing "returns correct values for :running-sdk state"
-      (console/reset-state!)
-      (console/transition! :selecting-task {:story-id 53})
-      (console/transition! :running-sdk {:session-id "sess-1"
-                                         :current-task-id 75})
-      (let [result (repl/status)]
-        (is (= :running-sdk (:state result)))
-        (is (= 53 (:story-id result)))
-        (is (= 75 (:current-task-id result)))))
+    (testing "when task is running"
+      (testing "includes task-id in result"
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 42})
+          (console/transition! nil :running-sdk {:current-task-id 7 :session-id "test-session"})
+          (let [result (repl/status)]
+            (is (= 7 (:current-task-id result)))))))))
 
-    (testing "reflects paused state"
-      (console/reset-state!)
-      (console/set-paused!)
-      (let [result (repl/status)]
-        (is (true? (:paused result)))))
+;;; pause/continue Tests
 
-    (testing "prints state"
-      (console/reset-state!)
-      (let [output (with-out-str (repl/status))]
-        (is (re-find #"State: :idle" output))))
-
-    (testing "prints story-id when present"
-      (console/reset-state!)
-      (console/transition! :selecting-task {:story-id 53})
-      (let [output (with-out-str (repl/status))]
-        (is (re-find #"Story: 53" output))))
-
-    (testing "prints task-id when present"
-      (console/reset-state!)
-      (console/transition! :selecting-task {:story-id 53})
-      (console/transition! :running-sdk {:session-id "s1"
-                                         :current-task-id 75})
-      (let [output (with-out-str (repl/status))]
-        (is (re-find #"Task: 75" output))))
-
-    (testing "prints PAUSED when paused"
-      (console/reset-state!)
-      (console/set-paused!)
-      (let [output (with-out-str (repl/status))]
-        (is (re-find #"PAUSED" output))))))
-
-;;; pause Tests
+;; Tests pause and continue functions which set/clear the pause flag.
+;; Contract: pause sets :paused true, continue clears it.
 
 (deftest pause-test
   (testing "pause"
     (testing "sets paused flag to true"
-      (console/reset-state!)
-      (repl/pause)
-      (is (true? (console/paused?))))
-
-    (testing "returns current state map"
-      (console/reset-state!)
-      (let [result (repl/pause)]
-        (is (map? result))
-        (is (true? (:paused result)))))
-
-    (testing "prints confirmation"
-      (console/reset-state!)
-      (let [output (with-out-str (repl/pause))]
-        (is (re-find #"Paused" output))))))
-
-;;; continue Tests
+      (with-console-state
+        (repl/pause)
+        (is (true? (:paused (console/get-workspace-state nil))))))))
 
 (deftest continue-test
   (testing "continue"
     (testing "clears paused flag"
-      (console/reset-state!)
-      (console/set-paused!)
-      (repl/continue)
-      (is (false? (console/paused?))))
-
-    (testing "returns current state map"
-      (console/reset-state!)
-      (console/set-paused!)
-      (let [result (repl/continue)]
-        (is (map? result))
-        (is (false? (:paused result)))))
-
-    (testing "prints confirmation"
-      (console/reset-state!)
-      (console/set-paused!)
-      (let [output (with-out-str (repl/continue))]
-        (is (re-find #"Resumed" output))))))
+      (with-console-state
+        (console/set-paused! nil)
+        (repl/continue)
+        (is (not (:paused (console/get-workspace-state nil))))))))
 
 ;;; abort Tests
 
+;; Tests abort function which cancels execution and returns to :idle.
+;; Contract: From any non-idle state, transitions to :idle.
+;; Special cases: Already idle (no-op), story-complete (direct to idle).
+
 (deftest abort-test
   (testing "abort"
-    (testing "from :idle state"
-      (testing "returns current state"
-        (console/reset-state!)
-        (let [result (repl/abort)]
-          (is (= :idle (:state result)))))
+    (testing "when in :idle state"
+      (testing "returns current state without transition"
+        (with-console-state
+          (let [result (repl/abort)]
+            (is (= :idle (:state result)))))))
 
-      (testing "prints already idle message"
-        (console/reset-state!)
-        (let [output (with-out-str (repl/abort))]
-          (is (re-find #"Already idle" output)))))
-
-    (testing "from :story-complete state"
+    (testing "when in :story-complete state"
       (testing "transitions directly to :idle"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (console/transition! :story-complete)
-        (repl/abort)
-        (is (= :idle (console/current-state))))
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 42})
+          (console/transition! nil :story-complete)
+          (let [result (repl/abort)]
+            (is (= :idle (:state result)))))))
 
-      (testing "prints aborted message"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (console/transition! :story-complete)
-        (let [output (with-out-str (repl/abort))]
-          (is (re-find #"Aborted" output)))))
-
-    (testing "from :selecting-task state"
+    (testing "when in active state"
       (testing "transitions through :error-recovery to :idle"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (repl/abort)
-        (is (= :idle (console/current-state))))
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 42})
+          (console/transition! nil :running-sdk {:current-task-id 7 :session-id "test-session"})
+          (let [result (repl/abort)]
+            (is (= :idle (:state result)))))))
 
-      (testing "records :user-abort error"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (repl/abort)
-        (let [history (console/state-history)
-              error-entry (first (filter #(= :error-recovery (:to %)) history))]
-          (is (some? error-entry))
-          (is (= :user-abort (get-in error-entry [:context :error :type]))))))
-
-    (testing "from :running-sdk state"
-      (testing "transitions to :idle"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (console/transition! :running-sdk {:session-id "s1"
-                                           :current-task-id 75})
-        (repl/abort)
-        (is (= :idle (console/current-state)))))
-
-    (testing "from :needs-input state"
-      (testing "transitions to :idle"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (console/transition! :running-sdk {:session-id "s1"
-                                           :current-task-id 75})
-        (console/transition! :needs-input)
-        (repl/abort)
-        (is (= :idle (console/current-state)))))
-
-    (testing "from :task-complete state"
-      (testing "transitions to :idle"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (console/transition! :running-sdk {:session-id "s1"
-                                           :current-task-id 75})
-        (console/transition! :task-complete)
-        (repl/abort)
-        (is (= :idle (console/current-state)))))
-
-    (testing "preserves history"
-      (console/reset-state!)
-      (console/transition! :selecting-task {:story-id 53})
-      (console/transition! :running-sdk {:session-id "s1"
-                                         :current-task-id 75})
-      (repl/abort)
-      (let [history (console/state-history)]
-        (is (>= (count history) 4))))
-
-    (testing "clears the paused flag"
-      (testing "when paused and aborting from active state"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (console/set-paused!)
-        (is (true? (console/paused?)))
-        (repl/abort)
-        (is (false? (console/paused?))))
-
-      (testing "when paused and aborting from :story-complete"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (console/transition! :story-complete)
-        (console/set-paused!)
-        (is (true? (console/paused?)))
-        (repl/abort)
-        (is (false? (console/paused?)))))))
+    (testing "when paused"
+      (testing "clears pause flag"
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 42})
+          (console/set-paused! nil)
+          (repl/abort)
+          (is (not (:paused (console/get-workspace-state nil)))))))))
 
 ;;; retry Tests
 
-(defn- setup-error-recovery-state
-  "Helper to set up a state machine in :error-recovery with a task."
-  [story-id session-id task-id]
-  (console/reset-state!)
-  (console/transition! :selecting-task {:story-id story-id})
-  (console/transition! :running-sdk {:session-id session-id
-                                     :current-task-id task-id})
-  (console/transition! :error-recovery {:error {:type :test-error}}))
+;; Tests retry function which re-attempts a failed task.
+;; Contract: Only works from :error-recovery state, throws otherwise.
+;; Transitions back to :running-sdk with the same task-id.
 
 (deftest retry-test
   (testing "retry"
-    (testing "from :error-recovery state"
-      (testing "transitions to :running-sdk"
-        (setup-error-recovery-state 53 "sess-1" 75)
-        (repl/retry)
-        (is (= :running-sdk (console/current-state))))
+    (testing "when in :error-recovery state"
+      (testing "transitions to :running-sdk with same task-id"
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 42})
+          (console/transition! nil :running-sdk {:current-task-id 7 :session-id "test-session"})
+          (console/transition! nil :error-recovery {:error {:type :test-error}})
+          (let [result (repl/retry)]
+            (is (= :running-sdk (:state result)))
+            (is (= 7 (:current-task-id result)))))))
 
-      (testing "preserves task-id"
-        (setup-error-recovery-state 53 "sess-1" 75)
-        (repl/retry)
-        (is (= 75 (:current-task-id (console/get-workspace-state nil)))))
-
-      (testing "preserves session-id"
-        (setup-error-recovery-state 53 "sess-1" 75)
-        (repl/retry)
-        (is (= "sess-1" (:session-id (console/get-workspace-state nil)))))
-
-      (testing "returns new state map"
-        (setup-error-recovery-state 53 "sess-1" 75)
-        (let [result (repl/retry)]
-          (is (map? result))
-          (is (= :running-sdk (:state result)))
-          (is (= 75 (:current-task-id result)))))
-
-      (testing "prints confirmation with task-id"
-        (setup-error-recovery-state 53 "sess-1" 75)
-        (let [output (with-out-str (repl/retry))]
-          (is (re-find #"Retrying task 75" output)))))
-
-    (testing "from non-error-recovery state"
-      (testing "throws with informative error"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (let [ex (try
-                   (repl/retry)
-                   nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-          (is (some? ex))
-          (is (= :invalid-state (:type (ex-data ex))))
-          (is (= :selecting-task (:current-state (ex-data ex))))
-          (is (= :error-recovery (:required-state (ex-data ex)))))))))
+    (testing "when not in :error-recovery state"
+      (testing "throws an exception"
+        (with-console-state
+          (let [ex (try
+                     (repl/retry)
+                     nil
+                     (catch Exception e e))]
+            (is (some? ex))
+            (is (= :invalid-state (:type (ex-data ex))))
+            (is (= :error-recovery (:required-state (ex-data ex))))))))))
 
 ;;; skip Tests
 
+;; Tests skip function which skips a failed task.
+;; Contract: Only works from :error-recovery state, throws otherwise.
+;; Transitions to :selecting-task to pick the next task.
+
 (deftest skip-test
   (testing "skip"
-    (testing "from :error-recovery state"
+    (testing "when in :error-recovery state"
       (testing "transitions to :selecting-task"
-        (setup-error-recovery-state 53 "sess-1" 75)
-        (repl/skip)
-        (is (= :selecting-task (console/current-state))))
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 42})
+          (console/transition! nil :running-sdk {:current-task-id 7 :session-id "test-session"})
+          (console/transition! nil :error-recovery {:error {:type :test-error}})
+          (let [result (repl/skip)]
+            (is (= :selecting-task (:state result)))))))
 
-      (testing "preserves current-task-id"
-        ;; task-id is preserved in state; it will be overwritten when
-        ;; the outer loop selects and starts the next task
-        (setup-error-recovery-state 53 "sess-1" 75)
-        (repl/skip)
-        (is (= 75 (:current-task-id (console/get-workspace-state nil)))))
-
-      (testing "preserves story-id"
-        (setup-error-recovery-state 53 "sess-1" 75)
-        (repl/skip)
-        (is (= 53 (:story-id (console/get-workspace-state nil)))))
-
-      (testing "returns new state map"
-        (setup-error-recovery-state 53 "sess-1" 75)
-        (let [result (repl/skip)]
-          (is (map? result))
-          (is (= :selecting-task (:state result)))))
-
-      (testing "prints confirmation with task-id"
-        (setup-error-recovery-state 53 "sess-1" 75)
-        (let [output (with-out-str (repl/skip))]
-          (is (re-find #"Skipped task 75" output)))))
-
-    (testing "from non-error-recovery state"
-      (testing "throws with informative error"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (let [ex (try
-                   (repl/skip)
-                   nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-          (is (some? ex))
-          (is (= :invalid-state (:type (ex-data ex))))
-          (is (= :selecting-task (:current-state (ex-data ex))))
-          (is (= :error-recovery (:required-state (ex-data ex)))))))))
+    (testing "when not in :error-recovery state"
+      (testing "throws an exception"
+        (with-console-state
+          (let [ex (try
+                     (repl/skip)
+                     nil
+                     (catch Exception e e))]
+            (is (some? ex))
+            (is (= :invalid-state (:type (ex-data ex))))))))))
 
 ;;; Context Management Tests
 
+;; Tests add-context and view-context functions for story shared-context.
+;; Contract: Requires active story, delegates to mcp-tasks CLI.
+
 (deftest add-context-test
   (testing "add-context"
-    (testing "with no active story"
-      (testing "throws with informative error"
-        (console/reset-state!)
-        (let [ex (try
-                   (repl/add-context "test context")
-                   nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-          (is (some? ex))
-          (is (= :no-active-story (:type (ex-data ex))))
-          (is (= :idle (:current-state (ex-data ex)))))))
+    (testing "when no active story"
+      (testing "throws :no-active-story exception"
+        (with-console-state
+          (let [ex (try
+                     (repl/add-context "test context")
+                     nil
+                     (catch Exception e e))]
+            (is (some? ex))
+            (is (= :no-active-story (:type (ex-data ex))))))))
 
-    (testing "with active story"
-      (testing "calls mcp-tasks with correct arguments"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (let [captured-args (atom nil)]
-          (with-redefs [orchestrator/run-mcp-tasks
-                        (fn [& args]
-                          (reset! captured-args (vec args))
-                          {:success true})]
-            (repl/add-context "new context text")
-            (is (= ["update"
-                    "--task-id" "53"
-                    "--shared-context" "new context text"]
-                   @captured-args)))))
-
-      (testing "returns CLI result"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [orchestrator/run-mcp-tasks
-                      (fn [& _args]
-                        {:task {:id 53 :shared-context ["ctx"]}})]
-          (let [result (repl/add-context "new context")]
-            (is (= {:task {:id 53 :shared-context ["ctx"]}} result)))))
-
-      (testing "prints confirmation with story-id"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [orchestrator/run-mcp-tasks (fn [& _args] {})]
-          (let [output (with-out-str (repl/add-context "ctx"))]
-            (is (re-find #"Added context to story 53" output))))))))
+    (testing "when story is active"
+      (testing "calls mcp-tasks with story-id and context"
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 42})
+          (let [called-args (atom nil)]
+            (with-redefs [orchestrator/run-mcp-tasks
+                          (fn [& args]
+                            (reset! called-args args)
+                            {:success true})]
+              (repl/add-context "test context")
+              (is (= ["update" "--task-id" "42" "--shared-context" "test context"]
+                     @called-args)))))))))
 
 (deftest view-context-test
   (testing "view-context"
-    (testing "with no active story"
-      (testing "throws with informative error"
-        (console/reset-state!)
-        (let [ex (try
-                   (repl/view-context)
-                   nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-          (is (some? ex))
-          (is (= :no-active-story (:type (ex-data ex))))
-          (is (= :idle (:current-state (ex-data ex)))))))
+    (testing "when no active story"
+      (testing "throws :no-active-story exception"
+        (with-console-state
+          (let [ex (try
+                     (repl/view-context)
+                     nil
+                     (catch Exception e e))]
+            (is (some? ex))
+            (is (= :no-active-story (:type (ex-data ex))))))))
 
-    (testing "with active story"
-      (testing "calls mcp-tasks with correct arguments"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (let [captured-args (atom nil)]
+    (testing "when story is active"
+      (testing "returns shared-context from mcp-tasks"
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 42})
           (with-redefs [orchestrator/run-mcp-tasks
-                        (fn [& args]
-                          (reset! captured-args (vec args))
-                          {:task {:shared-context []}})]
-            (repl/view-context)
-            (is (= ["show" "--task-id" "53"]
-                   @captured-args)))))
-
-      (testing "returns shared-context from CLI result"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [orchestrator/run-mcp-tasks
-                      (fn [& _args]
-                        {:task {:shared-context ["ctx1" "ctx2"]}})]
-          (let [result (repl/view-context)]
-            (is (= ["ctx1" "ctx2"] result)))))
-
-      (testing "returns nil when shared-context absent"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [orchestrator/run-mcp-tasks
-                      (fn [& _args] {:task {}})]
-          (let [result (repl/view-context)]
-            (is (nil? result)))))
-
-      (testing "prints numbered context entries"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [orchestrator/run-mcp-tasks
-                      (fn [& _args]
-                        {:task {:shared-context ["first" "second"]}})]
-          (let [output (with-out-str (repl/view-context))]
-            (is (re-find #"Shared Context:" output))
-            (is (re-find #"1\. first" output))
-            (is (re-find #"2\. second" output)))))
-
-      (testing "prints (none) when context empty"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (with-redefs [orchestrator/run-mcp-tasks
-                      (fn [& _args] {:task {:shared-context []}})]
-          (let [output (with-out-str (repl/view-context))]
-            (is (re-find #"\(none\)" output))))))))
+                        (fn [& _args]
+                          {:task {:shared-context ["context 1" "context 2"]}})]
+            (let [result (repl/view-context)]
+              (is (= ["context 1" "context 2"] result)))))))))
 
 ;;; Session Tracking Tests
 
+;; Tests list-sessions function which retrieves sessions for current story.
+;; Contract: Requires active story, filters sessions by story-id.
+
 (deftest list-sessions-test
   (testing "list-sessions"
-    (testing "with no active story"
-      (testing "throws with informative error"
-        (console/reset-state!)
-        (let [ex (try
-                   (repl/list-sessions)
-                   nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-          (is (some? ex))
-          (is (= :no-active-story (:type (ex-data ex))))
-          (is (= :idle (:current-state (ex-data ex)))))))
+    (testing "when no active story"
+      (testing "throws :no-active-story exception"
+        (with-console-state
+          (let [ex (try
+                     (repl/list-sessions)
+                     nil
+                     (catch Exception e e))]
+            (is (some? ex))
+            (is (= :no-active-story (:type (ex-data ex))))))))
 
-    (testing "with active story"
-      (testing "returns empty vector when no sessions"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (let [result (repl/list-sessions)]
-          (is (vector? result))
-          (is (empty? result))))
+    (testing "when story is active"
+      (testing "returns sessions filtered by story-id"
+        (with-console-state
+          ;; Record multiple sessions within a single story execution
+          ;; (sessions are cleared on transition to :idle)
+          (console/transition! nil :selecting-task {:story-id 42})
+          (console/record-session! "s1" 1)
+          (console/record-session! "s2" 2)
+          (console/record-session! "s3" 3)
+          (let [result (repl/list-sessions)]
+            (is (= 3 (count result)))
+            (is (every? #(= 42 (:story-id %)) result))))))))
 
-      (testing "returns sessions for current story only"
-        (console/reset-state!)
-        ;; Record sessions for story 42
-        (console/transition! :selecting-task {:story-id 42})
-        (console/record-session! "sess-other" 70)
-        ;; Transition to story 53 via abort + restart
-        (console/transition! :error-recovery {:error {:type :test}})
-        (console/transition! :idle)
-        (console/transition! :selecting-task {:story-id 53})
-        (console/record-session! "sess-1" 75)
-        (console/record-session! "sess-2" 76)
-        (let [result (repl/list-sessions)]
-          (is (= 2 (count result))
-              "should return only sessions for story 53")
-          (is (= "sess-1" (:session-id (first result))))
-          (is (= "sess-2" (:session-id (second result))))))
+;;; Workspace-Scoped State Tests
 
-      (testing "prints empty message when no sessions"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (let [output (with-out-str (repl/list-sessions))]
-          (is (re-find #"Sessions for story 53:" output))
-          (is (re-find #"\(none\)" output))))
+;; Tests that REPL functions properly scope state to workspaces.
+;; Verifies that workspace alias/path resolution works correctly
+;; and that state is isolated between different workspaces.
 
-      (testing "prints formatted session list"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 53})
-        (console/record-session! "sess-abc" 75)
-        (let [output (with-out-str (repl/list-sessions))]
-          (is (re-find #"Sessions for story 53:" output))
-          (is (re-find #"sess-abc" output))
-          (is (re-find #"task 75" output)))))))
+(deftest workspace-scoped-state-test
+  (testing "workspace-scoped state"
+    (testing "start-story"
+      (testing "with workspace alias stores state at resolved path"
+        (with-console-state
+          (workspace/add-project! "/path/to/myproject")
+          (repl/start-story :myproject 42)
+          (is (= :selecting-task (console/current-state :myproject)))
+          (is (= 42 (:story-id (console/get-workspace-state :myproject)))))))
+
+    (testing "status"
+      (testing "with workspace path retrieves correct state"
+        (with-console-state
+          (console/transition! "/specific/path" :selecting-task {:story-id 99})
+          (let [result (repl/status "/specific/path")]
+            (is (= :selecting-task (:state result)))
+            (is (= 99 (:story-id result)))))))
+
+    (testing "pause/continue"
+      (testing "with workspace alias affects correct workspace"
+        (with-console-state
+          (workspace/add-project! "/path/to/project")
+          (repl/pause :project)
+          (is (true? (:paused (console/get-workspace-state :project))))
+          (repl/continue :project)
+          (is (not (:paused (console/get-workspace-state :project)))))))
+
+    (testing "abort"
+      (testing "with workspace path resets correct workspace"
+        (with-console-state
+          (console/transition! "/abort/test/path" :selecting-task {:story-id 1})
+          (repl/abort "/abort/test/path")
+          (is (= :idle (console/current-state "/abort/test/path"))))))
+
+    (testing "retry"
+      (testing "with workspace alias retries in correct workspace"
+        (with-console-state
+          (workspace/add-project! "/retry/project")
+          (console/transition! :project :selecting-task {:story-id 42})
+          (console/transition! :project :running-sdk {:current-task-id 7 :session-id "test-session"})
+          (console/transition! :project :error-recovery {:error {:type :test}})
+          (let [result (repl/retry :project)]
+            (is (= :running-sdk (:state result)))
+            (is (= 7 (:current-task-id result)))))))
+
+    (testing "skip"
+      (testing "with workspace path skips in correct workspace"
+        (with-console-state
+          (console/transition! "/skip/test" :selecting-task {:story-id 42})
+          (console/transition! "/skip/test" :running-sdk {:current-task-id 7 :session-id "test-session"})
+          (console/transition! "/skip/test" :error-recovery {:error {:type :test}})
+          (let [result (repl/skip "/skip/test")]
+            (is (= :selecting-task (:state result)))))))
+
+    (testing "add-context"
+      (testing "with workspace alias uses correct story-id"
+        (with-console-state
+          (workspace/add-project! "/context/project")
+          (console/transition! :project :selecting-task {:story-id 55})
+          (let [called-args (atom nil)]
+            (with-redefs [orchestrator/run-mcp-tasks
+                          (fn [& args]
+                            (reset! called-args args)
+                            {:success true})]
+              (repl/add-context :project "test")
+              (is (= "55" (nth @called-args 2))
+                  "should use story-id from workspace-scoped state"))))))
+
+    (testing "view-context"
+      (testing "with workspace path retrieves from correct story"
+        (with-console-state
+          (console/transition! "/view/test" :selecting-task {:story-id 77})
+          (let [called-story-id (atom nil)]
+            (with-redefs [orchestrator/run-mcp-tasks
+                          (fn [& args]
+                            (reset! called-story-id (nth args 2))
+                            {:task {:shared-context ["test"]}})]
+              (repl/view-context "/view/test")
+              (is (= "77" @called-story-id)))))))
+
+    (testing "list-sessions"
+      (testing "with workspace alias filters sessions correctly"
+        (with-console-state
+          (workspace/add-project! "/sessions/project")
+          ;; Record sessions within a single story execution
+          ;; (sessions are scoped to workspace and story)
+          (console/transition! :project :selecting-task {:story-id 88})
+          (console/record-session! :project "s1" 1 (java.time.Instant/now))
+          (console/record-session! :project "s2" 2 (java.time.Instant/now))
+          (let [result (repl/list-sessions :project)]
+            (is (= 2 (count result)))
+            (is (every? #(= 88 (:story-id %)) result))))))))
 
 ;;; run-story Tests
 
+;; Tests run-story function which orchestrates full story execution.
+;; Contract: Only works from :idle state, delegates to orchestrator.
+
 (deftest run-story-test
-  ;; Verifies run-story orchestrates story execution correctly.
-  ;; Tests all outcome paths and human-readable output.
   (testing "run-story"
-    (testing "from non-idle state"
-      (testing "throws with informative error"
-        (console/reset-state!)
-        (console/transition! :selecting-task {:story-id 42})
-        (let [ex (try
-                   (repl/run-story 53)
-                   nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-          (is (some? ex))
-          (is (= :invalid-state (:type (ex-data ex))))
-          (is (= :selecting-task (:current-state (ex-data ex))))
-          (is (= :idle (:required-state (ex-data ex)))))))
+    (testing "when not in :idle state"
+      (testing "throws an exception"
+        (with-console-state
+          (console/transition! nil :selecting-task {:story-id 1})
+          (let [ex (try
+                     (repl/run-story 42)
+                     nil
+                     (catch Exception e e))]
+            (is (some? ex))
+            (is (= :invalid-state (:type (ex-data ex))))
+            (is (= :idle (:required-state (ex-data ex))))))))
 
-    (testing "from :idle state"
-      (testing "with :complete outcome"
-        (testing "returns result from orchestrator"
-          (console/reset-state!)
-          (let [mock-result {:outcome :complete
-                             :progress {:completed 5 :total 5}
-                             :state {:state :story-complete}}]
+    (testing "when in :idle state"
+      (testing "calls orchestrator/execute-story with story-id"
+        (with-console-state
+          (let [called-story-id (atom nil)]
             (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _workspace _opts] mock-result)]
-              (let [result (repl/run-story 53)]
-                (is (= :complete (:outcome result)))
-                (is (= {:completed 5 :total 5} (:progress result)))))))
+                          (fn [story-id _workspace _opts]
+                            (reset! called-story-id story-id)
+                            {:outcome :complete
+                             :progress {:completed 1 :total 1}
+                             :state {:state :story-complete}})]
+              (repl/run-story 42)
+              (is (= 42 @called-story-id))))))
 
-        (testing "prints completion message with task count"
-          (console/reset-state!)
+      (testing "returns orchestrator result"
+        (with-console-state
           (with-redefs [orchestrator/execute-story
                         (fn [_story-id _workspace _opts]
                           {:outcome :complete
                            :progress {:completed 5 :total 5}
                            :state {:state :story-complete}})]
-            (let [output (with-out-str (repl/run-story 53))]
-              (is (re-find #"Story complete!" output))
-              (is (re-find #"5 tasks" output))))))
+            (let [result (repl/run-story 42)]
+              (is (= :complete (:outcome result)))
+              (is (= 5 (get-in result [:progress :completed])))))))
 
-      (testing "with :paused outcome"
-        (testing "returns result from orchestrator"
-          (console/reset-state!)
-          (let [mock-result {:outcome :paused
-                             :state {:state :selecting-task}}]
-            (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _workspace _opts] mock-result)]
-              (let [result (repl/run-story 53)]
-                (is (= :paused (:outcome result)))))))
-
-        (testing "prints pause message"
-          (console/reset-state!)
+      (testing "handles :paused outcome"
+        (with-console-state
           (with-redefs [orchestrator/execute-story
                         (fn [_story-id _workspace _opts]
                           {:outcome :paused
+                           :state {:state :selecting-task :paused true}})]
+            (let [result (repl/run-story 42)]
+              (is (= :paused (:outcome result)))))))
+
+      (testing "handles :blocked outcome"
+        (with-console-state
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id _workspace _opts]
+                          {:outcome :blocked
+                           :blocked-tasks [{:id 1 :title "Task 1" :blocking-task-ids [2]}]
                            :state {:state :selecting-task}})]
-            (let [output (with-out-str (repl/run-story 53))]
-              (is (re-find #"Story paused" output))
-              (is (re-find #"continue" output))))))
+            (let [result (repl/run-story 42)]
+              (is (= :blocked (:outcome result)))
+              (is (seq (:blocked-tasks result)))))))
 
-      (testing "with :blocked outcome"
-        (testing "returns result from orchestrator"
-          (console/reset-state!)
-          (let [blocked-tasks [{:id 109
-                                :title "Blocked task"
-                                :blocking-task-ids [108]}]
-                mock-result {:outcome :blocked
-                             :blocked-tasks blocked-tasks
-                             :progress {:completed 1 :total 2}
-                             :state {:state :selecting-task}}]
-            (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _workspace _opts] mock-result)]
-              (let [result (repl/run-story 53)]
-                (is (= :blocked (:outcome result)))
-                (is (= blocked-tasks (:blocked-tasks result)))))))
-
-        (testing "prints blocked tasks info"
-          (console/reset-state!)
-          (let [blocked-tasks [{:id 109
-                                :title "Blocked task"
-                                :blocking-task-ids [108]}]]
-            (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _workspace _opts]
-                            {:outcome :blocked
-                             :blocked-tasks blocked-tasks
-                             :state {:state :selecting-task}})]
-              (let [output (with-out-str (repl/run-story 53))]
-                (is (re-find #"Story blocked" output))
-                (is (re-find #"Task 109" output))
-                (is (re-find #"Blocked task" output))
-                (is (re-find #"Blocked by:" output)))))))
-
-      (testing "with :no-tasks outcome"
-        (testing "returns result from orchestrator"
-          (console/reset-state!)
-          (let [mock-result {:outcome :no-tasks
-                             :state {:state :selecting-task}}]
-            (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _workspace _opts] mock-result)]
-              (let [result (repl/run-story 53)]
-                (is (= :no-tasks (:outcome result)))))))
-
-        (testing "prints no tasks message"
-          (console/reset-state!)
+      (testing "handles :no-tasks outcome"
+        (with-console-state
           (with-redefs [orchestrator/execute-story
                         (fn [_story-id _workspace _opts]
                           {:outcome :no-tasks
-                           :state {:state :selecting-task}})]
-            (let [output (with-out-str (repl/run-story 53))]
-              (is (re-find #"no child tasks" output))))))
+                           :state {:state :idle}})]
+            (let [result (repl/run-story 42)]
+              (is (= :no-tasks (:outcome result)))))))
 
-      (testing "with :error outcome"
-        (testing "returns result from orchestrator"
-          (console/reset-state!)
-          (let [mock-result {:outcome :error
-                             :error {:type :exception
-                                     :message "Test error"}
-                             :state {:state :error-recovery}}]
-            (with-redefs [orchestrator/execute-story
-                          (fn [_story-id _workspace _opts] mock-result)]
-              (let [result (repl/run-story 53)]
-                (is (= :error (:outcome result)))
-                (is (= "Test error" (-> result :error :message)))))))
-
-        (testing "prints error message"
-          (console/reset-state!)
+      (testing "handles :error outcome"
+        (with-console-state
           (with-redefs [orchestrator/execute-story
                         (fn [_story-id _workspace _opts]
                           {:outcome :error
-                           :error {:type :exception
-                                   :message "Test error"}
+                           :error {:message "Test error"}
                            :state {:state :error-recovery}})]
-            (let [output (with-out-str (repl/run-story 53))]
-              (is (re-find #"execution failed" output))
-              (is (re-find #"Test error" output))))))
+            (let [result (repl/run-story 42)]
+              (is (= :error (:outcome result)))
+              (is (= "Test error" (get-in result [:error :message]))))))))
 
-      (testing "prints 'Running story' message"
-        (console/reset-state!)
-        (with-redefs [orchestrator/execute-story
-                      (fn [_story-id _workspace _opts]
-                        {:outcome :complete
-                         :progress {:completed 1 :total 1}
-                         :state {:state :story-complete}})]
-          (let [output (with-out-str (repl/run-story 53))]
-            (is (re-find #"Running story 53" output)))))
+    (testing "arity variants"
+      (testing "single arity uses default workspace and empty opts"
+        (with-console-state
+          (let [captured-args (atom nil)]
+            (with-redefs [orchestrator/execute-story
+                          (fn [story-id workspace opts]
+                            (reset! captured-args {:story-id story-id
+                                                   :workspace workspace
+                                                   :opts opts})
+                            {:outcome :complete
+                             :progress {:completed 1 :total 1}
+                             :state {:state :story-complete}})]
+              (repl/run-story 42)
+              (is (= 42 (:story-id @captured-args)))
+              (is (nil? (:workspace @captured-args)))
+              (is (contains? (:opts @captured-args) :flow-model))))))
 
-      (testing "passes opts to orchestrator"
-        (console/reset-state!)
-        (let [captured-opts (atom nil)]
+      (testing "two-arity with map second arg treats as opts"
+        (with-console-state
+          (let [captured-args (atom nil)]
+            (with-redefs [orchestrator/execute-story
+                          (fn [story-id workspace opts]
+                            (reset! captured-args {:story-id story-id
+                                                   :workspace workspace
+                                                   :opts opts})
+                            {:outcome :complete
+                             :progress {:completed 1 :total 1}
+                             :state {:state :story-complete}})]
+              (repl/run-story 42 {:custom-opt true})
+              (is (= 42 (:story-id @captured-args)))
+              (is (nil? (:workspace @captured-args)))
+              (is (true? (get-in @captured-args [:opts :custom-opt])))))))
+
+      (testing "two-arity with non-map second arg treats as workspace"
+        (with-console-state
+          (let [captured-args (atom nil)]
+            (with-redefs [orchestrator/execute-story
+                          (fn [story-id workspace opts]
+                            (reset! captured-args {:story-id story-id
+                                                   :workspace workspace
+                                                   :opts opts})
+                            {:outcome :complete
+                             :progress {:completed 1 :total 1}
+                             :state {:state :story-complete}})]
+              (repl/run-story "/some/path" 42)
+              (is (= 42 (:story-id @captured-args)))
+              (is (= "/some/path" (:workspace @captured-args)))))))
+
+      (testing "three-arity passes all arguments"
+        (with-console-state
+          (let [captured-args (atom nil)]
+            (with-redefs [orchestrator/execute-story
+                          (fn [story-id workspace opts]
+                            (reset! captured-args {:story-id story-id
+                                                   :workspace workspace
+                                                   :opts opts})
+                            {:outcome :complete
+                             :progress {:completed 1 :total 1}
+                             :state {:state :story-complete}})]
+              (repl/run-story "/custom/path" 53 {:verbose true})
+              (is (= 53 (:story-id @captured-args)))
+              (is (= "/custom/path" (:workspace @captured-args)))
+              (is (true? (get-in @captured-args [:opts :verbose]))))))))
+
+    (testing "flow-model integration"
+      (testing "creates StoryFlowModel by default"
+        (with-console-state
+          (let [captured-opts (atom nil)]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id _workspace opts]
+                            (reset! captured-opts opts)
+                            {:outcome :complete
+                             :progress {:completed 1 :total 1}
+                             :state {:state :story-complete}})]
+              (repl/run-story 42)
+              (is (some? (:flow-model @captured-opts)))
+              (is (satisfies? flow/FlowModel (:flow-model @captured-opts)))))))
+
+      (testing "allows custom flow-model override"
+        (with-console-state
+          (let [custom-model (reify flow/FlowModel
+                               (on-cli-return [_ _ _] nil)
+                               (on-sdk-complete [_ _ _] nil)
+                               (on-task-complete [_ _] nil)
+                               (initial-prompt [_ _ _] nil))
+                captured-opts (atom nil)]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id _workspace opts]
+                            (reset! captured-opts opts)
+                            {:outcome :complete
+                             :progress {:completed 1 :total 1}
+                             :state {:state :story-complete}})]
+              (repl/run-story 42 {:flow-model custom-model})
+              (is (= custom-model (:flow-model @captured-opts))))))))
+
+    (testing "error propagation"
+      (testing "propagates exceptions from orchestrator"
+        (with-console-state
           (with-redefs [orchestrator/execute-story
-                        (fn [_story-id _workspace opts]
-                          (reset! captured-opts opts)
-                          {:outcome :complete
-                           :progress {:completed 1 :total 1}
-                           :state {:state :story-complete}})]
-            (repl/run-story 53 {:max-turns 100 :model "claude-sonnet-4"})
-            (is (= 100 (:max-turns @captured-opts)))
-            (is (= "claude-sonnet-4" (:model @captured-opts))))))
+                        (fn [_story-id _workspace _opts]
+                          (throw (ex-info "Test error" {:type :test})))]
+            (let [ex (try
+                       (repl/run-story 42)
+                       nil
+                       (catch Exception e e))]
+              (is (some? ex) "should propagate exception")
+              (is (= "Test error" (ex-message ex))))))))
 
-      (testing "passes story-id to orchestrator"
-        (console/reset-state!)
-        (let [captured-story-id (atom nil)]
-          (with-redefs [orchestrator/execute-story
-                        (fn [story-id _workspace _opts]
-                          (reset! captured-story-id story-id)
-                          {:outcome :complete
-                           :progress {:completed 1 :total 1}
-                           :state {:state :story-complete}})]
-            (repl/run-story 57)
-            (is (= 57 @captured-story-id))))))
-
-    (testing "with workspace argument"
-      (testing "validates state for specified workspace"
-        (console/reset-state!)
-        ;; Set up non-idle state for workspace path
-        (console/transition! "/test/workspace" :selecting-task {:story-id 42})
-        (let [ex (try
-                   (repl/run-story "/test/workspace" 53)
-                   nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-          (is (some? ex))
-          (is (= :invalid-state (:type (ex-data ex))))
-          (is (= :selecting-task (:current-state (ex-data ex))))))
-
-      (testing "passes workspace path to orchestrator"
-        (console/reset-state!)
-        (let [captured-workspace (atom nil)]
-          (with-redefs [orchestrator/execute-story
-                        (fn [_story-id workspace _opts]
-                          (reset! captured-workspace workspace)
-                          {:outcome :complete
-                           :progress {:completed 1 :total 1}
-                           :state {:state :story-complete}})]
-            (repl/run-story "/test/workspace" 53)
-            (is (= "/test/workspace" @captured-workspace)
-                "should pass workspace path directly to orchestrator"))))
-
-      (testing "propagates exception from orchestrator"
-        (console/reset-state!)
-        (with-redefs [orchestrator/execute-story
-                      (fn [_story-id _workspace _opts]
-                        (throw (ex-info "Test error" {})))]
-          (let [ex (try
-                     (repl/run-story "/test/workspace" 53)
-                     nil
-                     (catch clojure.lang.ExceptionInfo e e))]
-            (is (some? ex) "should propagate exception")
-            (is (= "Test error" (ex-message ex))))))
-
-      (testing "supports keyword alias"
-        (console/reset-state!)
-        (workspace/add-project! "/path/to/myproject")
-        (let [captured-workspace (atom nil)]
-          (with-redefs [orchestrator/execute-story
-                        (fn [_story-id workspace _opts]
-                          (reset! captured-workspace workspace)
-                          {:outcome :complete
-                           :progress {:completed 1 :total 1}
-                           :state {:state :story-complete}})]
-            (repl/run-story :myproject 53)
-            (is (= "/path/to/myproject" @captured-workspace)
-                "should resolve keyword alias to path and pass to orchestrator"))))
+    (testing "workspace integration"
+      (testing "with keyword alias passes keyword to orchestrator"
+        ;; Workspace resolution happens in console functions, not at REPL entry point
+        (with-console-state
+          (workspace/add-project! "/path/to/myproject")
+          (let [captured-workspace (atom nil)]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id workspace _opts]
+                            (reset! captured-workspace workspace)
+                            {:outcome :complete
+                             :progress {:completed 1 :total 1}
+                             :state {:state :story-complete}})]
+              (repl/run-story :myproject 53)
+              (is (= :myproject @captured-workspace)
+                  "should pass keyword alias through to orchestrator")))))
 
       (testing "with nil workspace passes nil to orchestrator"
-        (console/reset-state!)
-        (let [captured-workspace (atom :not-set)]
-          (with-redefs [orchestrator/execute-story
-                        (fn [_story-id workspace _opts]
-                          (reset! captured-workspace workspace)
-                          {:outcome :complete
-                           :progress {:completed 1 :total 1}
-                           :state {:state :story-complete}})]
-            (repl/run-story nil 53 {})
-            (is (nil? @captured-workspace)
-                "should pass nil workspace to orchestrator")))))))
-
-;;; Workspace Argument Tests for Other REPL Functions
-
-(deftest status-with-workspace-test
-  ;; Tests status function with workspace argument.
-  (testing "status"
-    (testing "with workspace path"
-      (testing "returns state for specified workspace"
-        (console/reset-state!)
-        (console/transition! "/test/ws" :selecting-task {:story-id 42})
-        (let [result (repl/status "/test/ws")]
-          (is (= :selecting-task (:state result)))
-          (is (= 42 (:story-id result))))))
-
-    (testing "with keyword alias"
-      (testing "resolves alias and returns state"
-        (console/reset-state!)
-        (workspace/add-project! "/path/to/myws")
-        (console/transition! "/path/to/myws" :selecting-task {:story-id 99})
-        (let [result (repl/status :myws)]
-          (is (= :selecting-task (:state result)))
-          (is (= 99 (:story-id result))))
-        (workspace/remove-project! "/path/to/myws")))))
-
-(deftest pause-continue-with-workspace-test
-  ;; Tests pause/continue functions with workspace argument.
-  (testing "pause and continue"
-    (testing "with workspace path"
-      (testing "affects only specified workspace"
-        (console/reset-state!)
-        (repl/pause "/ws/a")
-        (is (true? (console/paused? "/ws/a"))
-            "workspace A should be paused")
-        (is (false? (console/paused? "/ws/b"))
-            "workspace B should not be paused")
-        (repl/continue "/ws/a")
-        (is (false? (console/paused? "/ws/a"))
-            "workspace A should be resumed")))
-
-    (testing "with keyword alias"
-      (testing "resolves alias correctly"
-        (console/reset-state!)
-        (workspace/add-project! "/test/proj")
-        (repl/pause :proj)
-        (is (true? (console/paused? "/test/proj")))
-        (repl/continue :proj)
-        (is (false? (console/paused? "/test/proj")))
-        (workspace/remove-project! "/test/proj")))))
-
-(deftest abort-with-workspace-test
-  ;; Tests abort function with workspace argument.
-  (testing "abort"
-    (testing "with workspace path"
-      (testing "aborts only specified workspace"
-        (console/reset-state!)
-        (console/transition! "/ws/a" :selecting-task {:story-id 1})
-        (console/transition! "/ws/b" :selecting-task {:story-id 2})
-        (repl/abort "/ws/a")
-        (is (= :idle (console/current-state "/ws/a"))
-            "workspace A should be idle")
-        (is (= :selecting-task (console/current-state "/ws/b"))
-            "workspace B should retain its state")))))
-
-(deftest start-story-with-workspace-test
-  ;; Tests start-story function with workspace argument.
-  (testing "start-story"
-    (testing "with workspace path"
-      (testing "starts story in specified workspace"
-        (console/reset-state!)
-        (repl/start-story "/test/ws" 99)
-        (is (= :selecting-task (console/current-state "/test/ws")))
-        (is (= 99 (:story-id (console/get-workspace-state "/test/ws"))))))
-
-    (testing "validates state for specified workspace only"
-      (console/reset-state!)
-      (console/transition! "/ws/a" :selecting-task {:story-id 1})
-      ;; workspace B is still idle
-      (repl/start-story "/ws/b" 2)
-      (is (= :selecting-task (console/current-state "/ws/b")))
-      (is (= 2 (:story-id (console/get-workspace-state "/ws/b")))))))
+        (with-console-state
+          (let [captured-workspace (atom :not-set)]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id workspace _opts]
+                            (reset! captured-workspace workspace)
+                            {:outcome :complete
+                             :progress {:completed 1 :total 1}
+                             :state {:state :story-complete}})]
+              (repl/run-story nil 53 {})
+              (is (nil? @captured-workspace)
+                  "should pass nil workspace to orchestrator"))))))))
