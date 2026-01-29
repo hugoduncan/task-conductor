@@ -494,6 +494,10 @@
    - (events) - All events for current session
    - (events session-id) - Events for a specific session (string)
    - (events filter-map) - Filter by :type, :session-id, or :story-id
+   - (events workspace arg) - Workspace-scoped query
+
+   The optional workspace parameter comes first (workspace-first convention).
+   Workspace can be: nil (focused), keyword alias, or string path.
 
    When called with no args, uses the current session-id from console state.
    Returns a vector of event maps.
