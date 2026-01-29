@@ -434,6 +434,6 @@
          event-type (:type event)
          type-str (name event-type)
          preview (truncate-string (extract-content-preview event) max-len)
-         color (when color? (get type-colors event-type ""))
+         color (when color? (type-colors event-type))
          reset (when color? ansi-reset)]
      (str ts " " color "[" type-str "]" reset " " preview))))
