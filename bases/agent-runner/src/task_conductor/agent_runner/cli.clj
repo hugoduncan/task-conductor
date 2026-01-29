@@ -37,6 +37,55 @@
                   "Failed to parse stream-json line")
         nil))))
 
+(defn- map-content-block
+  "Convert a stream-json content block to an event map.
+   Returns nil for unrecognized block types."
+  [block]
+  (case (:type block)
+    "text" {:type :text-block :text (:text block)}
+    "tool_use" {:type :tool-use-block
+                :id (:id block)
+                :name (:name block)
+                :input (:input block)}
+    "thinking" {:type :thinking-block :thinking (:thinking block)}
+    (do
+      (log/debug {:block-type (:type block)} "Unrecognized content block type")
+      nil)))
+
+(defn map-stream-message-to-events
+  "Convert a stream-json message to a vector of event-compatible maps.
+
+   Message type handling:
+   - system/init: Returns {:session-id <id>} metadata (not an event vector)
+   - assistant: Returns vector of events, one per content block
+   - result: Returns [{:type :result-message :usage <usage>}]
+   - other: Returns [] (logs at debug level)
+
+   Content block mappings:
+   - {type: \"text\"} -> {:type :text-block :text <text>}
+   - {type: \"tool_use\"} -> {:type :tool-use-block :id <id> :name <name> :input <input>}
+   - {type: \"thinking\"} -> {:type :thinking-block :thinking <text>}"
+  [msg]
+  (case (:type msg)
+    "system"
+    (if (= "init" (:subtype msg))
+      {:session-id (:session_id msg)}
+      (do
+        (log/debug {:subtype (:subtype msg)} "Unrecognized system message subtype")
+        []))
+
+    "assistant"
+    (into []
+          (keep map-content-block)
+          (get-in msg [:message :content]))
+
+    "result"
+    [{:type :result-message :usage (:usage msg)}]
+
+    (do
+      (log/debug {:message-type (:type msg)} "Unrecognized stream message type")
+      [])))
+
 (defn- stream-reader
   "Read lines from an InputStream, printing with prefix and accumulating.
    Returns the accumulated output when stream closes."

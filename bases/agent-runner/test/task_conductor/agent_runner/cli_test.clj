@@ -4,6 +4,10 @@
   ;; Contracts tested:
   ;; - parse-stream-json-line returns parsed JSON for valid input
   ;; - parse-stream-json-line returns nil for invalid/empty input
+  ;; - map-stream-message-to-events extracts session-id from system/init
+  ;; - map-stream-message-to-events maps assistant content blocks to events
+  ;; - map-stream-message-to-events maps result messages to result-message events
+  ;; - map-stream-message-to-events returns empty vector for unrecognized types
   ;; - create-session-via-cli returns session-id and response on success
   ;; - Throws :cli/timeout when process exceeds timeout
   ;; - Throws :cli/non-zero-exit when process fails
@@ -99,6 +103,111 @@
 
     (testing "returns nil for invalid JSON and logs warning"
       (is (nil? (cli/parse-stream-json-line "{invalid json"))))))
+
+;;; map-stream-message-to-events Tests
+
+(deftest map-stream-message-to-events-system-init-test
+  ;; Tests that system/init messages extract session-id metadata.
+  (testing "map-stream-message-to-events"
+    (testing "given system/init message"
+      (testing "returns session-id metadata"
+        (is (= {:session-id "abc-123"}
+               (cli/map-stream-message-to-events
+                {:type "system"
+                 :subtype "init"
+                 :session_id "abc-123"})))))
+
+    (testing "given system message with other subtype"
+      (testing "returns empty vector"
+        (is (= []
+               (cli/map-stream-message-to-events
+                {:type "system"
+                 :subtype "other"})))))))
+
+(deftest map-stream-message-to-events-assistant-test
+  ;; Tests that assistant messages map content blocks to events.
+  (testing "map-stream-message-to-events"
+    (testing "given assistant message with text block"
+      (testing "returns text-block event"
+        (is (= [{:type :text-block :text "Hello world"}]
+               (cli/map-stream-message-to-events
+                {:type "assistant"
+                 :message {:content [{:type "text"
+                                      :text "Hello world"}]}})))))
+
+    (testing "given assistant message with tool_use block"
+      (testing "returns tool-use-block event"
+        (is (= [{:type :tool-use-block
+                 :id "tool-1"
+                 :name "Read"
+                 :input {:path "/tmp/foo"}}]
+               (cli/map-stream-message-to-events
+                {:type "assistant"
+                 :message {:content [{:type "tool_use"
+                                      :id "tool-1"
+                                      :name "Read"
+                                      :input {:path "/tmp/foo"}}]}})))))
+
+    (testing "given assistant message with thinking block"
+      (testing "returns thinking-block event"
+        (is (= [{:type :thinking-block :thinking "Let me think"}]
+               (cli/map-stream-message-to-events
+                {:type "assistant"
+                 :message {:content [{:type "thinking"
+                                      :thinking "Let me think"}]}})))))
+
+    (testing "given assistant message with multiple blocks"
+      (testing "returns one event per block"
+        (is (= [{:type :thinking-block :thinking "hmm"}
+                {:type :text-block :text "Hello"}
+                {:type :tool-use-block :id "t1" :name "Bash" :input {}}]
+               (cli/map-stream-message-to-events
+                {:type "assistant"
+                 :message {:content [{:type "thinking" :thinking "hmm"}
+                                     {:type "text" :text "Hello"}
+                                     {:type "tool_use"
+                                      :id "t1"
+                                      :name "Bash"
+                                      :input {}}]}})))))
+
+    (testing "given assistant message with unrecognized block type"
+      (testing "filters out the unrecognized block"
+        (is (= [{:type :text-block :text "Hello"}]
+               (cli/map-stream-message-to-events
+                {:type "assistant"
+                 :message {:content [{:type "unknown" :data "ignored"}
+                                     {:type "text" :text "Hello"}]}})))))))
+
+(deftest map-stream-message-to-events-result-test
+  ;; Tests that result messages map to result-message events.
+  (testing "map-stream-message-to-events"
+    (testing "given result message with usage"
+      (testing "returns result-message event"
+        (is (= [{:type :result-message
+                 :usage {:input_tokens 100
+                         :output_tokens 50}}]
+               (cli/map-stream-message-to-events
+                {:type "result"
+                 :subtype "success"
+                 :usage {:input_tokens 100
+                         :output_tokens 50}})))))
+
+    (testing "given result message without usage"
+      (testing "returns result-message with nil usage"
+        (is (= [{:type :result-message :usage nil}]
+               (cli/map-stream-message-to-events
+                {:type "result"
+                 :subtype "success"})))))))
+
+(deftest map-stream-message-to-events-unrecognized-test
+  ;; Tests that unrecognized message types return empty vector.
+  (testing "map-stream-message-to-events"
+    (testing "given unrecognized message type"
+      (testing "returns empty vector"
+        (is (= []
+               (cli/map-stream-message-to-events
+                {:type "unknown"
+                 :data "something"})))))))
 
 ;;; Success Tests
 
