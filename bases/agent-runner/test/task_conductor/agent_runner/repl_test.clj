@@ -53,7 +53,8 @@
 ;;; status Tests
 
 ;; Tests the status function which returns current console state info.
-;; Contract: Returns map with :state, :story-id, :current-task-id, :paused.
+;; Contract: Returns map with :state, :story-id, :current-task-id, :paused,
+;; :executing?, and :outcome (when completed).
 
 (deftest status-test
   (testing "status"
@@ -64,7 +65,8 @@
           (is (contains? result :state))
           (is (contains? result :story-id))
           (is (contains? result :current-task-id))
-          (is (contains? result :paused)))))
+          (is (contains? result :paused))
+          (is (contains? result :executing?)))))
 
     (testing "when story is active"
       (testing "includes story-id in result"
@@ -79,7 +81,39 @@
           (console/transition! nil :selecting-task {:story-id 42})
           (console/transition! nil :running-sdk {:current-task-id 7 :session-id "test-session"})
           (let [result (repl/status)]
-            (is (= 7 (:current-task-id result)))))))))
+            (is (= 7 (:current-task-id result)))))))
+
+    (testing "execution state"
+      (testing "shows :executing? true while execution is in progress"
+        (with-console-state
+          (let [started (promise)
+                proceed (promise)]
+            (with-redefs [orchestrator/execute-story
+                          (fn [_story-id _workspace _opts]
+                            (deliver started true)
+                            (deref proceed 5000 :timeout)
+                            {:outcome :complete
+                             :progress {:completed 1 :total 1}
+                             :state {:state :story-complete}})]
+              (repl/run-story 42)
+              (deref started 1000 :timeout)
+              (let [result (repl/status)]
+                (is (true? (:executing? result))))
+              (deliver proceed true)
+              (repl/await-completion)))))
+
+      (testing "shows :executing? false and :outcome after completion"
+        (with-console-state
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id _workspace _opts]
+                          {:outcome :complete
+                           :progress {:completed 1 :total 1}
+                           :state {:state :story-complete}})]
+            (repl/run-story 42)
+            (repl/await-completion)
+            (let [result (repl/status)]
+              (is (false? (:executing? result)))
+              (is (= :complete (:outcome result))))))))))
 
 ;;; pause/continue Tests
 
@@ -380,6 +414,7 @@
 
 ;; Tests run-story function which orchestrates full story execution.
 ;; Contract: Only works from :idle state, delegates to orchestrator.
+;; run-story is non-blocking - use await-completion to get the result.
 
 (deftest run-story-test
   (testing "run-story"
@@ -396,6 +431,19 @@
             (is (= :idle (:required-state (ex-data ex))))))))
 
     (testing "when in :idle state"
+      (testing "returns immediately with :started status"
+        (with-console-state
+          (with-redefs [orchestrator/execute-story
+                        (fn [_story-id _workspace _opts]
+                          {:outcome :complete
+                           :progress {:completed 1 :total 1}
+                           :state {:state :story-complete}})]
+            (let [result (repl/run-story 42)]
+              (is (= :started (:status result)))
+              (is (= 42 (:story-id result)))
+              ;; Wait for completion to avoid dangling future
+              (repl/await-completion)))))
+
       (testing "calls orchestrator/execute-story with story-id"
         (with-console-state
           (let [called-story-id (atom nil)]
@@ -406,16 +454,18 @@
                              :progress {:completed 1 :total 1}
                              :state {:state :story-complete}})]
               (repl/run-story 42)
+              (repl/await-completion)
               (is (= 42 @called-story-id))))))
 
-      (testing "returns orchestrator result"
+      (testing "await-completion returns orchestrator result"
         (with-console-state
           (with-redefs [orchestrator/execute-story
                         (fn [_story-id _workspace _opts]
                           {:outcome :complete
                            :progress {:completed 5 :total 5}
                            :state {:state :story-complete}})]
-            (let [result (repl/run-story 42)]
+            (repl/run-story 42)
+            (let [result (repl/await-completion)]
               (is (= :complete (:outcome result)))
               (is (= 5 (get-in result [:progress :completed])))))))
 
@@ -425,7 +475,8 @@
                         (fn [_story-id _workspace _opts]
                           {:outcome :paused
                            :state {:state :selecting-task :paused true}})]
-            (let [result (repl/run-story 42)]
+            (repl/run-story 42)
+            (let [result (repl/await-completion)]
               (is (= :paused (:outcome result)))))))
 
       (testing "handles :blocked outcome"
@@ -435,7 +486,8 @@
                           {:outcome :blocked
                            :blocked-tasks [{:id 1 :title "Task 1" :blocking-task-ids [2]}]
                            :state {:state :selecting-task}})]
-            (let [result (repl/run-story 42)]
+            (repl/run-story 42)
+            (let [result (repl/await-completion)]
               (is (= :blocked (:outcome result)))
               (is (seq (:blocked-tasks result)))))))
 
@@ -445,7 +497,8 @@
                         (fn [_story-id _workspace _opts]
                           {:outcome :no-tasks
                            :state {:state :idle}})]
-            (let [result (repl/run-story 42)]
+            (repl/run-story 42)
+            (let [result (repl/await-completion)]
               (is (= :no-tasks (:outcome result)))))))
 
       (testing "handles :error outcome"
@@ -455,7 +508,8 @@
                           {:outcome :error
                            :error {:message "Test error"}
                            :state {:state :error-recovery}})]
-            (let [result (repl/run-story 42)]
+            (repl/run-story 42)
+            (let [result (repl/await-completion)]
               (is (= :error (:outcome result)))
               (is (= "Test error" (get-in result [:error :message]))))))))
 
@@ -472,6 +526,7 @@
                              :progress {:completed 1 :total 1}
                              :state {:state :story-complete}})]
               (repl/run-story 42)
+              (repl/await-completion)
               (is (= 42 (:story-id @captured-args)))
               (is (nil? (:workspace @captured-args)))
               (is (contains? (:opts @captured-args) :flow-model))))))
@@ -488,6 +543,7 @@
                              :progress {:completed 1 :total 1}
                              :state {:state :story-complete}})]
               (repl/run-story 42 {:custom-opt true})
+              (repl/await-completion)
               (is (= 42 (:story-id @captured-args)))
               (is (nil? (:workspace @captured-args)))
               (is (true? (get-in @captured-args [:opts :custom-opt])))))))
@@ -504,6 +560,7 @@
                              :progress {:completed 1 :total 1}
                              :state {:state :story-complete}})]
               (repl/run-story "/some/path" 42)
+              (repl/await-completion)
               (is (= 42 (:story-id @captured-args)))
               (is (= "/some/path" (:workspace @captured-args)))))))
 
@@ -519,6 +576,7 @@
                              :progress {:completed 1 :total 1}
                              :state {:state :story-complete}})]
               (repl/run-story "/custom/path" 53 {:verbose true})
+              (repl/await-completion)
               (is (= 53 (:story-id @captured-args)))
               (is (= "/custom/path" (:workspace @captured-args)))
               (is (true? (get-in @captured-args [:opts :verbose]))))))))
@@ -534,6 +592,7 @@
                              :progress {:completed 1 :total 1}
                              :state {:state :story-complete}})]
               (repl/run-story 42)
+              (repl/await-completion)
               (is (some? (:flow-model @captured-opts)))
               (is (satisfies? flow/FlowModel (:flow-model @captured-opts)))))))
 
@@ -552,20 +611,19 @@
                              :progress {:completed 1 :total 1}
                              :state {:state :story-complete}})]
               (repl/run-story 42 {:flow-model custom-model})
+              (repl/await-completion)
               (is (= custom-model (:flow-model @captured-opts))))))))
 
     (testing "error propagation"
-      (testing "propagates exceptions from orchestrator"
+      (testing "catches exceptions from orchestrator and returns :error outcome"
         (with-console-state
           (with-redefs [orchestrator/execute-story
                         (fn [_story-id _workspace _opts]
                           (throw (ex-info "Test error" {:type :test})))]
-            (let [ex (try
-                       (repl/run-story 42)
-                       nil
-                       (catch Exception e e))]
-              (is (some? ex) "should propagate exception")
-              (is (= "Test error" (ex-message ex))))))))
+            (repl/run-story 42)
+            (let [result (repl/await-completion)]
+              (is (= :error (:outcome result)))
+              (is (= "Test error" (get-in result [:error :message]))))))))
 
     (testing "workspace integration"
       (testing "with keyword alias passes keyword to orchestrator"
@@ -580,6 +638,7 @@
                              :progress {:completed 1 :total 1}
                              :state {:state :story-complete}})]
               (repl/run-story :myproject 53)
+              (repl/await-completion :myproject)
               (is (= :myproject @captured-workspace)
                   "should pass keyword alias through to orchestrator")))))
 
@@ -593,5 +652,6 @@
                              :progress {:completed 1 :total 1}
                              :state {:state :story-complete}})]
               (repl/run-story nil 53 {})
+              (repl/await-completion)
               (is (nil? @captured-workspace)
                   "should pass nil workspace to orchestrator"))))))))
