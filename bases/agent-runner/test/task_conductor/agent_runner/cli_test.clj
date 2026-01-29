@@ -329,10 +329,15 @@
              {:working-dir "/tmp"
               :prompt "Hi"
               :event-callback #(swap! captured-events conj %)})
-            (is (= 3 (count @captured-events)))
-            (is (= :text-block (:type (first @captured-events))))
-            (is (= :tool-use-block (:type (second @captured-events))))
-            (is (= :result-message (:type (nth @captured-events 2))))))))))
+            (is (= 4 (count @captured-events))
+                "should emit session-id-update plus 3 content events")
+            (is (= :session-id-update (:type (first @captured-events)))
+                "first event should be session-id-update")
+            (is (= "ses-1" (:session-id (first @captured-events)))
+                "session-id-update should contain the session-id")
+            (is (= :text-block (:type (second @captured-events))))
+            (is (= :tool-use-block (:type (nth @captured-events 2))))
+            (is (= :result-message (:type (nth @captured-events 3))))))))))
 
 (deftest create-session-via-cli-flush-events-test
   ;; Tests that events are flushed to persistent storage after completion.

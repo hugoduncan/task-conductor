@@ -93,6 +93,10 @@
    Parses the line, extracts session-id from init messages, tracks result
    messages, and calls event-callback for each event.
 
+   When session-id is discovered from an init message, calls event-callback
+   with {:type :session-id-update :session-id <id>} to allow callers to
+   synchronize their session-id tracking.
+
    Arguments:
    - line: The raw line string
    - session-id-atom: Atom to store session-id when found
@@ -103,7 +107,12 @@
     (let [mapped (map-stream-message-to-events parsed)]
       ;; Check if this is session-id metadata (not an event vector)
       (if (and (map? mapped) (:session-id mapped))
-        (reset! session-id-atom (:session-id mapped))
+        (do
+          (reset! session-id-atom (:session-id mapped))
+          ;; Notify callback of session-id discovery
+          (when event-callback
+            (event-callback {:type :session-id-update
+                             :session-id (:session-id mapped)})))
         ;; Otherwise it's a vector of events
         (do
           ;; Track result message for return value

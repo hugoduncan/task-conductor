@@ -226,6 +226,10 @@
    creates a callback that adds the required context fields and stores events
    in the event buffer.
 
+   Handles special event types:
+   - :session-id-update - Updates the session-id-atom (not stored as event)
+   - All other types - Stored in the event buffer with context fields
+
    Arguments:
    - context: Map with :story-id (required) and optional :task-id
    - opts: Optional map with :session-id (initial session-id, will be updated)
@@ -241,18 +245,22 @@
          story-id (:story-id context)
          task-id (:task-id context)
          callback (fn [event-map]
-                    (let [session-id @session-id-atom
-                          event (cond-> {:timestamp (java.time.Instant/now)
-                                         :session-id session-id
-                                         :story-id story-id
-                                         :type (:type event-map)
-                                         :content (dissoc event-map :type)}
-                                  task-id (assoc :task-id task-id))]
-                      (try
-                        (events/add-event! event)
-                        (catch Exception e
-                          (println "[make-cli-event-callback] Failed to add event:"
-                                   (.getMessage e))))))]
+                    ;; Handle session-id synchronization from CLI
+                    (if (= :session-id-update (:type event-map))
+                      (reset! session-id-atom (:session-id event-map))
+                      ;; Regular event - add to buffer with context
+                      (let [session-id @session-id-atom
+                            event (cond-> {:timestamp (java.time.Instant/now)
+                                           :session-id session-id
+                                           :story-id story-id
+                                           :type (:type event-map)
+                                           :content (dissoc event-map :type)}
+                                    task-id (assoc :task-id task-id))]
+                        (try
+                          (events/add-event! event)
+                          (catch Exception e
+                            (println "[make-cli-event-callback] Failed to add event:"
+                                     (.getMessage e)))))))]
      {:callback callback
       :session-id-atom session-id-atom})))
 

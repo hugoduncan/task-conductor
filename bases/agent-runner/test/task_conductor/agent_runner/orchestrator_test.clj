@@ -314,6 +314,7 @@
 (deftest execute-task-event-callback-test
   ;; Verifies that execute-task creates and wires an event callback
   ;; with story-id and task-id context, and that events are captured.
+  ;; Also verifies that session-id is synchronized from CLI init message.
   (testing "execute-task event callback wiring"
     (testing "creates event callback with story-id and task-id"
       (let [captured-callback (atom nil)]
@@ -362,6 +363,34 @@
                     "first event should be text-block")
                 (is (= :tool-use-block (:type (second evts)))
                     "second event should be tool-use-block")))))
+        (finally
+          (events/clear-events!))))
+
+    (testing "synchronizes session-id from CLI init message"
+      (events/clear-events!)
+      (try
+        (with-redefs [orchestrator/run-cli-session
+                      (fn [config _prompt]
+                        ;; Simulate CLI emitting session-id-update first, then events
+                        (let [callback (:event-callback config)]
+                          ;; First: CLI discovers real session-id from init message
+                          (callback {:type :session-id-update
+                                     :session-id "real-cli-session-789"})
+                          ;; Then: Regular events follow with correct session-id
+                          (callback {:type :text-block :text "Response"}))
+                        {:session-id "real-cli-session-789"
+                         :messages []
+                         :result {}})]
+          (let [task-info {:task-id 333
+                           :parent-id 88
+                           :worktree-path "/path/worktree"}]
+            (orchestrator/execute-task task-info)
+            ;; Verify event was captured with the synchronized session-id
+            (let [evts (events/get-events {:story-id 88})]
+              (is (= 1 (count evts))
+                  "should capture only the text-block event (not session-id-update)")
+              (is (= "real-cli-session-789" (:session-id (first evts)))
+                  "event should have the real session-id from CLI"))))
         (finally
           (events/clear-events!))))))
 
