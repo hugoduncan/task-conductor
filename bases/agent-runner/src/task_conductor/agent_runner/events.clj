@@ -130,7 +130,9 @@
          (fn [buf]
            (let [new-buf (conj buf event)]
              (if (> (count new-buf) *max-buffer-size*)
-               (subvec new-buf (- (count new-buf) *max-buffer-size*))
+               ;; vec forces a copy, preventing subvec from retaining
+               ;; a reference to the original (ever-growing) vector
+               (vec (subvec new-buf (- (count new-buf) *max-buffer-size*)))
                new-buf))))
   event)
 
