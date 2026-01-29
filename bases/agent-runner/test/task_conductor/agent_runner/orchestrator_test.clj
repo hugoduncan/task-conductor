@@ -907,3 +907,67 @@
                     (@captured-completion-callback {:state {:state :running-sdk}}))
                   ;; Wait for future to complete (with timeout to not hang test)
                   (deref f 500 nil))))))))))
+
+;;; Worktree Auto-Switch Tests
+
+(deftest maybe-switch-to-worktree-test
+  ;; Tests automatic worktree detection and cwd switching after SDK turns.
+  ;; Contracts tested:
+  ;; - Detects newly created worktrees matching story-id pattern
+  ;; - Updates console-state :cwd when worktree found
+  ;; - Returns nil when no worktree exists or already using it
+  (testing "maybe-switch-to-worktree!"
+    (testing "when worktree exists and cwd is different"
+      (testing "updates cwd to worktree path"
+        (with-clean-console-state
+          (fn []
+            (console/transition! nil :selecting-task {:story-id 42})
+            (with-redefs [shell/sh (fn [& _args]
+                                     {:exit 0
+                                      :out "/path/42-my-task  abc [42-my-task]\n"
+                                      :err ""})]
+              (let [switch-fn #'orchestrator/maybe-switch-to-worktree!
+                    result (switch-fn nil)]
+                (is (= "/path/42-my-task" result)
+                    "should return new worktree path")
+                (is (= "/path/42-my-task" (:cwd (console/get-workspace-state nil)))
+                    "should update console-state :cwd")))))))
+
+    (testing "when worktree exists and cwd already matches"
+      (testing "returns nil and does not update"
+        (with-clean-console-state
+          (fn []
+            (console/transition! nil :selecting-task {:story-id 42})
+            (console/update-workspace! nil {:cwd "/path/42-my-task"})
+            (with-redefs [shell/sh (fn [& _args]
+                                     {:exit 0
+                                      :out "/path/42-my-task  abc [42-my-task]\n"
+                                      :err ""})]
+              (let [switch-fn #'orchestrator/maybe-switch-to-worktree!
+                    result (switch-fn nil)]
+                (is (nil? result)
+                    "should return nil when already at worktree")))))))
+
+    (testing "when no worktree exists for story"
+      (testing "returns nil"
+        (with-clean-console-state
+          (fn []
+            (console/transition! nil :selecting-task {:story-id 42})
+            (with-redefs [shell/sh (fn [& _args]
+                                     {:exit 0
+                                      :out "/path/main  abc [master]\n"
+                                      :err ""})]
+              (let [switch-fn #'orchestrator/maybe-switch-to-worktree!
+                    result (switch-fn nil)]
+                (is (nil? result)
+                    "should return nil when no matching worktree")))))))
+
+    (testing "when no story-id in console state"
+      (testing "returns nil"
+        (with-clean-console-state
+          (fn []
+            ;; Don't set story-id
+            (let [switch-fn #'orchestrator/maybe-switch-to-worktree!
+                  result (switch-fn nil)]
+              (is (nil? result)
+                  "should return nil when no story-id"))))))))

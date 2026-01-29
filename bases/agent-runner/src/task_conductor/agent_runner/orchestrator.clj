@@ -94,6 +94,19 @@
                 path))
             ok))))
 
+(defn- maybe-switch-to-worktree!
+  "Check if a worktree exists for the story and switch cwd if needed.
+   Called after SDK turns to detect newly created worktrees.
+   Returns the new cwd if switched, nil otherwise."
+  [workspace]
+  (let [{:keys [story-id cwd]} (console/get-workspace-state workspace)
+        worktree-path (when story-id (find-worktree-for-task story-id))]
+    (when (and worktree-path (not= worktree-path cwd))
+      (println "[maybe-switch-to-worktree!] Detected worktree:" worktree-path)
+      (println "[maybe-switch-to-worktree!] Switching from cwd:" cwd)
+      (console/update-workspace! workspace {:cwd worktree-path})
+      worktree-path)))
+
 ;;; Task Selection
 
 (defn- query-unblocked-child
@@ -400,8 +413,10 @@
     (do
       (console/transition! workspace :running-sdk {:session-id nil})
       (let [sdk-result (run-cli-with-prompt (:prompt decision) workspace opts)]
-        ;; Store session-id for later handoff (cwd is set at story start)
+        ;; Store session-id for later handoff
         (console/update-workspace! workspace {:session-id (:session-id sdk-result)})
+        ;; Check if SDK created a worktree and switch to it
+        (maybe-switch-to-worktree! workspace)
         (let [next-decision (flow/on-sdk-complete flow-model sdk-result (console/get-workspace-state workspace))]
           (println "[handle-flow-decision] on-sdk-complete returned:" (pr-str next-decision))
           (derive-flow-decision next-decision workspace opts))))
