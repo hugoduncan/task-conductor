@@ -360,23 +360,11 @@
 
 (defn record-session!
   "Records a session entry to the :sessions vector for a workspace.
-   Takes a session-id, task-id, and optional timestamp (defaults to now).
    Automatically includes the current story-id for filtering.
    Workspace can be: nil (focused), keyword alias, or string path.
-   Returns the updated sessions vector.
-
-   Arities:
-   - (record-session! session-id task-id) - nil workspace, auto-timestamp
-   - (record-session! session-id task-id timestamp) - nil workspace, explicit timestamp
-   - (record-session! workspace session-id task-id timestamp) - explicit workspace"
+   Returns the updated sessions vector."
   ([session-id task-id]
    (record-session! nil session-id task-id (java.time.Instant/now)))
-  ([arg1 arg2 arg3]
-   ;; Backward compat: if arg3 is an Instant, this is (session-id task-id timestamp)
-   (if (instance? java.time.Instant arg3)
-     (record-session! nil arg1 arg2 arg3)
-     ;; Otherwise it's (workspace session-id task-id)
-     (record-session! arg1 arg2 arg3 (java.time.Instant/now))))
   ([workspace session-id task-id timestamp]
    (let [path (resolve-workspace workspace)
          story-id (:story-id (get-workspace-state workspace))

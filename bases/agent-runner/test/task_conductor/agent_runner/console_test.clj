@@ -951,7 +951,7 @@
       (console/reset-state!)
       (console/transition! :selecting-task {:story-id 53})
       (let [ts (Instant/parse "2024-01-15T10:30:00Z")]
-        (console/record-session! "sess-abc" 99 ts)
+        (console/record-session! nil "sess-abc" 99 ts)
         (let [entry (first (:sessions (console/get-workspace-state nil)))]
           (is (= "sess-abc" (:session-id entry)))
           (is (= 99 (:task-id entry)))
