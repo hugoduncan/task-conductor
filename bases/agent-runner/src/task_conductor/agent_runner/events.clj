@@ -7,7 +7,8 @@
    [clojure.edn :as edn]
    [clojure.java.io :as io]
    [malli.core :as m]
-   [malli.error :as me])
+   [malli.error :as me]
+   [task-conductor.claude-agent-sdk.interface :as sdk])
   (:import
    [java.io File PushbackReader]
    [java.nio.file Files StandardCopyOption]
@@ -271,3 +272,83 @@
                (let [event (deserialize-event form)]
                  (validate-event! event)
                  (recur (conj events event)))))))))))
+
+;;; SDK Event Callback Integration
+
+(def ^:private capturable-block-types
+  "Set of content block types that should be captured as events."
+  #{:text-block :thinking-block :tool-use-block :tool-result-block})
+
+(defn- capture-content-blocks!
+  "Capture content blocks from an AssistantMessage as individual events."
+  [content session-id story-id task-id]
+  (when (sequential? content)
+    (doseq [block content]
+      (when (capturable-block-types (:type block))
+        (add-event! (create-event session-id story-id (:type block) block
+                                  {:task-id task-id}))))))
+
+(defn- process-sdk-message!
+  "Process a parsed SDK message and capture relevant events.
+   Updates context-atom with session-id when ResultMessage arrives.
+   Returns the session-id if found in a ResultMessage, nil otherwise."
+  [msg context-atom]
+  (let [{:keys [session-id story-id task-id]} @context-atom]
+    (case (:type msg)
+      :assistant-message
+      (do
+        (capture-content-blocks! (:content msg) session-id story-id task-id)
+        nil)
+
+      :result-message
+      (let [real-session-id (:session-id msg)]
+        ;; Update context with real session-id for subsequent events
+        (when real-session-id
+          (swap! context-atom assoc :session-id real-session-id))
+        ;; Capture the result message event with the real session-id
+        (add-event! (create-event (or real-session-id session-id)
+                                  story-id
+                                  :result-message
+                                  (dissoc msg :type)
+                                  {:task-id task-id}))
+        real-session-id)
+
+      ;; Skip other message types (UserMessage, SystemMessage, StreamEvent)
+      nil)))
+
+(defn make-event-callback
+  "Create an event callback function for SDK event capture.
+
+   The callback parses raw Python messages and captures events to the
+   in-memory buffer. It handles session-id discovery from ResultMessage.
+
+   Arguments:
+   - context: Map with :story-id (required) and optional :task-id
+   - opts: Optional map with:
+     - :session-id - Initial session-id (defaults to random UUID)
+
+   Returns a map with:
+   - :callback - Function to pass to SDK :event-callback option
+   - :context-atom - Atom containing context, updated with session-id
+
+   Example:
+     (let [{:keys [callback context-atom]} (make-event-callback {:story-id 123})]
+       (sdk/create-client {:event-callback callback})
+       ;; After query completes:
+       (:session-id @context-atom)) ;; => real session-id"
+  ([context]
+   (make-event-callback context {}))
+  ([context opts]
+   (let [initial-session-id (or (:session-id opts)
+                                (str (java.util.UUID/randomUUID)))
+         context-atom (atom (assoc context :session-id initial-session-id))
+         callback (fn [py-msg]
+                    (try
+                      (let [parsed (sdk/parse-message py-msg)]
+                        (process-sdk-message! parsed context-atom))
+                      (catch Exception e
+                        ;; Log but don't propagate - callback errors shouldn't
+                        ;; break the SDK flow
+                        (println "[events] Error processing message:" (ex-message e)))))]
+     {:callback callback
+      :context-atom context-atom})))

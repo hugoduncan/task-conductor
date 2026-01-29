@@ -365,7 +365,7 @@
           (let [connect-called (atom false)]
             ;; Mock session runner creation to return nil, forcing legacy path
             (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                                  (fn [_] nil)
+                                  (fn [_ _] nil)
                                   task-conductor.claude-agent-sdk.core/run-async
                                   (fn [_coro]
                                     (reset! connect-called true)
@@ -380,7 +380,7 @@
       (testing "when connection fails"
         (testing "throws ex-info with :connection-error type"
           (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                                (fn [_] nil)
+                                (fn [_ _] nil)
                                 task-conductor.claude-agent-sdk.core/run-async
                                 (fn [_coro]
                                   (throw (Exception. "Connection refused")))]
@@ -399,7 +399,7 @@
         (testing "cleans up session runner on failure"
           (let [close-called (atom false)]
             (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                                  (fn [_] nil)
+                                  (fn [_ _] nil)
                                   task-conductor.claude-agent-sdk.core/close-client
                                   (fn [_client]
                                     (reset! close-called true)
@@ -420,7 +420,7 @@
     (testing "close-client"
       (testing "returns nil when client has no session runner"
         (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                              (fn [_] nil)]
+                              (fn [_ _] nil)]
           (let [client ((sdk 'create-client))]
             (is (nil? ((sdk 'close-client) client))
                 "should return nil")))))))
@@ -432,7 +432,7 @@
       (testing "when disconnection succeeds"
         (testing "returns nil"
           (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                                (fn [_] nil)
+                                (fn [_ _] nil)
                                 task-conductor.claude-agent-sdk.core/run-async
                                 (fn [_coro] nil)]
             (let [client ((sdk 'create-client))]
@@ -442,7 +442,7 @@
       (testing "when disconnection fails"
         (testing "throws ex-info with :disconnection-error type"
           (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                                (fn [_] nil)
+                                (fn [_ _] nil)
                                 task-conductor.claude-agent-sdk.core/run-async
                                 (fn [_coro]
                                   (throw (Exception. "Disconnect failed")))]
@@ -463,7 +463,7 @@
       (testing "when query fails"
         (testing "throws ex-info with :query-error type"
           (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                                (fn [_] nil)
+                                (fn [_ _] nil)
                                 task-conductor.claude-agent-sdk.core/run-async
                                 (fn [_coro]
                                   (throw (Exception. "Query timeout")))]
@@ -694,7 +694,7 @@ async def _test_failing_coro():
         (testing "passes nil timeout to Python"
           (let [timeout-passed (atom :not-called)]
             (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                                  (fn [_] nil)
+                                  (fn [_ _] nil)
                                   task-conductor.claude-agent-sdk.core/run-async
                                   (fn [_coro]
                                     (reset! timeout-passed nil)
@@ -706,7 +706,7 @@ async def _test_failing_coro():
       (testing "when timeout-ms is provided"
         (testing "throws ex-info with :timeout type on timeout"
           (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                                (fn [_] nil)
+                                (fn [_ _] nil)
                                 task-conductor.claude-agent-sdk.core/run-async
                                 (fn [_coro]
                                   (throw (Exception. "connect operation timed out after 5.0s")))]
@@ -731,7 +731,7 @@ async def _test_failing_coro():
       (testing "when timeout-ms is provided"
         (testing "throws ex-info with :timeout type on timeout"
           (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                                (fn [_] nil)
+                                (fn [_ _] nil)
                                 task-conductor.claude-agent-sdk.core/run-async
                                 (fn [_coro]
                                   (throw (Exception. "disconnect operation timed out after 3.0s")))]
@@ -756,7 +756,7 @@ async def _test_failing_coro():
       (testing "when timeout-ms is provided"
         (testing "throws ex-info with :timeout type on timeout"
           (with-dynamic-redefs [task-conductor.claude-agent-sdk.core/create-session-runner
-                                (fn [_] nil)
+                                (fn [_ _] nil)
                                 task-conductor.claude-agent-sdk.core/run-async
                                 (fn [_coro]
                                   (throw (Exception. "query operation timed out after 60.0s")))]

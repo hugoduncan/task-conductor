@@ -11,9 +11,11 @@
   ;; - create-event accepts optional :task-id and :content
   ;; - flush-events! writes session events to file
   ;; - load-session-events reads events from file with round-trip fidelity
+  ;; - make-event-callback creates callback that captures SDK messages
   (:require
    [clojure.test :refer [deftest is testing]]
-   [task-conductor.agent-runner.events :as events])
+   [task-conductor.agent-runner.events :as events]
+   [task-conductor.claude-agent-sdk.interface :as sdk])
   (:import
    [java.io File]
    [java.nio.file Files]
@@ -433,3 +435,148 @@
             (is (= (:type original) (:type loaded)))
             (is (= (:content original) (:content loaded)))
             (is (= (:timestamp original) (:timestamp loaded)))))))))
+
+;;; SDK Event Callback Tests
+
+(deftest make-event-callback-test
+  ;; Tests make-event-callback returns correct structure and captures events.
+  ;; Contracts:
+  ;; - Returns map with :callback and :context-atom
+  ;; - Context-atom contains story-id, task-id, and generated session-id
+  ;; - Can provide custom initial session-id
+  (testing "make-event-callback"
+    (testing "returns callback and context-atom"
+      (let [result (events/make-event-callback {:story-id 42})]
+        (is (map? result))
+        (is (fn? (:callback result)))
+        (is (instance? clojure.lang.Atom (:context-atom result)))))
+
+    (testing "context-atom contains story-id and generated session-id"
+      (let [{:keys [context-atom]} (events/make-event-callback {:story-id 42})]
+        (is (= 42 (:story-id @context-atom)))
+        (is (string? (:session-id @context-atom)))
+        (is (pos? (count (:session-id @context-atom))))))
+
+    (testing "includes task-id in context when provided"
+      (let [{:keys [context-atom]} (events/make-event-callback {:story-id 42
+                                                                :task-id 100})]
+        (is (= 100 (:task-id @context-atom)))))
+
+    (testing "uses provided session-id"
+      (let [{:keys [context-atom]} (events/make-event-callback
+                                    {:story-id 42}
+                                    {:session-id "custom-id"})]
+        (is (= "custom-id" (:session-id @context-atom)))))))
+
+(deftest event-callback-captures-blocks-test
+  ;; Tests callback captures content blocks from AssistantMessage.
+  ;; Contracts:
+  ;; - Text blocks captured with :text-block type
+  ;; - Thinking blocks captured with :thinking-block type
+  ;; - Tool use blocks captured with :tool-use-block type
+  ;; - Tool result blocks captured with :tool-result-block type
+  (testing "event callback"
+    (testing "captures text-block from AssistantMessage"
+      (events/clear-events!)
+      (let [{:keys [callback]} (events/make-event-callback
+                                {:story-id 42}
+                                {:session-id "test-sess"})
+            mock-msg {:type :assistant-message
+                      :content [{:type :text-block :text "Hello world"}]
+                      :model "claude-test"}]
+        (with-redefs [sdk/parse-message (constantly mock-msg)]
+          (callback :dummy-py-msg))
+        (let [captured (events/get-events)]
+          (is (= 1 (count captured)))
+          (is (= :text-block (:type (first captured))))
+          (is (= "test-sess" (:session-id (first captured))))
+          (is (= 42 (:story-id (first captured)))))))
+
+    (testing "captures multiple block types"
+      (events/clear-events!)
+      (let [{:keys [callback]} (events/make-event-callback
+                                {:story-id 42 :task-id 100}
+                                {:session-id "multi-sess"})
+            mock-msg {:type :assistant-message
+                      :content [{:type :thinking-block :thinking "hmm"}
+                                {:type :text-block :text "Hello"}
+                                {:type :tool-use-block :id "t1" :name "Read"}
+                                {:type :tool-result-block :tool-use-id "t1"}]
+                      :model "claude-test"}]
+        (with-redefs [sdk/parse-message (constantly mock-msg)]
+          (callback :dummy-py-msg))
+        (let [captured (events/get-events)]
+          (is (= 4 (count captured)))
+          (is (= [:thinking-block :text-block :tool-use-block :tool-result-block]
+                 (mapv :type captured)))
+          (is (every? #(= 100 (:task-id %)) captured)))))))
+
+(deftest event-callback-result-message-test
+  ;; Tests callback captures ResultMessage and updates session-id.
+  ;; Contracts:
+  ;; - ResultMessage captured with :result-message type
+  ;; - Context-atom session-id updated from ResultMessage
+  (testing "event callback"
+    (testing "captures result-message"
+      (events/clear-events!)
+      (let [{:keys [callback]} (events/make-event-callback
+                                {:story-id 42}
+                                {:session-id "temp-id"})
+            mock-msg {:type :result-message
+                      :session-id "real-session-id"
+                      :duration-ms 1000
+                      :is-error false}]
+        (with-redefs [sdk/parse-message (constantly mock-msg)]
+          (callback :dummy-py-msg))
+        (let [captured (events/get-events)]
+          (is (= 1 (count captured)))
+          (is (= :result-message (:type (first captured))))
+          (is (= "real-session-id" (:session-id (first captured)))))))
+
+    (testing "updates context-atom with real session-id"
+      (events/clear-events!)
+      (let [{:keys [callback context-atom]} (events/make-event-callback
+                                             {:story-id 42}
+                                             {:session-id "temp-id"})
+            mock-msg {:type :result-message
+                      :session-id "real-session-id"
+                      :duration-ms 1000}]
+        (is (= "temp-id" (:session-id @context-atom)))
+        (with-redefs [sdk/parse-message (constantly mock-msg)]
+          (callback :dummy-py-msg))
+        (is (= "real-session-id" (:session-id @context-atom)))))))
+
+(deftest event-callback-ignores-other-messages-test
+  ;; Tests callback ignores non-capturable message types.
+  ;; Contracts:
+  ;; - UserMessage not captured
+  ;; - SystemMessage not captured
+  (testing "event callback"
+    (testing "ignores UserMessage"
+      (events/clear-events!)
+      (let [{:keys [callback]} (events/make-event-callback {:story-id 42})]
+        (with-redefs [sdk/parse-message (constantly {:type :user-message
+                                                     :content "hello"})]
+          (callback :dummy-py-msg))
+        (is (empty? (events/get-events)))))
+
+    (testing "ignores SystemMessage"
+      (events/clear-events!)
+      (let [{:keys [callback]} (events/make-event-callback {:story-id 42})]
+        (with-redefs [sdk/parse-message (constantly {:type :system-message
+                                                     :subtype "info"
+                                                     :data {}})]
+          (callback :dummy-py-msg))
+        (is (empty? (events/get-events)))))))
+
+(deftest event-callback-error-handling-test
+  ;; Tests callback handles errors gracefully without propagating.
+  ;; Contract: parse errors don't break the callback.
+  (testing "event callback"
+    (testing "handles parse errors gracefully"
+      (events/clear-events!)
+      (let [{:keys [callback]} (events/make-event-callback {:story-id 42})]
+        (with-redefs [sdk/parse-message (fn [_] (throw (Exception. "parse err")))]
+          ;; Should not throw
+          (is (nil? (callback :dummy-py-msg))))
+        (is (empty? (events/get-events)))))))

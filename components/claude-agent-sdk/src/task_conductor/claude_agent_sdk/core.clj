@@ -223,11 +223,20 @@
     (py. asyncio run coroutine)))
 
 (defn- create-session-runner
-  "Create a ClientSessionRunner for the given Python client."
-  [py-client]
-  (ensure-initialized!)
-  (let [runner-class (:session-runner-class @modules)]
-    (runner-class py-client)))
+  "Create a ClientSessionRunner for the given Python client.
+
+   Options:
+   - :event-callback - Optional callback function called for each message
+                       received during query. Receives the raw Python message."
+  ([py-client]
+   (create-session-runner py-client nil))
+  ([py-client opts]
+   (ensure-initialized!)
+   (let [runner-class (:session-runner-class @modules)
+         event-callback (:event-callback opts)]
+     (if event-callback
+       (runner-class py-client :event_callback event-callback)
+       (runner-class py-client)))))
 
 ;;; Managed Client
 
@@ -420,20 +429,28 @@
 
    Options map is passed to make-options to create ClaudeAgentOptions.
    Returns a ManagedClient containing the Python ClaudeSDKClient and
-   a session runner for executing async operations in a single task context."
+   a session runner for executing async operations in a single task context.
+
+   Additional options (not passed to SDK):
+   - :event-callback - Optional callback function called for each message
+                       received during query. Receives raw Python message.
+                       Use for real-time event capture and monitoring."
   ([]
    (create-client nil))
   ([opts]
    (println "[SDK create-client] Creating client with opts:" (pr-str opts))
    (ensure-initialized!)
-   (let [sdk (:sdk @modules)
+   (let [;; Extract our options before passing to SDK
+         event-callback (:event-callback opts)
+         sdk-opts (dissoc opts :event-callback)
+         sdk (:sdk @modules)
          client-class (py/get-attr sdk "ClaudeSDKClient")
          _ (println "[SDK create-client] Got client-class, creating py-client")
-         py-client (if opts
-                     (client-class :options (make-options opts))
+         py-client (if (seq sdk-opts)
+                     (client-class :options (make-options sdk-opts))
                      (client-class))
          _ (println "[SDK create-client] py-client created, creating session-runner")
-         session-runner (create-session-runner py-client)]
+         session-runner (create-session-runner py-client {:event-callback event-callback})]
      (println "[SDK create-client] session-runner created, returning ManagedClient")
      (->ManagedClient py-client session-runner))))
 
