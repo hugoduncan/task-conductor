@@ -207,7 +207,7 @@
 (defn- session-file-path
   "Returns the file path for a session's events file."
   [events-dir session-id]
-  (str events-dir "/" session-id ".edn"))
+  (.getPath (io/file events-dir (str session-id ".edn"))))
 
 (defn flush-events!
   "Write events for a session to persistent storage.
