@@ -8,17 +8,30 @@
   ;; - map-stream-message-to-events maps assistant content blocks to events
   ;; - map-stream-message-to-events maps result messages to result-message events
   ;; - map-stream-message-to-events returns empty vector for unrecognized types
-  ;; - create-session-via-cli returns session-id and response on success
+  ;; - create-session-via-cli returns session-id and result on success
+  ;; - create-session-via-cli calls event-callback for each event
+  ;; - create-session-via-cli flushes events after completion
   ;; - Throws :cli/timeout when process exceeds timeout
   ;; - Throws :cli/non-zero-exit when process fails
-  ;; - Throws :cli/parse-error when output is not valid JSON
-  ;; - Throws :cli/missing-session-id when session_id absent
+  ;; - Throws :cli/missing-session-id when no session_id in stream
   (:require
    [babashka.process :as p]
-   [clojure.test :refer [deftest is testing]]
-   [task-conductor.agent-runner.cli :as cli])
+   [clojure.data.json :as json]
+   [clojure.string :as str]
+   [clojure.test :refer [deftest is testing use-fixtures]]
+   [task-conductor.agent-runner.cli :as cli]
+   [task-conductor.agent-runner.events :as events])
   (:import
    [java.io ByteArrayInputStream]))
+
+;;; Test Fixtures
+
+(defn clear-events-fixture [f]
+  (events/clear-events!)
+  (f)
+  (events/clear-events!))
+
+(use-fixtures :each clear-events-fixture)
 
 ;;; Test Utilities
 
@@ -26,6 +39,12 @@
   "Convert a string to an InputStream."
   [^String s]
   (ByteArrayInputStream. (.getBytes s "UTF-8")))
+
+(defn- stream-json-output
+  "Build stream-json output from a sequence of JSON maps.
+   Each map is serialized to JSON and separated by newlines."
+  [& messages]
+  (str/join "\n" (map json/write-str messages)))
 
 (defn- mock-java-process
   "Create a mock java.lang.Process with a pid method."
@@ -212,34 +231,48 @@
 ;;; Success Tests
 
 (deftest create-session-via-cli-success-test
+  ;; Tests successful CLI session creation with stream-json output.
   (testing "create-session-via-cli"
-    (testing "returns session-id and response on success"
-      (let [json-response "{\"session_id\":\"abc-123\",\"result\":\"ok\"}"
-            captured-args (atom nil)]
-        (with-redefs [p/process (fn [opts & args]
-                                  (reset! captured-args {:opts opts :args args})
-                                  (mock-process {:out json-response}))]
-          (let [result (cli/create-session-via-cli
-                        {:working-dir "/tmp"
-                         :prompt "Hello"})]
-            (is (= "abc-123" (:session-id result)))
-            (is (= {:session_id "abc-123" :result "ok"} (:response result)))))))
+    (testing "given valid stream-json output"
+      (testing "returns session-id and result"
+        (let [stream-out (stream-json-output
+                          {:type "system" :subtype "init" :session_id "abc-123"}
+                          {:type "assistant"
+                           :message {:content [{:type "text" :text "Hello"}]}}
+                          {:type "result" :subtype "success"
+                           :usage {:input_tokens 10 :output_tokens 5}})]
+          (with-redefs [p/process (fn [_opts & _args]
+                                    (mock-process {:out stream-out}))]
+            (let [result (cli/create-session-via-cli
+                          {:working-dir "/tmp"
+                           :prompt "Hello"})]
+              (is (= "abc-123" (:session-id result)))
+              (is (= {:type "result"
+                      :subtype "success"
+                      :usage {:input_tokens 10 :output_tokens 5}}
+                     (:result result))))))))
 
     (testing "passes correct arguments to claude CLI"
-      (let [captured-args (atom nil)]
+      (let [captured-args (atom nil)
+            stream-out (stream-json-output
+                        {:type "system" :subtype "init" :session_id "x"}
+                        {:type "result" :subtype "success"})]
         (with-redefs [p/process (fn [opts & args]
                                   (reset! captured-args {:opts opts :args args})
-                                  (mock-process {:out "{\"session_id\":\"x\"}"}))]
+                                  (mock-process {:out stream-out}))]
           (cli/create-session-via-cli {:working-dir "/my/dir"
                                        :prompt "Test prompt"})
           (is (= "/my/dir" (get-in @captured-args [:opts :dir])))
-          (is (= ["claude" "--print" "--output-format" "json"
+          (is (= ["claude" "--print" "--verbose" "--output-format" "stream-json"
                   "-p" "Test prompt"]
                  (:args @captured-args))))))
 
     (testing "uses default timeout when not specified"
       (let [deref-timeout (atom nil)
-            out-stream (string->stream "{\"session_id\":\"x\"}")
+            stream-out (stream-json-output
+                        {:type "system" :subtype "init" :session_id "x"}
+                        {:type "result" :subtype "success"})
+            out-stream (string->stream stream-out)
             err-stream (string->stream "")
             proc (mock-java-process)]
         (with-redefs [p/process (fn [_ & _]
@@ -256,7 +289,10 @@
 
     (testing "uses custom timeout when specified"
       (let [deref-timeout (atom nil)
-            out-stream (string->stream "{\"session_id\":\"x\"}")
+            stream-out (stream-json-output
+                        {:type "system" :subtype "init" :session_id "x"}
+                        {:type "result" :subtype "success"})
+            out-stream (string->stream stream-out)
             err-stream (string->stream "")
             proc (mock-java-process)]
         (with-redefs [p/process (fn [_ & _]
@@ -272,6 +308,47 @@
                                        :prompt "Hi"
                                        :timeout-ms 5000})
           (is (= 5000 @deref-timeout)))))))
+
+(deftest create-session-via-cli-event-callback-test
+  ;; Tests that event-callback is called for each event during execution.
+  (testing "create-session-via-cli"
+    (testing "given event-callback option"
+      (testing "calls callback for each event"
+        (let [captured-events (atom [])
+              stream-out (stream-json-output
+                          {:type "system" :subtype "init" :session_id "ses-1"}
+                          {:type "assistant"
+                           :message {:content [{:type "text" :text "Hi"}
+                                               {:type "tool_use" :id "t1"
+                                                :name "Bash" :input {}}]}}
+                          {:type "result" :subtype "success"
+                           :usage {:input_tokens 10 :output_tokens 5}})]
+          (with-redefs [p/process (fn [_ & _]
+                                    (mock-process {:out stream-out}))]
+            (cli/create-session-via-cli
+             {:working-dir "/tmp"
+              :prompt "Hi"
+              :event-callback #(swap! captured-events conj %)})
+            (is (= 3 (count @captured-events)))
+            (is (= :text-block (:type (first @captured-events))))
+            (is (= :tool-use-block (:type (second @captured-events))))
+            (is (= :result-message (:type (nth @captured-events 2))))))))))
+
+(deftest create-session-via-cli-flush-events-test
+  ;; Tests that events are flushed to persistent storage after completion.
+  (testing "create-session-via-cli"
+    (testing "flushes events after successful completion"
+      (let [flushed-session-id (atom nil)
+            stream-out (stream-json-output
+                        {:type "system" :subtype "init" :session_id "flush-test"}
+                        {:type "result" :subtype "success"})]
+        (with-redefs [p/process (fn [_ & _]
+                                  (mock-process {:out stream-out}))
+                      events/flush-events! (fn [sid]
+                                             (reset! flushed-session-id sid)
+                                             0)]
+          (cli/create-session-via-cli {:working-dir "/tmp" :prompt "Hi"})
+          (is (= "flush-test" @flushed-session-id)))))))
 
 ;;; Error Tests
 
@@ -294,6 +371,7 @@
             (is @destroyed? "should destroy process on timeout")))))))
 
 (deftest create-session-via-cli-non-zero-exit-test
+  ;; Tests that non-zero exit code throws :cli/non-zero-exit error.
   (testing "create-session-via-cli"
     (testing "throws :cli/non-zero-exit when process fails"
       (with-redefs [p/process (fn [_ & _]
@@ -307,55 +385,35 @@
                    (catch Exception e e))]
           (is (some? ex))
           (is (= :cli/non-zero-exit (:type (ex-data ex))))
-          (is (= 1 (:exit-code (ex-data ex))))
-          (is (= "Error occurred\n" (:stderr (ex-data ex)))))))))
-
-(deftest create-session-via-cli-parse-error-test
-  (testing "create-session-via-cli"
-    (testing "throws :cli/parse-error when output is not valid JSON"
-      (with-redefs [p/process (fn [_ & _]
-                                (mock-process {:out "not json"}))]
-        (let [ex (try
-                   (cli/create-session-via-cli {:working-dir "/tmp"
-                                                :prompt "Hi"})
-                   nil
-                   (catch Exception e e))]
-          (is (some? ex))
-          (is (= :cli/parse-error (:type (ex-data ex))))
-          (is (= "not json\n" (:output (ex-data ex)))))))
-
-    (testing "throws :cli/parse-error when output is truncated JSON"
-      (with-redefs [p/process (fn [_ & _]
-                                (mock-process {:out "{\"session_id\":"}))]
-        (let [ex (try
-                   (cli/create-session-via-cli {:working-dir "/tmp"
-                                                :prompt "Hi"})
-                   nil
-                   (catch Exception e e))]
-          (is (some? ex))
-          (is (= :cli/parse-error (:type (ex-data ex)))))))))
+          (is (= 1 (:exit-code (ex-data ex)))))))))
 
 (deftest create-session-via-cli-missing-session-id-test
+  ;; Tests that missing session-id in stream throws :cli/missing-session-id.
   (testing "create-session-via-cli"
-    (testing "throws :cli/missing-session-id when session_id absent"
-      (with-redefs [p/process (fn [_ & _]
-                                (mock-process {:out "{\"result\":\"ok\"}"}))]
-        (let [ex (try
-                   (cli/create-session-via-cli {:working-dir "/tmp"
-                                                :prompt "Hi"})
-                   nil
-                   (catch Exception e e))]
-          (is (some? ex))
-          (is (= :cli/missing-session-id (:type (ex-data ex))))
-          (is (= {:result "ok"} (:response (ex-data ex)))))))
+    (testing "given stream without system/init message"
+      (testing "throws :cli/missing-session-id"
+        (let [stream-out (stream-json-output
+                          {:type "assistant"
+                           :message {:content [{:type "text" :text "Hi"}]}}
+                          {:type "result" :subtype "success"})]
+          (with-redefs [p/process (fn [_ & _]
+                                    (mock-process {:out stream-out}))]
+            (let [ex (try
+                       (cli/create-session-via-cli {:working-dir "/tmp"
+                                                    :prompt "Hi"})
+                       nil
+                       (catch Exception e e))]
+              (is (some? ex))
+              (is (= :cli/missing-session-id (:type (ex-data ex)))))))))
 
-    (testing "throws :cli/missing-session-id when session_id is null"
-      (with-redefs [p/process (fn [_ & _]
-                                (mock-process {:out "{\"session_id\":null}"}))]
-        (let [ex (try
-                   (cli/create-session-via-cli {:working-dir "/tmp"
-                                                :prompt "Hi"})
-                   nil
-                   (catch Exception e e))]
-          (is (some? ex))
-          (is (= :cli/missing-session-id (:type (ex-data ex)))))))))
+    (testing "given empty stream output"
+      (testing "throws :cli/missing-session-id"
+        (with-redefs [p/process (fn [_ & _]
+                                  (mock-process {:out ""}))]
+          (let [ex (try
+                     (cli/create-session-via-cli {:working-dir "/tmp"
+                                                  :prompt "Hi"})
+                     nil
+                     (catch Exception e e))]
+            (is (some? ex))
+            (is (= :cli/missing-session-id (:type (ex-data ex))))))))))

@@ -9,6 +9,7 @@
    [clojure.java.io :as io]
    [clojure.string :as str]
    [clojure.tools.logging :as log]
+   [task-conductor.agent-runner.events :as events]
    [task-conductor.agent-runner.logging])
   (:import
    [java.io BufferedReader]))
@@ -86,60 +87,111 @@
       (log/debug {:message-type (:type msg)} "Unrecognized stream message type")
       [])))
 
+(defn- process-stream-line!
+  "Process a single line from stream-json output.
+
+   Parses the line, extracts session-id from init messages, tracks result
+   messages, and calls event-callback for each event.
+
+   Arguments:
+   - line: The raw line string
+   - session-id-atom: Atom to store session-id when found
+   - result-atom: Atom to store result message when found
+   - event-callback: Optional function to call with each event map"
+  [line session-id-atom result-atom event-callback]
+  (when-let [parsed (parse-stream-json-line line)]
+    (let [mapped (map-stream-message-to-events parsed)]
+      ;; Check if this is session-id metadata (not an event vector)
+      (if (and (map? mapped) (:session-id mapped))
+        (reset! session-id-atom (:session-id mapped))
+        ;; Otherwise it's a vector of events
+        (do
+          ;; Track result message for return value
+          (when (some #(= :result-message (:type %)) mapped)
+            (reset! result-atom parsed))
+          ;; Call event-callback for each event
+          (when event-callback
+            (doseq [event mapped]
+              (event-callback event))))))))
+
 (defn- stream-reader
-  "Read lines from an InputStream, printing with prefix and accumulating.
-   Returns the accumulated output when stream closes."
-  [input-stream prefix accumulator]
-  (with-open [reader (BufferedReader. (io/reader input-stream))]
-    (loop []
-      (when-let [line (.readLine reader)]
-        (println prefix line)
-        (swap! accumulator str line "\n")
-        (recur)))))
+  "Read lines from an InputStream, printing with prefix.
+
+   When processing stdout with event capture enabled, also parses each line
+   as stream-json and emits events via the callback.
+
+   Arguments:
+   - input-stream: The InputStream to read from
+   - prefix: String prefix for printed output (e.g., \"[claude]\")
+   - opts: Map with optional keys:
+     - :session-id-atom - Atom to store session-id when found
+     - :result-atom - Atom to store result message when found
+     - :event-callback - Function to call with each event map"
+  [input-stream prefix opts]
+  (let [{:keys [session-id-atom result-atom event-callback]} opts]
+    (with-open [reader (BufferedReader. (io/reader input-stream))]
+      (loop []
+        (when-let [line (.readLine reader)]
+          (println prefix line)
+          ;; Process for events if atoms are provided
+          (when session-id-atom
+            (process-stream-line! line session-id-atom result-atom event-callback))
+          (recur))))))
 
 (defn create-session-via-cli
   "Create a new Claude session via the CLI.
 
-   Spawns `claude --print --output-format json` to create a session with
-   Claude Code's full context (system prompt, CLAUDE.md, MCP tools).
+   Spawns `claude --print --verbose --output-format stream-json` to create a
+   session with Claude Code's full context (system prompt, CLAUDE.md, MCP tools).
+
+   Uses stream-json format to capture events in real-time during execution.
 
    Options:
    - :working-dir - directory to run claude from (required)
    - :prompt - initial prompt to send (required)
-   - :timeout-ms - timeout in milliseconds (default: 120000)
+   - :timeout-ms - timeout in milliseconds (default: 300000)
+   - :event-callback - function receiving event maps during execution (optional)
 
    Returns map on success:
    - :session-id - the session identifier for resumption
-   - :response - full parsed JSON response from CLI
+   - :result - the final result message from the CLI
 
    Throws ex-info on failure with :type key:
    - :cli/timeout - process exceeded timeout
    - :cli/non-zero-exit - process exited with non-zero code
-   - :cli/parse-error - failed to parse JSON output
-   - :cli/missing-session-id - response lacks session_id field"
-  [{:keys [working-dir prompt timeout-ms]}]
+   - :cli/missing-session-id - no session_id found in stream output"
+  [{:keys [working-dir prompt timeout-ms event-callback]}]
   (let [timeout (or timeout-ms default-timeout-ms)
-        cmd ["claude" "--print" "--output-format" "json" "-p" prompt]]
+        cmd ["claude" "--print" "--verbose" "--output-format" "stream-json"
+             "-p" prompt]]
     (println "[create-session-via-cli] Launching CLI")
     (println "[create-session-via-cli]   working-dir:" working-dir)
     (println "[create-session-via-cli]   timeout-ms:" timeout)
     (println "[create-session-via-cli]   prompt:" (subs prompt 0 (min 100 (count prompt))))
     (println "[create-session-via-cli]   cmd:" (pr-str cmd))
-    (let [stdout-acc (atom "")
-          stderr-acc (atom "")
+    (let [session-id-atom (atom nil)
+          result-atom (atom nil)
           proc (p/process {:dir working-dir
                            :in ""
                            :out :stream
                            :err :stream}
-                          "claude" "--print" "--output-format" "json"
+                          "claude" "--print" "--verbose" "--output-format" "stream-json"
                           "-p" prompt)
-          stdout-thread (future (stream-reader (:out proc) "[claude]" stdout-acc))
-          stderr-thread (future (stream-reader (:err proc) "[claude:err]" stderr-acc))]
+          stdout-thread (future
+                          (stream-reader (:out proc) "[claude]"
+                                         {:session-id-atom session-id-atom
+                                          :result-atom result-atom
+                                          :event-callback event-callback}))
+          stderr-thread (future
+                          (stream-reader (:err proc) "[claude:err]"
+                                         {:session-id-atom (atom nil)
+                                          :result-atom (atom nil)}))]
       (println "[create-session-via-cli] Process started, pid:" (.pid (:proc proc)))
       (println "[create-session-via-cli] Waiting for completion (timeout:" timeout "ms)...")
-      (let [result (deref proc timeout ::timeout)]
-        (println "[create-session-via-cli] Deref returned:" (if (= result ::timeout) "TIMEOUT" "completed"))
-        (when (= result ::timeout)
+      (let [proc-result (deref proc timeout ::timeout)]
+        (println "[create-session-via-cli] Deref returned:"
+                 (if (= proc-result ::timeout) "TIMEOUT" "completed"))
+        (when (= proc-result ::timeout)
           (println "[create-session-via-cli] TIMEOUT - destroying process tree")
           (p/destroy-tree proc)
           ;; Wait briefly for reader threads to finish with remaining output
@@ -148,38 +200,32 @@
           (throw (ex-info "CLI process timed out"
                           {:type :cli/timeout
                            :timeout-ms timeout
-                           :stdout @stdout-acc
-                           :stderr @stderr-acc
+                           :session-id @session-id-atom
                            :working-dir working-dir})))
         ;; Wait for reader threads to complete
         @stdout-thread
         @stderr-thread
-        (let [{:keys [exit]} result
-              out @stdout-acc
-              err @stderr-acc]
+        (let [{:keys [exit]} proc-result
+              session-id @session-id-atom
+              result @result-atom]
           (println "[create-session-via-cli] Exit code:" exit)
-          (println "[create-session-via-cli] Stdout length:" (count out))
-          (println "[create-session-via-cli] Stderr length:" (count err))
+          (println "[create-session-via-cli] Session ID:" session-id)
           (when-not (zero? exit)
             (throw (ex-info "CLI process exited with non-zero code"
                             {:type :cli/non-zero-exit
                              :exit-code exit
-                             :stdout out
-                             :stderr err
+                             :session-id session-id
                              :working-dir working-dir})))
-          (let [parsed (try
-                         (json/read-str out :key-fn keyword)
-                         (catch Exception e
-                           (throw (ex-info "Failed to parse CLI JSON output"
-                                           {:type :cli/parse-error
-                                            :output out
-                                            :parse-error (.getMessage e)
-                                            :working-dir working-dir}))))]
-            (println "[create-session-via-cli] Parsed response, session_id:" (:session_id parsed))
-            (when-not (:session_id parsed)
-              (throw (ex-info "CLI response missing session_id"
-                              {:type :cli/missing-session-id
-                               :response parsed
-                               :working-dir working-dir})))
-            {:session-id (:session_id parsed)
-             :response parsed}))))))
+          (when-not session-id
+            (throw (ex-info "CLI stream missing session_id"
+                            {:type :cli/missing-session-id
+                             :working-dir working-dir})))
+          ;; Flush events to persistent storage
+          (when session-id
+            (try
+              (let [event-count (events/flush-events! session-id)]
+                (println "[create-session-via-cli] Flushed" event-count "events"))
+              (catch Exception e
+                (log/warn e "Failed to flush events" {:session-id session-id}))))
+          {:session-id session-id
+           :result result})))))
