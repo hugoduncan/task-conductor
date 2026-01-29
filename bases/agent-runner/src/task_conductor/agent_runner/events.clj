@@ -196,6 +196,29 @@
   "Default directory for event files, relative to project root."
   ".task-conductor/events")
 
+(defn- validate-events-dir!
+  "Validate that events-dir is a valid directory path.
+   Throws ex-info with clear error message for:
+   - nil or empty string paths
+   - paths that point to existing files (not directories)
+   Returns the path if valid."
+  [events-dir]
+  (when (or (nil? events-dir) (and (string? events-dir) (empty? events-dir)))
+    (throw (ex-info "events-dir must be a non-empty string"
+                    {:type :invalid-events-dir
+                     :events-dir events-dir})))
+  (when-not (string? events-dir)
+    (throw (ex-info "events-dir must be a string"
+                    {:type :invalid-events-dir
+                     :events-dir events-dir
+                     :actual-type (type events-dir)})))
+  (let [dir (File. ^String events-dir)]
+    (when (and (.exists dir) (not (.isDirectory dir)))
+      (throw (ex-info "events-dir path exists but is not a directory"
+                      {:type :invalid-events-dir
+                       :events-dir events-dir}))))
+  events-dir)
+
 (defn- ensure-dir!
   "Create directory if it doesn't exist. Returns the directory File."
   [^String path]
@@ -226,6 +249,7 @@
    (flush-events! session-id {}))
   ([session-id opts]
    (let [events-dir (or (:events-dir opts) default-events-dir)]
+     (validate-events-dir! events-dir)
      (ensure-dir! events-dir)
      (let [session-events (get-events {:session-id session-id})
            target-file (File. ^String (session-file-path events-dir session-id))
@@ -259,6 +283,7 @@
    (load-session-events session-id {}))
   ([session-id opts]
    (let [events-dir (or (:events-dir opts) default-events-dir)
+         _ (validate-events-dir! events-dir)
          file (File. ^String (session-file-path events-dir session-id))]
      (when (.exists file)
        (with-open [rdr (PushbackReader. (io/reader file))]

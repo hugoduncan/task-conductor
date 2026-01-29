@@ -580,3 +580,63 @@
           ;; Should not throw
           (is (nil? (callback :dummy-py-msg))))
         (is (empty? (events/get-events)))))))
+
+;;; events-dir Validation Tests
+
+(deftest flush-events!-validates-events-dir-test
+  ;; Tests flush-events! validates the events-dir option.
+  ;; Contracts:
+  ;; - Throws for empty string events-dir
+  ;; - Throws for non-string events-dir
+  ;; - Throws when path exists but is a file
+  ;; Note: nil uses default directory (not an error)
+  (testing "flush-events!"
+    (testing "throws for empty string events-dir"
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"events-dir must be a non-empty string"
+           (events/flush-events! "sess" {:events-dir ""}))))
+
+    (testing "throws for non-string events-dir"
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"events-dir must be a string"
+           (events/flush-events! "sess" {:events-dir 123}))))
+
+    (testing "throws when path exists but is a file"
+      (with-temp-events-dir [temp-dir]
+        (let [file-path (str temp-dir "/not-a-dir")]
+          (spit file-path "regular file")
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo
+               #"events-dir path exists but is not a directory"
+               (events/flush-events! "sess" {:events-dir file-path}))))))))
+
+(deftest load-session-events-validates-events-dir-test
+  ;; Tests load-session-events validates the events-dir option.
+  ;; Contracts:
+  ;; - Throws for empty string events-dir
+  ;; - Throws for non-string events-dir
+  ;; - Throws when path exists but is a file
+  ;; Note: nil uses default directory (not an error)
+  (testing "load-session-events"
+    (testing "throws for empty string events-dir"
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"events-dir must be a non-empty string"
+           (events/load-session-events "sess" {:events-dir ""}))))
+
+    (testing "throws for non-string events-dir"
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"events-dir must be a string"
+           (events/load-session-events "sess" {:events-dir 123}))))
+
+    (testing "throws when path exists but is a file"
+      (with-temp-events-dir [temp-dir]
+        (let [file-path (str temp-dir "/not-a-dir")]
+          (spit file-path "regular file")
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo
+               #"events-dir path exists but is not a directory"
+               (events/load-session-events "sess" {:events-dir file-path}))))))))
