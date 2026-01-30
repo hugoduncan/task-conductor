@@ -72,7 +72,8 @@
                                   ^Runnable (fn []
                                               (p/destroy proc)
                                               (deliver result-promise
-                                                       {:exit-code nil :error :timeout}))
+                                                       {:exit-code nil :error :timeout})
+                                              (.shutdown scheduler))
                                   ^long timeout
                                   TimeUnit/MILLISECONDS))]
     ;; Start reader thread
