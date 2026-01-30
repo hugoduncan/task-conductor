@@ -1,5 +1,6 @@
 {:paths ["src"]
  :deps {babashka/process {:mvn/version "0.5.21"}
-        org.clojure/data.json {:mvn/version "2.5.1"}}
+        org.clojure/data.json {:mvn/version "2.5.1"}
+        task-conductor/pathom-graph {:local/root "../pathom-graph"}}
  :aliases
  {:test {:extra-paths ["test"]}}}
