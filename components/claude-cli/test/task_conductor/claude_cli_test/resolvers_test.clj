@@ -7,20 +7,8 @@
    [task-conductor.claude-cli.interface :as interface]
    [task-conductor.claude-cli.registry :as registry]
    [task-conductor.claude-cli.resolvers :as resolvers]
+   [task-conductor.claude-cli-test.test-utils :refer [with-clean-state]]
    [task-conductor.pathom-graph.interface :as graph]))
-
-(defmacro with-clean-state
-  "Execute body with clean registry and graph, cleaning up afterward."
-  [& body]
-  `(do
-     (registry/clear-registry!)
-     (graph/reset-graph!)
-     (resolvers/register-resolvers!)
-     (try
-       ~@body
-       (finally
-         (registry/clear-registry!)
-         (graph/reset-graph!)))))
 
 (defn mock-handle
   "Create a mock handle for testing."

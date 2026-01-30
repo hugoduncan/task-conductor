@@ -16,24 +16,12 @@
    [clojure.test :refer [deftest is testing]]
    [task-conductor.claude-cli.registry :as registry]
    [task-conductor.claude-cli.resolvers :as resolvers]
+   [task-conductor.claude-cli-test.test-utils :refer [with-clean-state]]
    [task-conductor.pathom-graph.interface :as graph]))
 
 ;; Tests verify the full integration: EQL mutations trigger CLI invocation,
 ;; resolver queries return status and results, and the pathom graph
 ;; correctly wires together the operations.
-
-(defmacro with-clean-state
-  "Execute body with clean registry and graph, cleaning up afterward."
-  [& body]
-  `(do
-     (registry/clear-registry!)
-     (graph/reset-graph!)
-     (resolvers/register-resolvers!)
-     (try
-       ~@body
-       (finally
-         (registry/clear-registry!)
-         (graph/reset-graph!)))))
 
 (deftest ^:integration invoke-and-query-result-test
   ;; Tests the full EQL flow: invoke returns id immediately, query shows
