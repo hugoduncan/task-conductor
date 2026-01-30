@@ -18,6 +18,9 @@
     :on-line           - Callback for each raw line (fn [line] ...)
     :on-event          - Callback for each parsed event (fn [event] ...)
 
+  Always includes these CLI flags:
+    --verbose --output-format stream-json --print conversation-summary
+
   The result-promise delivers:
     {:exit-code n :events [...]} on success
     {:exit-code nil :error :timeout} on timeout
