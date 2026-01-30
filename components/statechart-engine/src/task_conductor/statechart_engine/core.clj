@@ -31,14 +31,28 @@
 (defn- generate-session-id []
   (str (java.util.UUID/randomUUID)))
 
+(defn- valid-chart-def?
+  "Returns true if chart-def is a valid statechart definition."
+  [chart-def]
+  (and (map? chart-def)
+       (= :statechart (:node-type chart-def))))
+
 ;;; Public API
 
 (defn register!
   "Register a statechart definition under the given name.
-  Returns {:ok chart-name} on success, {:error :already-registered} if name exists."
+  Returns {:ok chart-name} on success,
+  {:error :already-registered} if name exists,
+  {:error :invalid-chart-def} if chart-def is not a valid statechart."
   [chart-name chart-def]
-  (if (contains? @charts chart-name)
+  (cond
+    (not (valid-chart-def? chart-def))
+    {:error :invalid-chart-def}
+
+    (contains? @charts chart-name)
     {:error :already-registered}
+
+    :else
     (do
       (simple/register! env chart-name chart-def)
       (swap! charts conj chart-name)

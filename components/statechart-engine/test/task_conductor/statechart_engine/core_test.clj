@@ -27,7 +27,22 @@
       (with-clean-engine
         (core/register! ::duplicate simple-chart)
         (is (= {:error :already-registered}
-               (core/register! ::duplicate simple-chart)))))))
+               (core/register! ::duplicate simple-chart)))))
+
+    (testing "returns error when chart-def is nil"
+      (with-clean-engine
+        (is (= {:error :invalid-chart-def}
+               (core/register! ::nil-chart nil)))))
+
+    (testing "returns error when chart-def is not a map"
+      (with-clean-engine
+        (is (= {:error :invalid-chart-def}
+               (core/register! ::string-chart "not a chart")))))
+
+    (testing "returns error when chart-def has wrong :node-type"
+      (with-clean-engine
+        (is (= {:error :invalid-chart-def}
+               (core/register! ::state-chart (state {:id :foo}))))))))
 
 (deftest unregister!-test
   (testing "unregister!"
