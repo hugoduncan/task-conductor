@@ -163,3 +163,62 @@
               ;; Process has already finished
               cancelled (core/cancel! handle)]
           (is (false? cancelled) "should return false for terminated process"))))))
+
+;;; callback exception tests
+
+;; Tests that callback exceptions don't interrupt processing.
+;; Contracts: exceptions are recorded as callback-error events, processing continues.
+
+(deftest callback-exception-test
+  (testing "invoke-process with callback exceptions"
+    (testing "when on-line throws"
+      (testing "records error and continues processing"
+        (let [events-received (atom [])
+              {:keys [result-promise]} (core/invoke-process
+                                        {:_args ["bash" "-c"
+                                                 "echo '{\"n\":1}'; echo '{\"n\":2}'"]
+                                         :on-line (fn [_] (throw (ex-info "line boom" {})))
+                                         :on-event #(swap! events-received conj %)})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result) "should complete")
+          (is (= 0 (:exit-code result)))
+          ;; Both events should be captured despite callback errors
+          (is (= [{:type "callback-error" :callback :on-line :error "line boom"}
+                  {:n 1}
+                  {:type "callback-error" :callback :on-line :error "line boom"}
+                  {:n 2}]
+                 (:events result))))))
+
+    (testing "when on-event throws"
+      (testing "records error and continues processing"
+        (let [lines-received (atom [])
+              {:keys [result-promise]} (core/invoke-process
+                                        {:_args ["bash" "-c"
+                                                 "echo '{\"n\":1}'; echo '{\"n\":2}'"]
+                                         :on-line #(swap! lines-received conj %)
+                                         :on-event (fn [_] (throw (ex-info "event boom" {})))})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result) "should complete")
+          (is (= 0 (:exit-code result)))
+          ;; Both lines should be received
+          (is (= ["{\"n\":1}" "{\"n\":2}"] @lines-received))
+          ;; Events include callback errors
+          (is (= [{:n 1}
+                  {:type "callback-error" :callback :on-event :error "event boom"}
+                  {:n 2}
+                  {:type "callback-error" :callback :on-event :error "event boom"}]
+                 (:events result))))))
+
+    (testing "when both callbacks throw"
+      (testing "records errors from both and completes"
+        (let [{:keys [result-promise]} (core/invoke-process
+                                        {:_args ["bash" "-c" "echo '{\"n\":1}'"]
+                                         :on-line (fn [_] (throw (ex-info "line err" {})))
+                                         :on-event (fn [_] (throw (ex-info "event err" {})))})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result) "should complete")
+          (is (= 0 (:exit-code result)))
+          (is (= [{:type "callback-error" :callback :on-line :error "line err"}
+                  {:n 1}
+                  {:type "callback-error" :callback :on-event :error "event err"}]
+                 (:events result))))))))
