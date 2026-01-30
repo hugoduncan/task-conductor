@@ -144,7 +144,7 @@
           (is (= 0 (:claude-cli/exit-code response)))
           (is (= [{:type "end"}] (:claude-cli/events response))))))
 
-    (testing "returns :error status when result contains error"
+    (testing "returns :error status with error details when result contains error"
       (with-clean-state
         (let [p (promise)
               handle {:process :mock :result-promise p}
@@ -152,10 +152,12 @@
               _ (deliver p {:exit-code nil :error :timeout})
               result (graph/query [{[:claude-cli/invocation-id id]
                                     [:claude-cli/status
-                                     :claude-cli/exit-code]}])
+                                     :claude-cli/exit-code
+                                     :claude-cli/error]}])
               response (get result [:claude-cli/invocation-id id])]
           (is (= :error (:claude-cli/status response)))
-          (is (nil? (:claude-cli/exit-code response))))))
+          (is (nil? (:claude-cli/exit-code response)))
+          (is (= :timeout (:claude-cli/error response))))))
 
     (testing "returns :cancelled status for cancelled invocation"
       (with-clean-state

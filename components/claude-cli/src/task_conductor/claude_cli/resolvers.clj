@@ -52,12 +52,14 @@
         (let [result-promise (:result-promise handle)]
           (if (realized? result-promise)
             (let [result @result-promise
-                  new-status (if (:error result) :error :complete)]
+                  error (:error result)
+                  new-status (if error :error :complete)]
               (registry/update-invocation! invocation-id
                                            {:status new-status :result result})
-              {:claude-cli/status new-status
-               :claude-cli/exit-code (:exit-code result)
-               :claude-cli/events (:events result)})
+              (cond-> {:claude-cli/status new-status
+                       :claude-cli/exit-code (:exit-code result)
+                       :claude-cli/events (:events result)}
+                error (assoc :claude-cli/error error)))
             {:claude-cli/status :pending}))))
     {:claude-cli/status :not-found
      :claude-cli/error :not-found}))
