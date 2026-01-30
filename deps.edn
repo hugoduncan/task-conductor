@@ -1,6 +1,7 @@
 {:paths []
  :deps {task-conductor/agent-runner {:local/root "bases/agent-runner"}
-        task-conductor/claude-cli {:local/root "components/claude-cli"}}
+        task-conductor/claude-cli {:local/root "components/claude-cli"}
+        task-conductor/statechart-engine {:local/root "components/statechart-engine"}}
  :aliases
  {:dev {:extra-paths ["dev"]
         :extra-deps {dev.weavejester/cljfmt {:mvn/version "0.13.1"}}}
