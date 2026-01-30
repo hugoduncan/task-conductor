@@ -5,9 +5,11 @@
   :tests [{:id           :unit
            :source-paths ["bases/agent-runner/src"
                           "components/claude-cli/src"
+                          "components/pathom-graph/src"
                           "components/statechart-engine/src"]
            :test-paths   ["bases/agent-runner/test"
                           "components/claude-cli/test"
+                          "components/pathom-graph/test"
                           "components/statechart-engine/test"]
            :skip-meta    [:integration]}
           {:id           :integration
