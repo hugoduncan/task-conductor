@@ -1,0 +1,4 @@
+{:paths ["src"]
+ :deps {babashka/process {:mvn/version "0.6.26"}}
+ :aliases
+ {:test {:extra-paths ["test"]}}}
