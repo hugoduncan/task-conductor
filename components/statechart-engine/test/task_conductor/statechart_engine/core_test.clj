@@ -5,17 +5,8 @@
    [clojure.test :refer [deftest is testing]]
    [com.fulcrologic.statecharts.elements :refer [state transition]]
    [com.fulcrologic.statecharts.chart :refer [statechart]]
-   [task-conductor.statechart-engine.core :as core]))
-
-(defmacro with-clean-engine
-  "Execute body with a fresh engine state, resetting before and after."
-  [& body]
-  `(do
-     (core/reset-engine!)
-     (try
-       ~@body
-       (finally
-         (core/reset-engine!)))))
+   [task-conductor.statechart-engine.core :as core]
+   [task-conductor.statechart-engine.test-helpers :refer [with-clean-engine]]))
 
 (def simple-chart
   "Two-state chart: :off <-> :on via :toggle event."

@@ -4,17 +4,8 @@
   ;; concurrent sessions.
   (:require
    [clojure.test :refer [deftest is testing]]
-   [task-conductor.statechart-engine.interface :as sc]))
-
-(defmacro with-clean-engine
-  "Execute body with a fresh engine state."
-  [& body]
-  `(do
-     (sc/reset-engine!)
-     (try
-       ~@body
-       (finally
-         (sc/reset-engine!)))))
+   [task-conductor.statechart-engine.interface :as sc]
+   [task-conductor.statechart-engine.test-helpers :refer [with-clean-engine]]))
 
 ;;; Traffic Light Statechart Definition
 ;; States: :red, :green, :yellow (normal operation) and :maintenance
