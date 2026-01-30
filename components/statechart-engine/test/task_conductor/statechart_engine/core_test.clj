@@ -105,3 +105,87 @@
       (with-clean-engine
         (is (= {:error :session-not-found}
                (core/send! "nonexistent" :toggle)))))))
+
+;;; Introspection Tests
+
+(deftest state-test
+  (testing "state"
+    (testing "returns current configuration for active session"
+      (with-clean-engine
+        (core/register! ::state-chart simple-chart)
+        (let [{:keys [ok]} (core/start! ::state-chart)
+              session-id   ok
+              result       (core/state session-id)]
+          (is (contains? result :ok))
+          (is (set? (:ok result)))
+          (is (contains? (:ok result) :off)))))
+
+    (testing "reflects state after transition"
+      (with-clean-engine
+        (core/register! ::state-trans simple-chart)
+        (let [{:keys [ok]} (core/start! ::state-trans)
+              session-id   ok
+              _            (core/send! session-id :toggle)
+              result       (core/state session-id)]
+          (is (contains? (:ok result) :on)))))
+
+    (testing "returns error when session not found"
+      (with-clean-engine
+        (is (= {:error :session-not-found}
+               (core/state "no-such-session")))))))
+
+(deftest list-sessions-test
+  (testing "list-sessions"
+    (testing "returns empty list when no sessions"
+      (with-clean-engine
+        (is (= {:ok []} (core/list-sessions)))))
+
+    (testing "returns all active session IDs"
+      (with-clean-engine
+        (core/register! ::list-sess simple-chart)
+        (let [{s1 :ok} (core/start! ::list-sess)
+              {s2 :ok} (core/start! ::list-sess)
+              {:keys [ok]} (core/list-sessions)]
+          (is (= 2 (count ok)))
+          (is (some #{s1} ok))
+          (is (some #{s2} ok)))))))
+
+(deftest list-charts-test
+  (testing "list-charts"
+    (testing "returns empty list when no charts registered"
+      (with-clean-engine
+        (is (= {:ok []} (core/list-charts)))))
+
+    (testing "returns all registered chart names"
+      (with-clean-engine
+        (core/register! ::chart-a simple-chart)
+        (core/register! ::chart-b simple-chart)
+        (let [{:keys [ok]} (core/list-charts)]
+          (is (= 2 (count ok)))
+          (is (some #{::chart-a} ok))
+          (is (some #{::chart-b} ok)))))))
+
+(deftest available-events-test
+  (testing "available-events"
+    (testing "returns events available from current state"
+      (with-clean-engine
+        (core/register! ::avail-chart simple-chart)
+        (let [{:keys [ok]} (core/start! ::avail-chart)
+              session-id   ok
+              result       (core/available-events session-id)]
+          (is (contains? result :ok))
+          (is (= #{:toggle} (:ok result))))))
+
+    (testing "returns events after state change"
+      (with-clean-engine
+        (core/register! ::avail-trans simple-chart)
+        (let [{:keys [ok]} (core/start! ::avail-trans)
+              session-id   ok
+              _            (core/send! session-id :toggle)
+              result       (core/available-events session-id)]
+          (is (= #{:toggle} (:ok result))))))
+
+    (testing "returns error when session not found"
+      (with-clean-engine
+        (is (= {:error :session-not-found}
+               (core/available-events "missing")))))))

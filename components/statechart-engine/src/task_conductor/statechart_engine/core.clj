@@ -3,6 +3,7 @@
   Provides singleton environment for registering statecharts and managing sessions."
   (:require
    [com.fulcrologic.statecharts :as sc]
+   [com.fulcrologic.statecharts.chart :as chart]
    [com.fulcrologic.statecharts.protocols :as sp]
    [com.fulcrologic.statecharts.simple :as simple]
    [com.fulcrologic.statecharts.events :as evts]))
@@ -86,3 +87,59 @@
   []
   (reset! charts #{})
   (reset! sessions {}))
+
+;;; Introspection API
+
+(defn state
+  "Returns the current state configuration for a session.
+  Returns {:ok state-config} where state-config is a set of active state keywords,
+  or {:error :session-not-found} if session doesn't exist."
+  [session-id]
+  (if-let [wmem (get @sessions session-id)]
+    {:ok (::sc/configuration wmem)}
+    {:error :session-not-found}))
+
+(defn list-sessions
+  "Returns {:ok [session-id ...]} with all active session IDs."
+  []
+  {:ok (vec (keys @sessions))})
+
+(defn list-charts
+  "Returns {:ok [chart-name ...]} with all registered chart names."
+  []
+  {:ok (vec @charts)})
+
+(defn- get-statechart
+  "Retrieves the statechart definition from the registry."
+  [chart-name]
+  (sp/get-statechart (::sc/statechart-registry env) chart-name))
+
+(defn- events-from-transitions
+  "Extracts event names from transition elements."
+  [statechart transition-ids]
+  (->> transition-ids
+       (map #(chart/element statechart %))
+       (keep :event)
+       (mapcat #(if (coll? %) % [%]))
+       (into #{})))
+
+(defn- events-for-state
+  "Returns events defined on transitions from the given state."
+  [statechart state-id]
+  (let [transition-ids (chart/transitions statechart state-id)]
+    (events-from-transitions statechart transition-ids)))
+
+(defn available-events
+  "Returns events that would trigger transitions from the current state.
+  Returns {:ok #{event ...}} or {:error :session-not-found}."
+  [session-id]
+  (if-let [wmem (get @sessions session-id)]
+    (let [chart-name  (::sc/statechart-src wmem)
+          statechart  (get-statechart chart-name)
+          config      (::sc/configuration wmem)
+          all-events  (reduce (fn [events state-id]
+                                (into events (events-for-state statechart state-id)))
+                              #{}
+                              config)]
+      {:ok all-events})
+    {:error :session-not-found}))
