@@ -32,16 +32,29 @@
 
 (defn- read-stdout-lines
   "Read lines from process stdout, call callbacks, collect events.
+  Callback exceptions are caught and recorded as :callback-error events.
   Returns vector of all events when stream ends."
   [^java.io.InputStream stdout on-line on-event]
   (let [reader (BufferedReader. (InputStreamReader. stdout))
         events (atom [])]
     (loop []
       (when-let [line (.readLine reader)]
-        (when on-line (on-line line))
+        (when on-line
+          (try
+            (on-line line)
+            (catch Exception e
+              (swap! events conj {:type "callback-error"
+                                  :callback :on-line
+                                  :error (.getMessage e)}))))
         (let [event (parse-json-line line)]
           (swap! events conj event)
-          (when on-event (on-event event)))
+          (when on-event
+            (try
+              (on-event event)
+              (catch Exception e
+                (swap! events conj {:type "callback-error"
+                                    :callback :on-event
+                                    :error (.getMessage e)})))))
         (recur)))
     @events))
 
