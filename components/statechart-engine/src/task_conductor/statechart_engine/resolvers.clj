@@ -1,5 +1,5 @@
 (ns task-conductor.statechart-engine.resolvers
-  "EQL resolvers for engine introspection.
+  "EQL resolvers and mutations for engine operations.
    Registered on namespace load."
   (:require
    [com.wsscode.pathom3.connect.operation :as pco]
@@ -26,20 +26,37 @@
    ::pco/output [:engine/session-history]}
   {:engine/session-history (core/history session-id)})
 
+;;; Mutations
+
+(graph/defmutation engine-start! [{:engine/keys [chart-id]}]
+  {::pco/output [:engine/session-id]}
+  {:engine/session-id (core/start! chart-id)})
+
+(graph/defmutation engine-send! [{:engine/keys [session-id event]}]
+  {::pco/output [:engine/session-state]}
+  {:engine/session-state (core/send! session-id event)})
+
+(graph/defmutation engine-stop! [{:engine/keys [session-id]}]
+  {::pco/output [:engine/session-id]}
+  {:engine/session-id (core/stop! session-id)})
+
 ;;; Registration
 
-(def all-resolvers
-  "Vector of all engine introspection resolvers."
+(def all-operations
+  "Vector of all engine resolvers and mutations."
   [engine-sessions
    engine-charts
    engine-session-state
-   engine-session-history])
+   engine-session-history
+   engine-start!
+   engine-send!
+   engine-stop!])
 
 (defn register-resolvers!
-  "Register all engine introspection resolvers with pathom-graph.
+  "Register all engine resolvers and mutations with pathom-graph.
    Called automatically on namespace load. Can be called again after graph reset."
   []
-  (graph/register! all-resolvers))
+  (graph/register! all-operations))
 
 ;; Register on namespace load
 (register-resolvers!)

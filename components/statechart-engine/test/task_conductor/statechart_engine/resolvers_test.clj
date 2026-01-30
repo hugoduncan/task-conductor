@@ -1,6 +1,7 @@
 (ns task-conductor.statechart-engine.resolvers-test
-  ;; Tests for engine introspection resolvers.
-  ;; Verifies: session listing, chart listing, session state, session history via EQL.
+  ;; Tests for engine resolvers and mutations.
+  ;; Verifies: session listing, chart listing, session state, session history,
+  ;; and mutations for start!/send!/stop! via EQL.
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.pathom-graph.interface :as graph]
@@ -123,3 +124,73 @@
             (is (nil? (:event (first history))))
             (is (= :start (:event (second history))))
             (is (= #{:running} (:state (second history))))))))))
+
+;;; Mutation Tests
+
+(deftest engine-start-mutation-test
+  ;; Verifies engine/start! mutation creates sessions.
+  (testing "engine/start! mutation"
+    (testing "creates a new session"
+      (with-clean-state
+        (sc/register! ::mut-chart (simple-chart))
+        (let [result (graph/query
+                      [`(resolvers/engine-start!
+                         {:engine/chart-id ::mut-chart})])
+              sid (get result `resolvers/engine-start!)]
+          (is (string? (:engine/session-id sid)))
+          (is (some #{(:engine/session-id sid)}
+                    (:engine/sessions (graph/query [:engine/sessions])))))))
+
+    (testing "throws for non-existent chart"
+      (with-clean-state
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (graph/query
+                      [`(resolvers/engine-start!
+                         {:engine/chart-id ::nonexistent})])))))))
+
+(deftest engine-send-mutation-test
+  ;; Verifies engine/send! mutation transitions state.
+  (testing "engine/send! mutation"
+    (testing "transitions state with event"
+      (with-clean-state
+        (sc/register! ::send-chart (simple-chart))
+        (let [sid (sc/start! ::send-chart)
+              result (graph/query
+                      [`(resolvers/engine-send!
+                         {:engine/session-id ~sid
+                          :engine/event :start})])
+              new-state (get-in result
+                                [`resolvers/engine-send! :engine/session-state])]
+          (is (= #{:running} new-state)))))
+
+    (testing "throws for non-existent session"
+      (with-clean-state
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (graph/query
+                      [`(resolvers/engine-send!
+                         {:engine/session-id "invalid"
+                          :engine/event :start})])))))))
+
+(deftest engine-stop-mutation-test
+  ;; Verifies engine/stop! mutation removes sessions.
+  (testing "engine/stop! mutation"
+    (testing "removes the session"
+      (with-clean-state
+        (sc/register! ::stop-chart (simple-chart))
+        (let [sid (sc/start! ::stop-chart)
+              _ (is (some #{sid}
+                          (:engine/sessions (graph/query [:engine/sessions]))))
+              result (graph/query
+                      [`(resolvers/engine-stop!
+                         {:engine/session-id ~sid})])
+              returned-id (get-in result
+                                  [`resolvers/engine-stop! :engine/session-id])]
+          (is (= sid returned-id))
+          (is (empty? (:engine/sessions (graph/query [:engine/sessions])))))))
+
+    (testing "throws for non-existent session"
+      (with-clean-state
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (graph/query
+                      [`(resolvers/engine-stop!
+                         {:engine/session-id "invalid"})])))))))
