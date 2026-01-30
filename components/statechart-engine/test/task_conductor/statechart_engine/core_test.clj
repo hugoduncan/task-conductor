@@ -248,4 +248,29 @@
     (testing "returns error when session not found"
       (with-clean-engine
         (is (= {:error :session-not-found}
-               (core/history "no-such-session")))))))
+               (core/history "no-such-session")))))
+
+    (testing "respects max-history-size option"
+      (with-clean-engine
+        (core/register! ::hist-limited simple-chart)
+        (let [{:keys [ok]} (core/start! ::hist-limited {:max-history-size 3})
+              session-id   ok
+              _            (core/send! session-id :toggle)
+              _            (core/send! session-id :toggle)
+              _            (core/send! session-id :toggle)
+              _            (core/send! session-id :toggle)
+              result       (core/history session-id)]
+          (is (= 3 (count (:ok result))))
+          (let [[e1 e2 e3] (:ok result)]
+            (is (= :toggle (:event e1)))
+            (is (= :toggle (:event e2)))
+            (is (= :toggle (:event e3)))))))
+
+    (testing "unlimited history when no max-history-size"
+      (with-clean-engine
+        (core/register! ::hist-unlimited simple-chart)
+        (let [{:keys [ok]} (core/start! ::hist-unlimited)
+              session-id   ok]
+          (dotimes [_ 10] (core/send! session-id :toggle))
+          (let [result (core/history session-id)]
+            (is (= 11 (count (:ok result))))))))))

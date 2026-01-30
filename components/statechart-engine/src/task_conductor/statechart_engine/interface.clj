@@ -97,6 +97,8 @@
 
 (def start!
   "Start a new session of the registered chart.
+  Options:
+    :max-history-size - limit history entries (nil = unlimited, default)
   Returns {:ok session-id} on success, {:error :chart-not-found} if chart not registered."
   core/start!)
 

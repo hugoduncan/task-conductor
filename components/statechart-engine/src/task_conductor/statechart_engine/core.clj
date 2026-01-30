@@ -23,6 +23,9 @@
   Each entry is {:state config :event event :timestamp inst}."} histories
   (atom {}))
 
+(defonce ^{:doc "Map of session-id to max history size (nil = unlimited)."} history-limits
+  (atom {}))
+
 ;;; Internal Helpers
 
 (defn- generate-session-id []
@@ -61,19 +64,32 @@
 
 (defn start!
   "Start a new session of the registered chart.
+  Options:
+    :max-history-size - limit history entries (nil = unlimited, default)
   Returns {:ok session-id} on success, {:error :chart-not-found} if chart not registered."
-  [chart-name]
-  (if-not (contains? @charts chart-name)
-    {:error :chart-not-found}
-    (let [session-id (generate-session-id)
-          processor  (::sc/processor env)
-          wmem       (sp/start! processor env chart-name
-                                {::sc/session-id session-id})
-          init-state (::sc/configuration wmem)
-          init-entry {:state init-state :event nil :timestamp (java.time.Instant/now)}]
-      (swap! sessions assoc session-id wmem)
-      (swap! histories assoc session-id [init-entry])
-      {:ok session-id})))
+  ([chart-name] (start! chart-name nil))
+  ([chart-name opts]
+   (if-not (contains? @charts chart-name)
+     {:error :chart-not-found}
+     (let [session-id (generate-session-id)
+           processor  (::sc/processor env)
+           wmem       (sp/start! processor env chart-name
+                                 {::sc/session-id session-id})
+           init-state (::sc/configuration wmem)
+           init-entry {:state init-state :event nil :timestamp (java.time.Instant/now)}
+           max-size   (:max-history-size opts)]
+       (swap! sessions assoc session-id wmem)
+       (swap! histories assoc session-id [init-entry])
+       (when max-size
+         (swap! history-limits assoc session-id max-size))
+       {:ok session-id}))))
+
+(defn- trim-history
+  "Trim history to max-size, keeping most recent entries."
+  [entries max-size]
+  (if (and max-size (> (count entries) max-size))
+    (vec (take-last max-size entries))
+    entries))
 
 (defn send!
   "Send an event to a session.
@@ -84,9 +100,11 @@
     (let [processor  (::sc/processor env)
           new-wmem   (sp/process-event! processor env wmem (evts/new-event event))
           new-state  (::sc/configuration new-wmem)
-          new-entry  {:state new-state :event event :timestamp (java.time.Instant/now)}]
+          new-entry  {:state new-state :event event :timestamp (java.time.Instant/now)}
+          max-size   (get @history-limits session-id)]
       (swap! sessions assoc session-id new-wmem)
-      (swap! histories update session-id conj new-entry)
+      (swap! histories update session-id
+             (fn [entries] (trim-history (conj entries new-entry) max-size)))
       {:ok new-state})
     {:error :session-not-found}))
 
@@ -98,6 +116,7 @@
     (do
       (swap! sessions dissoc session-id)
       (swap! histories dissoc session-id)
+      (swap! history-limits dissoc session-id)
       {:ok session-id})
     {:error :session-not-found}))
 
@@ -106,7 +125,8 @@
   []
   (reset! charts #{})
   (reset! sessions {})
-  (reset! histories {}))
+  (reset! histories {})
+  (reset! history-limits {}))
 
 ;;; Introspection API
 
