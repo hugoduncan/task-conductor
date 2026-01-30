@@ -33,12 +33,42 @@
     {:claude-cli/error :not-found
      :claude-cli/invocation-id invocation-id}))
 
+;;; Resolvers
+
+(graph/defresolver invocation-result
+  "Resolve the status and result of a Claude CLI invocation.
+   Returns pending status if not complete, full result when done.
+   For unknown invocation-id, returns status :not-found with error."
+  [{:claude-cli/keys [invocation-id]}]
+  {::pco/input [:claude-cli/invocation-id]
+   ::pco/output [:claude-cli/status
+                 :claude-cli/exit-code
+                 :claude-cli/events
+                 :claude-cli/error]}
+  (if-let [entry (registry/get-invocation invocation-id)]
+    (let [{:keys [status handle]} entry]
+      (if (= :cancelled status)
+        {:claude-cli/status :cancelled}
+        (let [result-promise (:result-promise handle)]
+          (if (realized? result-promise)
+            (let [result @result-promise
+                  new-status (if (:error result) :error :complete)]
+              (registry/update-invocation! invocation-id
+                                           {:status new-status :result result})
+              {:claude-cli/status new-status
+               :claude-cli/exit-code (:exit-code result)
+               :claude-cli/events (:events result)})
+            {:claude-cli/status :pending}))))
+    {:claude-cli/status :not-found
+     :claude-cli/error :not-found}))
+
 ;;; Registration
 
 (def all-operations
-  "Vector of all claude-cli mutations."
+  "Vector of all claude-cli operations."
   [invoke!
-   cancel!])
+   cancel!
+   invocation-result])
 
 (defn register-resolvers!
   "Register all claude-cli mutations with pathom-graph.

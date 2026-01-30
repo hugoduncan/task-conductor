@@ -115,3 +115,64 @@
               response (get result `resolvers/cancel!)]
           (is (= :not-found (:claude-cli/error response)))
           (is (= fake-id (:claude-cli/invocation-id response))))))))
+
+;;; invocation-result resolver tests
+
+(deftest invocation-result-test
+  (testing "invocation-result resolver"
+    (testing "returns :pending status for unrealized promise"
+      (with-clean-state
+        (let [handle (mock-handle)
+              id (registry/create-invocation! handle)
+              result (graph/query [{[:claude-cli/invocation-id id]
+                                    [:claude-cli/status]}])
+              response (get result [:claude-cli/invocation-id id])]
+          (is (= :pending (:claude-cli/status response))))))
+
+    (testing "returns :complete status with result when promise realized"
+      (with-clean-state
+        (let [p (promise)
+              handle {:process :mock :result-promise p}
+              id (registry/create-invocation! handle)
+              _ (deliver p {:exit-code 0 :events [{:type "end"}]})
+              result (graph/query [{[:claude-cli/invocation-id id]
+                                    [:claude-cli/status
+                                     :claude-cli/exit-code
+                                     :claude-cli/events]}])
+              response (get result [:claude-cli/invocation-id id])]
+          (is (= :complete (:claude-cli/status response)))
+          (is (= 0 (:claude-cli/exit-code response)))
+          (is (= [{:type "end"}] (:claude-cli/events response))))))
+
+    (testing "returns :error status when result contains error"
+      (with-clean-state
+        (let [p (promise)
+              handle {:process :mock :result-promise p}
+              id (registry/create-invocation! handle)
+              _ (deliver p {:exit-code nil :error :timeout})
+              result (graph/query [{[:claude-cli/invocation-id id]
+                                    [:claude-cli/status
+                                     :claude-cli/exit-code]}])
+              response (get result [:claude-cli/invocation-id id])]
+          (is (= :error (:claude-cli/status response)))
+          (is (nil? (:claude-cli/exit-code response))))))
+
+    (testing "returns :cancelled status for cancelled invocation"
+      (with-clean-state
+        (let [handle (mock-handle)
+              id (registry/create-invocation! handle)]
+          (registry/update-invocation! id {:status :cancelled})
+          (let [result (graph/query [{[:claude-cli/invocation-id id]
+                                      [:claude-cli/status]}])
+                response (get result [:claude-cli/invocation-id id])]
+            (is (= :cancelled (:claude-cli/status response)))))))
+
+    (testing "returns :not-found status and error for unknown invocation id"
+      (with-clean-state
+        (let [fake-id (random-uuid)
+              result (graph/query [{[:claude-cli/invocation-id fake-id]
+                                    [:claude-cli/status
+                                     :claude-cli/error]}])
+              response (get result [:claude-cli/invocation-id fake-id])]
+          (is (= :not-found (:claude-cli/status response)))
+          (is (= :not-found (:claude-cli/error response))))))))
