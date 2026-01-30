@@ -67,3 +67,70 @@
                                  :disallowed-tools ["Write"]
                                  :max-turns 5
                                  :mcp-config "/cfg.json"})))))))
+
+;;; invoke-process tests
+
+;; Tests that invoke-process correctly manages process lifecycle, parses JSON output,
+;; handles callbacks, and respects timeout. Uses mock bash commands instead of real Claude CLI.
+
+(deftest invoke-process-test
+  (testing "invoke-process"
+    (testing "with successful JSON output"
+      (testing "parses events and returns exit code 0"
+        (let [lines (atom [])
+              events (atom [])
+              {:keys [result-promise]} (core/invoke-process
+                                        {:_args ["bash" "-c"
+                                                 "echo '{\"type\":\"start\"}'; echo '{\"type\":\"end\"}'"]
+                                         :on-line #(swap! lines conj %)
+                                         :on-event #(swap! events conj %)})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result) "should complete within timeout")
+          (is (= 0 (:exit-code result)))
+          (is (= [{:type "start"} {:type "end"}] (:events result)))
+          (is (= ["{\"type\":\"start\"}" "{\"type\":\"end\"}"] @lines))
+          (is (= [{:type "start"} {:type "end"}] @events)))))
+
+    (testing "with non-zero exit code"
+      (testing "returns exit code in result without throwing"
+        (let [{:keys [result-promise]} (core/invoke-process
+                                        {:_args ["bash" "-c" "exit 42"]})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result))
+          (is (= 42 (:exit-code result)))
+          (is (= [] (:events result))))))
+
+    (testing "with invalid JSON line"
+      (testing "includes parse-error event"
+        (let [{:keys [result-promise]} (core/invoke-process
+                                        {:_args ["bash" "-c"
+                                                 "echo 'not json'; echo '{\"ok\":true}'"]})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result))
+          (is (= 0 (:exit-code result)))
+          (is (= [{:type "parse-error" :line "not json"}
+                  {:ok true}]
+                 (:events result))))))
+
+    (testing "with timeout"
+      (testing "returns timeout error and kills process"
+        (let [{:keys [process result-promise]} (core/invoke-process
+                                                {:_args ["bash" "-c" "sleep 10"]
+                                                 :timeout 100})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result) "promise should be delivered")
+          (is (= :timeout (:error result)))
+          (is (nil? (:exit-code result)))
+          ;; Verify process was destroyed
+          (is (not (.isAlive (:proc process)))))))
+
+    (testing "with :dir option"
+      (testing "runs process in specified directory"
+        (let [{:keys [result-promise]} (core/invoke-process
+                                        {:_args ["bash" "-c" "echo \"{\\\"cwd\\\":\\\"$(pwd)\\\"}\""]
+                                         :dir "/tmp"})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result))
+          (is (= 0 (:exit-code result)))
+          ;; /tmp may resolve to /private/tmp on macOS
+          (is (re-find #"/tmp$" (:cwd (first (:events result))))))))))
