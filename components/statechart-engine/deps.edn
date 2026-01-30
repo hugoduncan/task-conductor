@@ -1,0 +1,4 @@
+{:paths ["src" "resources"]
+ :deps {com.fulcrologic/statecharts {:mvn/version "1.2.25"}}
+ :aliases
+ {:test {:extra-paths ["test"]}}}

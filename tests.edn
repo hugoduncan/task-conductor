@@ -4,9 +4,11 @@
   ;; All tests: clj -M:test (or: clj -M:test unit integration)
   :tests [{:id           :unit
            :source-paths ["bases/agent-runner/src"
-                          "components/claude-cli/src"]
+                          "components/claude-cli/src"
+                          "components/statechart-engine/src"]
            :test-paths   ["bases/agent-runner/test"
-                          "components/claude-cli/test"]
+                          "components/claude-cli/test"
+                          "components/statechart-engine/test"]
            :skip-meta    [:integration]}
           {:id           :integration
            :source-paths ["components/claude-cli/src"]
