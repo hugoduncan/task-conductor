@@ -31,13 +31,26 @@
   Takes an ID and a map of fields to merge into the entry.
   Returns the updated entry, or nil if ID not found."
   [id updates]
-  (when (contains? @invocations id)
-    (get (swap! invocations update id merge updates) id)))
+  (let [result (atom nil)]
+    (swap! invocations
+           (fn [m]
+             (if (contains? m id)
+               (let [updated (update m id merge updates)]
+                 (reset! result (get updated id))
+                 updated)
+               m)))
+    @result))
 
 (defn remove-invocation!
   "Remove an invocation entry from the registry.
   Returns the removed entry, or nil if ID not found."
   [id]
-  (when-let [entry (get @invocations id)]
-    (swap! invocations dissoc id)
-    entry))
+  (let [result (atom nil)]
+    (swap! invocations
+           (fn [m]
+             (if-let [entry (get m id)]
+               (do
+                 (reset! result entry)
+                 (dissoc m id))
+               m)))
+    @result))
