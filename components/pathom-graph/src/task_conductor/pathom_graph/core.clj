@@ -35,7 +35,7 @@
             e (if (seq ops)
                 (pci/register ops)
                 {})]
-        (clojure.core/reset! env-cache e)
+        (reset! env-cache e)
         e)))
 
 ;;; Query
@@ -53,6 +53,6 @@
 (defn reset-graph!
   "Clear all registered operations. For testing only."
   []
-  (clojure.core/reset! registry {})
-  (clojure.core/reset! env-cache nil)
+  (reset! registry {})
+  (reset! env-cache nil)
   :reset)
