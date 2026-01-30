@@ -1,4 +1,14 @@
 #kaocha/v1
- {:tests [{:id           :unit
-           :source-paths ["bases/agent-runner/src"]
-           :test-paths   ["bases/agent-runner/test"]}]}
+ {;; Unit tests only (fast, no external deps): clj -M:test unit
+  ;; Integration tests only (requires Claude CLI): clj -M:test integration
+  ;; All tests: clj -M:test (or: clj -M:test unit integration)
+  :tests [{:id           :unit
+           :source-paths ["bases/agent-runner/src"
+                          "components/claude-cli/src"]
+           :test-paths   ["bases/agent-runner/test"
+                          "components/claude-cli/test"]
+           :skip-meta    [:integration]}
+          {:id           :integration
+           :source-paths ["components/claude-cli/src"]
+           :test-paths   ["components/claude-cli/test"]
+           :focus-meta   [:integration]}]}
