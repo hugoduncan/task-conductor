@@ -1,4 +1,6 @@
 #kaocha/v1
  {:tests [{:id           :unit
-           :source-paths ["bases/agent-runner/src"]
-           :test-paths   ["bases/agent-runner/test"]}]}
+           :source-paths ["bases/agent-runner/src"
+                          "components/claude-cli/src"]
+           :test-paths   ["bases/agent-runner/test"
+                          "components/claude-cli/test"]}]}
