@@ -134,3 +134,31 @@
           (is (= 0 (:exit-code result)))
           ;; /tmp may resolve to /private/tmp on macOS
           (is (re-find #"/tmp$" (:cwd (first (:events result))))))))))
+
+;;; cancel! tests
+
+;; Tests that cancel! correctly terminates a running process and handles
+;; already-terminated processes gracefully.
+
+(deftest cancel!-test
+  (testing "cancel!"
+    (testing "on a running process"
+      (testing "returns true and terminates the process"
+        (let [start-time (System/currentTimeMillis)
+              handle (core/invoke-process {:_args ["bash" "-c" "sleep 10"]})
+              ;; Give process time to start
+              _ (Thread/sleep 50)
+              cancelled (core/cancel! handle)
+              result (deref (:result-promise handle) 5000 :timeout)
+              elapsed (- (System/currentTimeMillis) start-time)]
+          (is (true? cancelled) "should return true when killing running process")
+          (is (not= :timeout result) "promise should be delivered")
+          (is (< elapsed 5000) "should terminate well before sleep finishes"))))
+
+    (testing "on an already-terminated process"
+      (testing "returns false"
+        (let [handle (core/invoke-process {:_args ["bash" "-c" "exit 0"]})
+              _ (deref (:result-promise handle) 5000 :timeout)
+              ;; Process has already finished
+              cancelled (core/cancel! handle)]
+          (is (false? cancelled) "should return false for terminated process"))))))

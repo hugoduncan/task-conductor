@@ -92,3 +92,15 @@
           (when scheduler
             (.shutdown scheduler)))))
     {:process proc :result-promise result-promise}))
+
+(defn cancel!
+  "Cancel a running invocation by destroying the process.
+  Returns true if the process was running and is now destroyed,
+  false if already terminated."
+  [handle]
+  (let [proc (:proc (:process handle))]
+    (if (.isAlive proc)
+      (do
+        (p/destroy (:process handle))
+        true)
+      false)))
