@@ -6,22 +6,8 @@
    [clojure.test :refer [deftest is testing]]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.statechart-engine.interface :as sc]
-   [task-conductor.statechart-engine.resolvers :as resolvers]))
-
-;;; Test Helpers
-
-(defmacro with-clean-state
-  "Execute body with fresh engine and graph state."
-  [& body]
-  `(do
-     (sc/reset-engine!)
-     (graph/reset-graph!)
-     (resolvers/register-resolvers!)
-     (try
-       ~@body
-       (finally
-         (sc/reset-engine!)
-         (graph/reset-graph!)))))
+   [task-conductor.statechart-engine.resolvers :as resolvers]
+   [task-conductor.statechart-engine.test-helpers :refer [with-clean-state]]))
 
 ;;; Test Chart
 
