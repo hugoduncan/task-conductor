@@ -19,6 +19,10 @@
 (defonce ^{:doc "Map of session-id to working memory."} sessions
   (atom {}))
 
+(defonce ^{:doc "Map of session-id to history entries.
+  Each entry is {:state config :event event :timestamp inst}."} histories
+  (atom {}))
+
 ;;; Internal Helpers
 
 (defn- generate-session-id []
@@ -56,8 +60,11 @@
     (let [session-id (generate-session-id)
           processor  (::sc/processor env)
           wmem       (sp/start! processor env chart-name
-                                {::sc/session-id session-id})]
+                                {::sc/session-id session-id})
+          init-state (::sc/configuration wmem)
+          init-entry {:state init-state :event nil :timestamp (java.time.Instant/now)}]
       (swap! sessions assoc session-id wmem)
+      (swap! histories assoc session-id [init-entry])
       {:ok session-id})))
 
 (defn send!
@@ -66,10 +73,13 @@
   or {:error :session-not-found} if session doesn't exist."
   [session-id event]
   (if-let [wmem (get @sessions session-id)]
-    (let [processor (::sc/processor env)
-          new-wmem  (sp/process-event! processor env wmem (evts/new-event event))]
+    (let [processor  (::sc/processor env)
+          new-wmem   (sp/process-event! processor env wmem (evts/new-event event))
+          new-state  (::sc/configuration new-wmem)
+          new-entry  {:state new-state :event event :timestamp (java.time.Instant/now)}]
       (swap! sessions assoc session-id new-wmem)
-      {:ok (::sc/configuration new-wmem)})
+      (swap! histories update session-id conj new-entry)
+      {:ok new-state})
     {:error :session-not-found}))
 
 (defn stop!
@@ -79,6 +89,7 @@
   (if (contains? @sessions session-id)
     (do
       (swap! sessions dissoc session-id)
+      (swap! histories dissoc session-id)
       {:ok session-id})
     {:error :session-not-found}))
 
@@ -86,7 +97,8 @@
   "Reset engine state. For testing only."
   []
   (reset! charts #{})
-  (reset! sessions {}))
+  (reset! sessions {})
+  (reset! histories {}))
 
 ;;; Introspection API
 
@@ -143,3 +155,17 @@
                               config)]
       {:ok all-events})
     {:error :session-not-found}))
+
+(defn history
+  "Returns the state transition history for a session.
+  Returns {:ok [{:state config :event event :timestamp inst} ...]} in chronological order,
+  or {:error :session-not-found} if session doesn't exist.
+  With optional n parameter, returns only the last n entries."
+  ([session-id]
+   (if-let [entries (get @histories session-id)]
+     {:ok entries}
+     {:error :session-not-found}))
+  ([session-id n]
+   (if-let [entries (get @histories session-id)]
+     {:ok (vec (take-last n entries))}
+     {:error :session-not-found})))

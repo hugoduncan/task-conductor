@@ -189,3 +189,65 @@
       (with-clean-engine
         (is (= {:error :session-not-found}
                (core/available-events "missing")))))))
+
+(deftest history-test
+  ;; Tests history tracking: initial state recording, transition tracking, and cleanup.
+  (testing "history"
+    (testing "records initial state on session start"
+      (with-clean-engine
+        (core/register! ::hist-init simple-chart)
+        (let [{:keys [ok]} (core/start! ::hist-init)
+              session-id   ok
+              result       (core/history session-id)]
+          (is (contains? result :ok))
+          (is (= 1 (count (:ok result))))
+          (let [entry (first (:ok result))]
+            (is (contains? (:state entry) :off))
+            (is (nil? (:event entry)))
+            (is (inst? (:timestamp entry)))))))
+
+    (testing "appends entry after each transition"
+      (with-clean-engine
+        (core/register! ::hist-trans simple-chart)
+        (let [{:keys [ok]} (core/start! ::hist-trans)
+              session-id   ok
+              _            (core/send! session-id :toggle)
+              _            (core/send! session-id :toggle)
+              result       (core/history session-id)]
+          (is (= 3 (count (:ok result))))
+          (let [[e1 e2 e3] (:ok result)]
+            (is (contains? (:state e1) :off))
+            (is (nil? (:event e1)))
+            (is (contains? (:state e2) :on))
+            (is (= :toggle (:event e2)))
+            (is (contains? (:state e3) :off))
+            (is (= :toggle (:event e3)))))))
+
+    (testing "returns last n entries with limit parameter"
+      (with-clean-engine
+        (core/register! ::hist-limit simple-chart)
+        (let [{:keys [ok]} (core/start! ::hist-limit)
+              session-id   ok
+              _            (core/send! session-id :toggle)
+              _            (core/send! session-id :toggle)
+              _            (core/send! session-id :toggle)
+              result       (core/history session-id 2)]
+          (is (= 2 (count (:ok result))))
+          (let [[e1 e2] (:ok result)]
+            (is (= :toggle (:event e1)))
+            (is (= :toggle (:event e2)))))))
+
+    (testing "clears history when session stopped"
+      (with-clean-engine
+        (core/register! ::hist-stop simple-chart)
+        (let [{:keys [ok]} (core/start! ::hist-stop)
+              session-id   ok
+              _            (core/send! session-id :toggle)
+              _            (core/stop! session-id)
+              result       (core/history session-id)]
+          (is (= {:error :session-not-found} result)))))
+
+    (testing "returns error when session not found"
+      (with-clean-engine
+        (is (= {:error :session-not-found}
+               (core/history "no-such-session")))))))
