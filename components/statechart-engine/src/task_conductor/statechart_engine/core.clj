@@ -1,17 +1,55 @@
 (ns task-conductor.statechart-engine.core
   "Core statechart engine implementation.
-  Provides singleton environment for registering statecharts and managing sessions."
+  Provides singleton environment for registering statecharts and managing sessions.
+  Actions execute EQL through Pathom (pathom-graph component)."
   (:require
    [com.fulcrologic.statecharts :as sc]
    [com.fulcrologic.statecharts.chart :as chart]
    [com.fulcrologic.statecharts.protocols :as sp]
    [com.fulcrologic.statecharts.simple :as simple]
-   [com.fulcrologic.statecharts.events :as evts]))
+   [com.fulcrologic.statecharts.events :as evts]
+   [task-conductor.pathom-graph.interface :as graph]))
+
+;;; EQL Executor
+
+(defrecord EQLExecutionModel []
+  sp/ExecutionModel
+  (run-expression! [_this env expression]
+    ;; expression is the :expr from action/assign elements
+    ;; env contains statechart context including data-model
+    (when expression
+      (cond
+        ;; EQL vector - run as query
+        (vector? expression)
+        (graph/query expression)
+
+        ;; Function - call with env and data (for assign compatibility)
+        ;; Assign expressions expect (fn [env data] ...) signature
+        (fn? expression)
+        (let [data-model (::sc/data-model env)
+              wmem       (::sc/vwmem env)
+              data       (sp/get-at data-model wmem [])]
+          (expression env data))
+
+        ;; Symbol list (mutation call) - wrap and run
+        (and (list? expression) (symbol? (first expression)))
+        (graph/query [expression])
+
+        :else
+        (throw (ex-info "Unknown action expression type"
+                        {:expression expression
+                         :type (type expression)}))))))
+
+(defn- eql-env
+  "Create statechart env with EQL execution model."
+  []
+  (simple/simple-env
+   {::sc/execution-model (->EQLExecutionModel)}))
 
 ;;; Singleton State
 
 (defonce ^{:doc "Singleton statecharts environment."} env
-  (simple/simple-env))
+  (eql-env))
 
 (defonce ^{:doc "Set of registered chart names."} charts
   (atom #{}))
@@ -41,22 +79,23 @@
 
 (defn register!
   "Register a statechart definition under the given name.
-  Returns {:ok chart-name} on success,
-  {:error :already-registered} if name exists,
-  {:error :invalid-chart-def} if chart-def is not a valid statechart."
+  Returns chart-name on success.
+  Throws if name already registered or chart-def is invalid."
   [chart-name chart-def]
   (cond
     (not (valid-chart-def? chart-def))
-    {:error :invalid-chart-def}
+    (throw (ex-info "Invalid chart definition"
+                    {:error :invalid-chart-def :chart-name chart-name}))
 
     (contains? @charts chart-name)
-    {:error :already-registered}
+    (throw (ex-info "Chart already registered"
+                    {:error :already-registered :chart-name chart-name}))
 
     :else
     (do
       (simple/register! env chart-name chart-def)
       (swap! charts conj chart-name)
-      {:ok chart-name})))
+      chart-name)))
 
 (defn unregister!
   "Remove a chart registration from the engine.
@@ -65,7 +104,7 @@
   the underlying fulcrologic statecharts registry. Sessions already started
   with this chart will continue to function until stopped.
 
-  Returns {:ok chart-name} on success, {:error :not-found} if not registered."
+  Returns chart-name on success. Throws if not registered."
   [chart-name]
   (if (contains? @charts chart-name)
     (let [registry (::sc/statechart-registry env)]
@@ -73,30 +112,32 @@
       (swap! (:charts registry) dissoc chart-name)
       ;; Remove from our tracking set
       (swap! charts disj chart-name)
-      {:ok chart-name})
-    {:error :not-found}))
+      chart-name)
+    (throw (ex-info "Chart not found"
+                    {:error :not-found :chart-name chart-name}))))
 
 (defn start!
   "Start a new session of the registered chart.
   Options:
     :max-history-size - limit history entries (nil = unlimited, default)
-  Returns {:ok session-id} on success, {:error :chart-not-found} if chart not registered."
+  Returns session-id on success. Throws if chart not registered."
   ([chart-name] (start! chart-name nil))
   ([chart-name opts]
-   (if-not (contains? @charts chart-name)
-     {:error :chart-not-found}
-     (let [session-id (generate-session-id)
-           processor  (::sc/processor env)
-           wmem       (sp/start! processor env chart-name
-                                 {::sc/session-id session-id})
-           init-state (::sc/configuration wmem)
-           init-entry {:state init-state :event nil :timestamp (java.time.Instant/now)}
-           max-size   (:max-history-size opts)]
-       (swap! sessions assoc session-id wmem)
-       (swap! histories assoc session-id [init-entry])
-       (when max-size
-         (swap! history-limits assoc session-id max-size))
-       {:ok session-id}))))
+   (when-not (contains? @charts chart-name)
+     (throw (ex-info "Chart not found"
+                     {:error :chart-not-found :chart-name chart-name})))
+   (let [session-id (generate-session-id)
+         processor  (::sc/processor env)
+         wmem       (sp/start! processor env chart-name
+                               {::sc/session-id session-id})
+         init-state (::sc/configuration wmem)
+         init-entry {:state init-state :event nil :timestamp (java.time.Instant/now)}
+         max-size   (:max-history-size opts)]
+     (swap! sessions assoc session-id wmem)
+     (swap! histories assoc session-id [init-entry])
+     (when max-size
+       (swap! history-limits assoc session-id max-size))
+     session-id)))
 
 (defn- trim-history
   "Trim history to max-size, keeping most recent entries."
@@ -107,8 +148,8 @@
 
 (defn send!
   "Send an event to a session.
-  Returns {:ok state-config} on success where state-config is the set of active states,
-  or {:error :session-not-found} if session doesn't exist."
+  Returns state-config (set of active states) on success.
+  Throws if session doesn't exist."
   [session-id event]
   (if-let [wmem (get @sessions session-id)]
     (let [processor  (::sc/processor env)
@@ -119,20 +160,22 @@
       (swap! sessions assoc session-id new-wmem)
       (swap! histories update session-id
              (fn [entries] (trim-history (conj entries new-entry) max-size)))
-      {:ok new-state})
-    {:error :session-not-found}))
+      new-state)
+    (throw (ex-info "Session not found"
+                    {:error :session-not-found :session-id session-id}))))
 
 (defn stop!
   "Stop and remove a session.
-  Returns {:ok session-id} on success, {:error :session-not-found} if session doesn't exist."
+  Returns session-id on success. Throws if session doesn't exist."
   [session-id]
   (if (contains? @sessions session-id)
     (do
       (swap! sessions dissoc session-id)
       (swap! histories dissoc session-id)
       (swap! history-limits dissoc session-id)
-      {:ok session-id})
-    {:error :session-not-found}))
+      session-id)
+    (throw (ex-info "Session not found"
+                    {:error :session-not-found :session-id session-id}))))
 
 (defn reset-engine!
   "Reset engine state. For testing only."
@@ -146,22 +189,23 @@
 
 (defn state
   "Returns the current state configuration for a session.
-  Returns {:ok state-config} where state-config is a set of active state keywords,
-  or {:error :session-not-found} if session doesn't exist."
+  Returns state-config (set of active state keywords).
+  Throws if session doesn't exist."
   [session-id]
   (if-let [wmem (get @sessions session-id)]
-    {:ok (::sc/configuration wmem)}
-    {:error :session-not-found}))
+    (::sc/configuration wmem)
+    (throw (ex-info "Session not found"
+                    {:error :session-not-found :session-id session-id}))))
 
 (defn list-sessions
-  "Returns {:ok [session-id ...]} with all active session IDs."
+  "Returns vector of all active session IDs."
   []
-  {:ok (vec (keys @sessions))})
+  (vec (keys @sessions)))
 
 (defn list-charts
-  "Returns {:ok [chart-name ...]} with all registered chart names."
+  "Returns vector of all registered chart names."
   []
-  {:ok (vec @charts)})
+  (vec @charts))
 
 (defn- get-statechart
   "Retrieves the statechart definition from the registry."
@@ -185,7 +229,7 @@
 
 (defn available-events
   "Returns events that would trigger transitions from the current state.
-  Returns {:ok #{event ...}} or {:error :session-not-found}."
+  Returns set of event keywords. Throws if session not found."
   [session-id]
   (if-let [wmem (get @sessions session-id)]
     (let [chart-name  (::sc/statechart-src wmem)
@@ -195,19 +239,22 @@
                                 (into events (events-for-state statechart state-id)))
                               #{}
                               config)]
-      {:ok all-events})
-    {:error :session-not-found}))
+      all-events)
+    (throw (ex-info "Session not found"
+                    {:error :session-not-found :session-id session-id}))))
 
 (defn history
   "Returns the state transition history for a session.
-  Returns {:ok [{:state config :event event :timestamp inst} ...]} in chronological order,
-  or {:error :session-not-found} if session doesn't exist.
-  With optional n parameter, returns only the last n entries."
+  Returns [{:state config :event event :timestamp inst} ...] in chronological order.
+  With optional n parameter, returns only the last n entries.
+  Throws if session doesn't exist."
   ([session-id]
    (if-let [entries (get @histories session-id)]
-     {:ok entries}
-     {:error :session-not-found}))
+     entries
+     (throw (ex-info "Session not found"
+                     {:error :session-not-found :session-id session-id}))))
   ([session-id n]
    (if-let [entries (get @histories session-id)]
-     {:ok (vec (take-last n entries))}
-     {:error :session-not-found})))
+     (vec (take-last n entries))
+     (throw (ex-info "Session not found"
+                     {:error :session-not-found :session-id session-id})))))

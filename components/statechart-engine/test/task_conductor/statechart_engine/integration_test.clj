@@ -98,15 +98,14 @@
     (testing "cycles through red → green → yellow → red"
       (with-clean-engine
         (sc/register! ::traffic (simple-traffic-light))
-        (let [{:keys [ok]} (sc/start! ::traffic)
-              sid          ok]
-          (is (contains? (:ok (sc/current-state sid)) :red))
+        (let [sid (sc/start! ::traffic)]
+          (is (contains? (sc/current-state sid) :red))
           (sc/send! sid :next)
-          (is (contains? (:ok (sc/current-state sid)) :green))
+          (is (contains? (sc/current-state sid) :green))
           (sc/send! sid :next)
-          (is (contains? (:ok (sc/current-state sid)) :yellow))
+          (is (contains? (sc/current-state sid) :yellow))
           (sc/send! sid :next)
-          (is (contains? (:ok (sc/current-state sid)) :red)))))))
+          (is (contains? (sc/current-state sid) :red)))))))
 
 (deftest maintenance-interrupt-test
   ;; Tests maintenance mode: interrupt from any state, return via history.
@@ -114,33 +113,31 @@
     (testing "can enter maintenance from green and return via history"
       (with-clean-engine
         (sc/register! ::maint (simple-traffic-light))
-        (let [{:keys [ok]} (sc/start! ::maint)
-              sid          ok]
+        (let [sid (sc/start! ::maint)]
           ;; Move to green
           (sc/send! sid :next)
-          (is (contains? (:ok (sc/current-state sid)) :green))
+          (is (contains? (sc/current-state sid) :green))
           ;; Enter maintenance
           (sc/send! sid :maintain)
-          (is (contains? (:ok (sc/current-state sid)) :maintenance))
+          (is (contains? (sc/current-state sid) :maintenance))
           ;; Resume should return to green via history
           (sc/send! sid :resume)
-          (is (contains? (:ok (sc/current-state sid)) :green)))))
+          (is (contains? (sc/current-state sid) :green)))))
 
     (testing "can enter maintenance from yellow and return via history"
       (with-clean-engine
         (sc/register! ::maint2 (simple-traffic-light))
-        (let [{:keys [ok]} (sc/start! ::maint2)
-              sid          ok]
+        (let [sid (sc/start! ::maint2)]
           ;; Move to yellow
           (sc/send! sid :next)
           (sc/send! sid :next)
-          (is (contains? (:ok (sc/current-state sid)) :yellow))
+          (is (contains? (sc/current-state sid) :yellow))
           ;; Enter maintenance
           (sc/send! sid :maintain)
-          (is (contains? (:ok (sc/current-state sid)) :maintenance))
+          (is (contains? (sc/current-state sid) :maintenance))
           ;; Resume should return to yellow
           (sc/send! sid :resume)
-          (is (contains? (:ok (sc/current-state sid)) :yellow)))))))
+          (is (contains? (sc/current-state sid) :yellow)))))))
 
 (deftest introspection-during-execution-test
   ;; Tests introspection functions at each step of execution.
@@ -148,31 +145,30 @@
     (testing "current-state, available-events, and history are accurate at each step"
       (with-clean-engine
         (sc/register! ::intro (simple-traffic-light))
-        (let [{:keys [ok]} (sc/start! ::intro)
-              sid          ok]
+        (let [sid (sc/start! ::intro)]
           ;; Initial state
-          (is (= #{:operating :red} (:ok (sc/current-state sid))))
-          (is (contains? (:ok (sc/available-events sid)) :next))
-          (is (contains? (:ok (sc/available-events sid)) :maintain))
-          (is (= 1 (count (:ok (sc/history sid)))))
-          (is (nil? (:event (first (:ok (sc/history sid))))))
+          (is (= #{:operating :red} (sc/current-state sid)))
+          (is (contains? (sc/available-events sid) :next))
+          (is (contains? (sc/available-events sid) :maintain))
+          (is (= 1 (count (sc/history sid))))
+          (is (nil? (:event (first (sc/history sid)))))
 
           ;; After first transition
           (sc/send! sid :next)
-          (is (= #{:operating :green} (:ok (sc/current-state sid))))
-          (is (= 2 (count (:ok (sc/history sid)))))
-          (is (= :next (:event (second (:ok (sc/history sid))))))
+          (is (= #{:operating :green} (sc/current-state sid)))
+          (is (= 2 (count (sc/history sid))))
+          (is (= :next (:event (second (sc/history sid)))))
 
           ;; After maintenance
           (sc/send! sid :maintain)
-          (is (= #{:maintenance} (:ok (sc/current-state sid))))
-          (is (= #{:resume} (:ok (sc/available-events sid))))
-          (is (= 3 (count (:ok (sc/history sid)))))
+          (is (= #{:maintenance} (sc/current-state sid)))
+          (is (= #{:resume} (sc/available-events sid)))
+          (is (= 3 (count (sc/history sid))))
 
           ;; After resume
           (sc/send! sid :resume)
-          (is (= #{:operating :green} (:ok (sc/current-state sid))))
-          (is (= 4 (count (:ok (sc/history sid))))))))))
+          (is (= #{:operating :green} (sc/current-state sid)))
+          (is (= 4 (count (sc/history sid)))))))))
 
 (deftest concurrent-sessions-test
   ;; Tests multiple sessions of the same chart running independently.
@@ -180,13 +176,13 @@
     (testing "multiple sessions run independently"
       (with-clean-engine
         (sc/register! ::concurrent (simple-traffic-light))
-        (let [{s1 :ok} (sc/start! ::concurrent)
-              {s2 :ok} (sc/start! ::concurrent)
-              {s3 :ok} (sc/start! ::concurrent)]
+        (let [s1 (sc/start! ::concurrent)
+              s2 (sc/start! ::concurrent)
+              s3 (sc/start! ::concurrent)]
           ;; All start at red
-          (is (contains? (:ok (sc/current-state s1)) :red))
-          (is (contains? (:ok (sc/current-state s2)) :red))
-          (is (contains? (:ok (sc/current-state s3)) :red))
+          (is (contains? (sc/current-state s1) :red))
+          (is (contains? (sc/current-state s2) :red))
+          (is (contains? (sc/current-state s3) :red))
 
           ;; Move s1 to green, s2 to yellow, leave s3 at red
           (sc/send! s1 :next)
@@ -194,21 +190,21 @@
           (sc/send! s2 :next)
 
           ;; Verify independent states
-          (is (contains? (:ok (sc/current-state s1)) :green))
-          (is (contains? (:ok (sc/current-state s2)) :yellow))
-          (is (contains? (:ok (sc/current-state s3)) :red))
+          (is (contains? (sc/current-state s1) :green))
+          (is (contains? (sc/current-state s2) :yellow))
+          (is (contains? (sc/current-state s3) :red))
 
           ;; Verify independent histories
-          (is (= 2 (count (:ok (sc/history s1)))))
-          (is (= 3 (count (:ok (sc/history s2)))))
-          (is (= 1 (count (:ok (sc/history s3)))))
+          (is (= 2 (count (sc/history s1))))
+          (is (= 3 (count (sc/history s2))))
+          (is (= 1 (count (sc/history s3))))
 
           ;; Verify list-sessions shows all three
-          (let [{:keys [ok]} (sc/list-sessions)]
-            (is (= 3 (count ok)))
-            (is (some #{s1} ok))
-            (is (some #{s2} ok))
-            (is (some #{s3} ok))))))))
+          (let [sessions (sc/list-sessions)]
+            (is (= 3 (count sessions)))
+            (is (some #{s1} sessions))
+            (is (some #{s2} sessions))
+            (is (some #{s3} sessions))))))))
 
 (deftest entry-exit-actions-test
   ;; Tests that entry/exit actions execute and track properly.
@@ -218,8 +214,7 @@
         (let [action-log (atom [])
               chart      (make-traffic-light action-log)]
           (sc/register! ::actions chart)
-          (let [{:keys [ok]} (sc/start! ::actions)
-                sid          ok]
+          (let [sid (sc/start! ::actions)]
             ;; Initial entry to red
             (is (= [[:enter :red]] @action-log))
 
@@ -243,8 +238,7 @@
         (let [action-log (atom [])
               chart      (make-traffic-light action-log)]
           (sc/register! ::maint-actions chart)
-          (let [{:keys [ok]} (sc/start! ::maint-actions)
-                sid          ok]
+          (let [sid (sc/start! ::maint-actions)]
             ;; Move to green
             (sc/send! sid :next)
             (reset! action-log [])

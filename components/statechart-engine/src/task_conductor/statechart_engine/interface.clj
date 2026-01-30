@@ -4,13 +4,18 @@
 
   DSL re-exports from com.fulcrologic.statecharts for chart construction:
     statechart, state, transition, initial, final, parallel, history,
-    on-entry, on-exit, assign, Send
+    on-entry, on-exit, assign, Send, action
 
   Engine functions for managing statecharts:
     register!, unregister!, start!, send!, stop!, reset-engine!
 
   Introspection functions:
-    current-state, list-sessions, list-charts, available-events, history"
+    current-state, list-sessions, list-charts, available-events, history
+
+  Actions can execute EQL via the pathom-graph component:
+    - vector? expression → EQL query
+    - fn? expression → direct call (escape hatch)
+    - (symbol ...) expression → mutation"
   (:require
    [task-conductor.statechart-engine.core :as core]
    [com.fulcrologic.statecharts.chart :as chart]
@@ -80,11 +85,20 @@
   Note: Capitalized to avoid conflict with clojure.core/send."
   ele/Send)
 
+(def action
+  "Define an executable action with an expression.
+  attrs keys: :expr - the expression to execute
+  Expression types:
+    - vector? → EQL query (e.g., [:user/name])
+    - fn? → direct call with statechart env (escape hatch)
+    - (symbol ...) → mutation (e.g., (my.ns/do-thing! {:arg 1}))"
+  ele/script)
+
 ;;; Engine Functions
 
 (def register!
   "Register a statechart definition under the given name.
-  Returns {:ok chart-name} on success, {:error :already-registered} if name exists."
+  Returns chart-name on success. Throws if name already registered or chart-def invalid."
   core/register!)
 
 (def unregister!
@@ -92,25 +106,25 @@
   This removes the chart from both the engine's local registry tracking and
   the underlying fulcrologic statecharts registry. Sessions already started
   with this chart will continue to function until stopped.
-  Returns {:ok chart-name} on success, {:error :not-found} if not registered."
+  Returns chart-name on success. Throws if not registered."
   core/unregister!)
 
 (def start!
   "Start a new session of the registered chart.
   Options:
     :max-history-size - limit history entries (nil = unlimited, default)
-  Returns {:ok session-id} on success, {:error :chart-not-found} if chart not registered."
+  Returns session-id on success. Throws if chart not registered."
   core/start!)
 
 (def send!
   "Send an event to a session.
-  Returns {:ok state-config} on success where state-config is the set of active states,
-  or {:error :session-not-found} if session doesn't exist."
+  Returns state-config (set of active states) on success.
+  Throws if session doesn't exist."
   core/send!)
 
 (def stop!
   "Stop and remove a session.
-  Returns {:ok session-id} on success, {:error :session-not-found} if session doesn't exist."
+  Returns session-id on success. Throws if session doesn't exist."
   core/stop!)
 
 (def reset-engine!
@@ -121,28 +135,28 @@
 
 (defn current-state
   "Returns the current state configuration for a session.
-  Returns {:ok state-config} where state-config is a set of active state keywords,
-  or {:error :session-not-found} if session doesn't exist.
+  Returns state-config (set of active state keywords).
+  Throws if session doesn't exist.
   Note: Named current-state to avoid conflict with ele/state."
   [session-id]
   (core/state session-id))
 
 (def list-sessions
-  "Returns {:ok [session-id ...]} with all active session IDs."
+  "Returns vector of all active session IDs."
   core/list-sessions)
 
 (def list-charts
-  "Returns {:ok [chart-name ...]} with all registered chart names."
+  "Returns vector of all registered chart names."
   core/list-charts)
 
 (def available-events
   "Returns events that would trigger transitions from the current state.
-  Returns {:ok #{event ...}} or {:error :session-not-found}."
+  Returns set of event keywords. Throws if session not found."
   core/available-events)
 
 (def history
   "Returns the state transition history for a session.
-  Returns {:ok [{:state config :event event :timestamp inst} ...]} in chronological order,
-  or {:error :session-not-found} if session doesn't exist.
-  With optional n parameter, returns only the last n entries."
+  Returns [{:state config :event event :timestamp inst} ...] in chronological order.
+  With optional n parameter, returns only the last n entries.
+  Throws if session doesn't exist."
   core/history)

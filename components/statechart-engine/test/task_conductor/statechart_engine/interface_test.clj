@@ -23,37 +23,36 @@
     (testing "allows building a statechart with state and transition"
       (with-clean-engine
         (let [result (sc/register! ::traffic traffic-light)]
-          (is (= {:ok ::traffic} result)))))
+          (is (= ::traffic result)))))
 
     (testing "supports full session lifecycle via interface"
       (with-clean-engine
         (sc/register! ::traffic traffic-light)
-        (let [{:keys [ok]} (sc/start! ::traffic)
-              session-id   ok]
+        (let [session-id (sc/start! ::traffic)]
           (is (string? session-id))
-          (is (= {:ok #{:red}} (sc/current-state session-id)))
-          (is (= #{:next} (:ok (sc/available-events session-id))))
+          (is (= #{:red} (sc/current-state session-id)))
+          (is (= #{:next} (sc/available-events session-id)))
           (sc/send! session-id :next)
-          (is (= {:ok #{:green}} (sc/current-state session-id)))
+          (is (= #{:green} (sc/current-state session-id)))
           (sc/send! session-id :next)
-          (is (= {:ok #{:yellow}} (sc/current-state session-id)))
+          (is (= #{:yellow} (sc/current-state session-id)))
           (sc/send! session-id :next)
-          (is (= {:ok #{:red}} (sc/current-state session-id)))
-          (is (= {:ok session-id} (sc/stop! session-id))))))
+          (is (= #{:red} (sc/current-state session-id)))
+          (is (= session-id (sc/stop! session-id))))))
 
     (testing "provides introspection through interface"
       (with-clean-engine
         (sc/register! ::chart-a traffic-light)
         (sc/register! ::chart-b traffic-light)
-        (is (= 2 (count (:ok (sc/list-charts)))))
-        (let [{s1 :ok} (sc/start! ::chart-a)
-              _        (sc/start! ::chart-b)]
-          (is (= 2 (count (:ok (sc/list-sessions)))))
+        (is (= 2 (count (sc/list-charts))))
+        (let [s1 (sc/start! ::chart-a)
+              _  (sc/start! ::chart-b)]
+          (is (= 2 (count (sc/list-sessions))))
           (sc/send! s1 :next)
-          (let [{:keys [ok]} (sc/history s1)]
-            (is (= 2 (count ok)))
-            (is (= #{:red} (:state (first ok))))
-            (is (= #{:green} (:state (second ok))))))))))
+          (let [entries (sc/history s1)]
+            (is (= 2 (count entries)))
+            (is (= #{:red} (:state (first entries))))
+            (is (= #{:green} (:state (second entries))))))))))
 
 (deftest interface-re-exports-dsl-elements
   ;; Verifies all expected DSL elements are available.
@@ -69,7 +68,8 @@
       (is (fn? sc/on-entry))
       (is (fn? sc/on-exit))
       (is (fn? sc/assign))
-      (is (fn? sc/Send)))
+      (is (fn? sc/Send))
+      (is (fn? sc/action)))
 
     (testing "engine functions are defined"
       (is (fn? sc/register!))
