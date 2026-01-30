@@ -98,9 +98,10 @@
   Returns true if the process was running and is now destroyed,
   false if already terminated."
   [handle]
-  (let [proc (:proc (:process handle))]
-    (if (.isAlive proc)
+  (let [p (:process handle)
+        java-proc (:proc p)]
+    (if (.isAlive java-proc)
       (do
-        (p/destroy (:process handle))
+        (p/destroy p)
         true)
       false)))
