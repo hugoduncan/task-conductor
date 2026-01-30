@@ -18,6 +18,7 @@
     - (symbol ...) expression → mutation"
   (:require
    [task-conductor.statechart-engine.core :as core]
+   [task-conductor.statechart-engine.resolvers] ; registers EQL resolvers on load
    [com.fulcrologic.statecharts.chart :as chart]
    [com.fulcrologic.statecharts.elements :as ele]))
 
