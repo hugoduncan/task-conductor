@@ -102,3 +102,24 @@
       (with-clean-registry
         (let [fake-id (random-uuid)]
           (is (nil? (registry/update-invocation! fake-id {:status :complete}))))))))
+
+(deftest remove-invocation!-test
+  (testing "remove-invocation!"
+    (testing "removes an existing entry"
+      (with-clean-registry
+        (let [id (registry/create-invocation! {:mock "handle"})]
+          (registry/remove-invocation! id)
+          (is (nil? (registry/get-invocation id))))))
+
+    (testing "returns the removed entry"
+      (with-clean-registry
+        (let [handle {:test "data"}
+              id (registry/create-invocation! handle)
+              removed (registry/remove-invocation! id)]
+          (is (some? removed))
+          (is (= handle (:handle removed))))))
+
+    (testing "returns nil for non-existent ID"
+      (with-clean-registry
+        (let [fake-id (random-uuid)]
+          (is (nil? (registry/remove-invocation! fake-id))))))))

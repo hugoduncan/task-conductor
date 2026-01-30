@@ -33,3 +33,11 @@
   [id updates]
   (when (contains? @invocations id)
     (get (swap! invocations update id merge updates) id)))
+
+(defn remove-invocation!
+  "Remove an invocation entry from the registry.
+  Returns the removed entry, or nil if ID not found."
+  [id]
+  (when-let [entry (get @invocations id)]
+    (swap! invocations dissoc id)
+    entry))
