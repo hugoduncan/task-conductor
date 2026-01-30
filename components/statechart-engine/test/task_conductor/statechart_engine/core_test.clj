@@ -37,6 +37,13 @@
         (is (= {:ok ::to-remove}
                (core/unregister! ::to-remove)))))
 
+    (testing "allows re-registration after unregistration"
+      (with-clean-engine
+        (core/register! ::reregister simple-chart)
+        (core/unregister! ::reregister)
+        (is (= {:ok ::reregister}
+               (core/register! ::reregister simple-chart)))))
+
     (testing "returns error when chart not found"
       (with-clean-engine
         (is (= {:error :not-found}

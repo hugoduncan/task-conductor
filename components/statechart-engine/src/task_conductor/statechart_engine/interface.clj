@@ -88,7 +88,10 @@
   core/register!)
 
 (def unregister!
-  "Remove a chart registration.
+  "Remove a chart registration from the engine.
+  This removes the chart from both the engine's local registry tracking and
+  the underlying fulcrologic statecharts registry. Sessions already started
+  with this chart will continue to function until stopped.
   Returns {:ok chart-name} on success, {:error :not-found} if not registered."
   core/unregister!)
 

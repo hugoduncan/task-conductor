@@ -42,11 +42,19 @@
       {:ok chart-name})))
 
 (defn unregister!
-  "Remove a chart registration.
+  "Remove a chart registration from the engine.
+
+  This removes the chart from both the engine's local registry tracking and
+  the underlying fulcrologic statecharts registry. Sessions already started
+  with this chart will continue to function until stopped.
+
   Returns {:ok chart-name} on success, {:error :not-found} if not registered."
   [chart-name]
   (if (contains? @charts chart-name)
-    (do
+    (let [registry (::sc/statechart-registry env)]
+      ;; Remove from fulcrologic registry's internal atom
+      (swap! (:charts registry) dissoc chart-name)
+      ;; Remove from our tracking set
       (swap! charts disj chart-name)
       {:ok chart-name})
     {:error :not-found}))
