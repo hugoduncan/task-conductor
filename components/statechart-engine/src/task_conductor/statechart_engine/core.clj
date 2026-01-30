@@ -32,7 +32,8 @@
           (expression env data))
 
         ;; Symbol list (mutation call) - wrap and run
-        (and (list? expression) (symbol? (first expression)))
+        ;; Use seq? to handle both lists and Cons (from syntax-quote)
+        (and (seq? expression) (symbol? (first expression)))
         (graph/query [expression])
 
         :else
