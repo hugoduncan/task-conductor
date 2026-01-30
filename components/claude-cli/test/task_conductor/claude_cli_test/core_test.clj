@@ -7,7 +7,8 @@
 ;; Contracts: always includes base flags, maps each option correctly, prompt goes last.
 
 (def base-args
-  ["claude" "--output-format" "stream-json" "--print" "conversation-summary"])
+  ["claude" "--output-format" "stream-json" "--verbose"
+   "--print" "conversation-summary"])
 
 (deftest build-args-test
   (testing "build-args"
