@@ -7,8 +7,10 @@
   ;; Also tests error propagation and history tracking.
   (:require
    [clojure.test :refer [deftest is testing]]
+   [com.fulcrologic.statecharts.protocols :as sp]
    [com.wsscode.pathom3.connect.operation :as pco]
    [task-conductor.pathom-graph.interface :as graph]
+   [task-conductor.statechart-engine.core :as core]
    [task-conductor.statechart-engine.interface :as sc]
    [task-conductor.statechart-engine.resolvers :as resolvers]
    [task-conductor.statechart-engine.test-helpers :refer [with-clean-state]]))
@@ -274,3 +276,60 @@
             (sc/send! sid :spawn)
             (is (= 2 (count (sc/list-sessions)))
                 "Action spawned new session")))))))
+
+(defn unknown-expr-chart
+  "Chart with action using unsupported expression type (string)."
+  []
+  (sc/statechart {}
+                 (sc/initial {}
+                             (sc/transition {:target :idle}))
+                 (sc/state {:id :idle}
+                           (sc/transition {:event :go :target :bad}))
+                 (sc/state {:id :bad}
+                           (sc/on-entry {}
+                                        (sc/action {:expr "unsupported-string"})))))
+
+(deftest unknown-expression-type-test
+  ;; Verifies EQLExecutionModel throws on unsupported expression types.
+  ;; Supported: vector (EQL query), seq/list (mutation), fn (escape hatch).
+  ;; Unsupported: strings, keywords, numbers, maps, etc.
+  (testing "unknown expression type"
+    (testing "throws with message and ex-data for string"
+      (let [model (core/->EQLExecutionModel)]
+        (try
+          (sp/run-expression! model {} "unsupported")
+          (is false "Expected exception to be thrown")
+          (catch clojure.lang.ExceptionInfo e
+            (is (= "Unknown action expression type" (.getMessage e)))
+            (is (= "unsupported" (:expression (ex-data e))))
+            (is (= String (:type (ex-data e))))))))
+
+    (testing "throws with message and ex-data for keyword"
+      (let [model (core/->EQLExecutionModel)]
+        (try
+          (sp/run-expression! model {} :bad-keyword)
+          (is false "Expected exception to be thrown")
+          (catch clojure.lang.ExceptionInfo e
+            (is (= "Unknown action expression type" (.getMessage e)))
+            (is (= :bad-keyword (:expression (ex-data e))))
+            (is (= clojure.lang.Keyword (:type (ex-data e))))))))
+
+    (testing "throws with message and ex-data for number"
+      (let [model (core/->EQLExecutionModel)]
+        (try
+          (sp/run-expression! model {} 42)
+          (is false "Expected exception to be thrown")
+          (catch clojure.lang.ExceptionInfo e
+            (is (= "Unknown action expression type" (.getMessage e)))
+            (is (= 42 (:expression (ex-data e))))
+            (is (= Long (:type (ex-data e))))))))
+
+    (testing "string in action causes statechart error handling"
+      (with-clean-state
+        (sc/register! ::unknown-chart (unknown-expr-chart))
+        (let [sid (sc/start! ::unknown-chart)]
+          (is (= #{:idle} (sc/current-state sid)))
+          ;; The statechart framework catches action errors and transitions anyway
+          (sc/send! sid :go)
+          (is (= #{:bad} (sc/current-state sid))
+              "State transition completes (framework catches action errors)"))))))
