@@ -10,9 +10,8 @@
      defresolver - Define a resolver
      defmutation - Define a mutation"
   (:require
-   [task-conductor.pathom-graph.core :as core])
-  (:require
-   [com.wsscode.pathom3.connect.operation :as pco]))
+   [com.wsscode.pathom3.connect.operation :as pco]
+   [task-conductor.pathom-graph.core :as core]))
 
 ;;; Core Functions
 
