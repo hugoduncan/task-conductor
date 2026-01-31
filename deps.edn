@@ -4,7 +4,8 @@
         task-conductor/dev-env {:local/root "components/dev-env"}
         task-conductor/emacs-dev-env {:local/root "components/emacs-dev-env"}
         task-conductor/pathom-graph {:local/root "components/pathom-graph"}
-        task-conductor/statechart-engine {:local/root "components/statechart-engine"}}
+        task-conductor/statechart-engine {:local/root "components/statechart-engine"}
+        task-conductor/project {:local/root "components/project"}}
  :aliases
  {:dev {:extra-paths ["dev"]
         :extra-deps {dev.weavejester/cljfmt {:mvn/version "0.13.1"}}}
