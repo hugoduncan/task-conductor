@@ -220,7 +220,8 @@
     command-id - UUID of the command being responded to
     response   - The response value
 
-  Returns true if response was delivered, false if command not found."
+  Returns true if response was delivered, false if command not found
+  (e.g., due to timeout cleanup)."
   [dev-env command-id response]
   (let [pending (get-in @(:state dev-env) [:pending-commands command-id])]
     (if pending
@@ -228,7 +229,9 @@
         (deliver pending response)
         (swap! (:state dev-env) update :pending-commands dissoc command-id)
         true)
-      false)))
+      (do
+        (log/debug "Late response for unknown command" {:command-id command-id})
+        false))))
 
 ;;; Hook invocation
 
