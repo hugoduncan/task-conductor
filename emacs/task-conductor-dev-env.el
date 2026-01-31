@@ -98,6 +98,23 @@ Each entry is (:on-idle (:hook-id X :timer Y) :on-close (:hook-id X :fn Y)).")
        (fboundp 'cider-connected-p)
        (cider-connected-p)))
 
+;;; UUID generation
+
+(defun task-conductor-dev-env--generate-uuid ()
+  "Generate a UUID v4 string.
+Format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx where x is random hex
+and y is one of 8, 9, a, or b."
+  (format "%04x%04x-%04x-4%03x-%x%03x-%04x%04x%04x"
+          (random 65536)
+          (random 65536)
+          (random 65536)
+          (random 4096)
+          (+ 8 (random 4))  ; y = 8, 9, a, or b
+          (random 4096)
+          (random 65536)
+          (random 65536)
+          (random 65536)))
+
 ;;; nREPL communication
 
 (defun task-conductor-dev-env--eval-sync (form)
@@ -288,7 +305,7 @@ Returns response plist with :status and :hook-id on success."
       (unless (and buffer (buffer-live-p buffer))
         (cl-return-from task-conductor-dev-env--handle-register-hook
           `(:status :error :message ,(format "Session not found or buffer dead: %s" session-id))))
-      (let ((hook-id (format "%s-%s-%s" session-id hook-type (random 100000))))
+      (let ((hook-id (task-conductor-dev-env--generate-uuid)))
         (pcase hook-type
           (:on-idle
            (if (task-conductor-dev-env--setup-on-idle-hook session-id hook-id)
