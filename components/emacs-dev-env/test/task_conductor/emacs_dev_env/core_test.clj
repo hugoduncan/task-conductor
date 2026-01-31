@@ -310,14 +310,13 @@
     (testing "shows disconnected status when dev-env not connected"
       ;; Create a dev-env and add to registry without connecting
       (let [dev-env (core/make-emacs-dev-env)
-            dev-env-id "test-disconnected-id"]
-        (swap! core/registry assoc dev-env-id dev-env)
+            dev-env-id (generic-registry/register! dev-env :emacs {})]
         (is (= [{:dev-env-id dev-env-id
                  :type :emacs
                  :connected? false}]
                (core/list-dev-envs)))
         (core/shutdown dev-env)
-        (swap! core/registry dissoc dev-env-id)))))
+        (generic-registry/unregister! dev-env-id)))))
 
 (deftest list-healthy-dev-envs-test
   ;; Verify filtering of dev-envs by health check (ping).
@@ -480,12 +479,13 @@
   ;; and all resources are cleaned up.
   (testing "registry cleanup"
     (testing "removes dev-env from registry on unregister"
+      (generic-registry/clear!)
       (let [dev-env-id (core/register-emacs-dev-env)]
         (is (some? (core/get-dev-env dev-env-id)))
-        (is (= 1 (count @core/registry)))
+        (is (= 1 (count (generic-registry/list-dev-envs))))
         (core/unregister-emacs-dev-env dev-env-id)
         (is (nil? (core/get-dev-env dev-env-id)))
-        (is (= 0 (count @core/registry)))))
+        (is (= 0 (count (generic-registry/list-dev-envs))))))
 
     (testing "cleans up pending commands on unregister"
       (let [dev-env-id (core/register-emacs-dev-env)
