@@ -30,6 +30,13 @@
     (catch Exception _
       {:type "parse-error" :line line})))
 
+(defn extract-session-id
+  "Extract session-id from events.
+  Looks for the first event with a :session_id field.
+  Returns nil if no session-id found."
+  [events]
+  (some :session_id events))
+
 (defn- read-stdout-lines
   "Read lines from process stdout, call callbacks, collect events.
   Callback exceptions are caught and recorded as :callback-error events.
@@ -97,7 +104,9 @@
           ;; Cancel timeout if it hasn't fired
           (when timeout-task
             (.cancel ^ScheduledFuture timeout-task false))
-          (deliver result-promise {:exit-code exit-code :events events}))
+          (deliver result-promise {:exit-code exit-code
+                                   :events events
+                                   :session-id (extract-session-id events)}))
         (catch Exception e
           ;; Process was likely destroyed by timeout or cancel
           (when-not (realized? result-promise)

@@ -169,6 +169,80 @@
 ;; Tests that callback exceptions don't interrupt processing.
 ;; Contracts: exceptions are recorded as callback-error events, processing continues.
 
+;;; extract-session-id tests
+
+;; Tests that extract-session-id correctly finds session_id from events.
+;; Contracts: returns first session_id found, nil if none present.
+
+(deftest extract-session-id-test
+  (testing "extract-session-id"
+    (testing "with no events"
+      (testing "returns nil"
+        (is (nil? (core/extract-session-id [])))))
+
+    (testing "with events lacking session_id"
+      (testing "returns nil"
+        (is (nil? (core/extract-session-id [{:type "start"}
+                                            {:type "end"}])))))
+
+    (testing "with session_id in first event"
+      (testing "returns the session_id"
+        (is (= "abc-123"
+               (core/extract-session-id [{:type "init"
+                                          :session_id "abc-123"}
+                                         {:type "end"}])))))
+
+    (testing "with session_id in later event"
+      (testing "returns the first session_id found"
+        (is (= "xyz-789"
+               (core/extract-session-id [{:type "start"}
+                                         {:type "init"
+                                          :session_id "xyz-789"}
+                                         {:type "end"}])))))
+
+    (testing "with multiple session_ids"
+      (testing "returns the first one"
+        (is (= "first-id"
+               (core/extract-session-id [{:session_id "first-id"}
+                                         {:session_id "second-id"}])))))))
+
+;;; invoke-process session-id extraction tests
+
+;; Tests that invoke-process extracts and returns session-id from events.
+
+(deftest invoke-process-session-id-test
+  (testing "invoke-process session-id extraction"
+    (testing "with events containing session_id"
+      (testing "includes :session-id in result"
+        (let [{:keys [result-promise]} (core/invoke-process
+                                        {:_args ["bash" "-c"
+                                                 "echo '{\"type\":\"init\",\"session_id\":\"sess-42\"}'"]})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result))
+          (is (= "sess-42" (:session-id result))))))
+
+    (testing "with no session_id in events"
+      (testing "returns nil for :session-id"
+        (let [{:keys [result-promise]} (core/invoke-process
+                                        {:_args ["bash" "-c"
+                                                 "echo '{\"type\":\"error\"}'"]})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result))
+          (is (nil? (:session-id result))))))
+
+    (testing "with empty output"
+      (testing "returns nil for :session-id"
+        (let [{:keys [result-promise]} (core/invoke-process
+                                        {:_args ["bash" "-c" "exit 1"]})
+              result (deref result-promise 5000 :timeout)]
+          (is (not= :timeout result))
+          (is (nil? (:session-id result))))))))
+
+;;; callback exception tests
+
+;; Tests that callback exceptions don't interrupt processing.
+;; Contracts: exceptions are recorded as callback-error events, processing continues.
+
 (deftest callback-exception-test
   (testing "invoke-process with callback exceptions"
     (testing "when on-line throws"
