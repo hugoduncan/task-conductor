@@ -5,4 +5,6 @@
  :hooks {:analyze-call {task-conductor.dev-env.interface/with-session hooks.dev-env/with-session}}
  :linters {:unresolved-symbol {:exclude [(task-conductor.project.registry-test/with-temp-dir)
                                          (task-conductor.project.registry-test/with-temp-file)
-                                         (task-conductor.project.registry-test/with-clean-project-state)]}}}
+                                         (task-conductor.project.registry-test/with-clean-project-state)
+                                         (task-conductor.project.resolvers-test/with-temp-dir)
+                                         (task-conductor.project.resolvers-test/with-clean-state)]}}}
