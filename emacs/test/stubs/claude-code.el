@@ -19,5 +19,17 @@ ARGS should include --resume and session-id."
   "Stub for claude-code--notify (bell notification)."
   nil)
 
+(defun claude-code--find-claude-buffers-for-directory (_dir)
+  "Stub for claude-code--find-claude-buffers-for-directory.
+Returns a list containing `claude-code--stub-buffer' if set."
+  (when claude-code--stub-buffer
+    (list claude-code--stub-buffer)))
+
+(defun claude-code--find-all-claude-buffers ()
+  "Stub for claude-code--find-all-claude-buffers.
+Returns a list containing `claude-code--stub-buffer' if set."
+  (when claude-code--stub-buffer
+    (list claude-code--stub-buffer)))
+
 (provide 'claude-code)
 ;;; claude-code.el ends here

@@ -41,9 +41,11 @@
 
 (require 'cl-lib)
 (require 'claude-code)
+(require 'parseedn)
 
 (declare-function cider-connected-p "cider-connection")
 (declare-function cider-nrepl-sync-request:eval "cider-client")
+(declare-function cider-nrepl-request:eval "cider-client")
 (declare-function nrepl-dict-get "nrepl-dict")
 
 (defgroup task-conductor-dev-env nil
@@ -89,6 +91,14 @@ Used to track active claude-code sessions started by the orchestrator.")
   "Hash table mapping session-id to hook data plist.
 Each entry is (:on-idle (:hook-id X :timer Y) :on-close (:hook-id X :fn Y)).")
 
+(defvar task-conductor-dev-env--project-dir nil
+  "Project directory for CIDER session context.
+Set during connect to ensure poll loop uses correct nREPL session.")
+
+(defvar task-conductor-dev-env--polling nil
+  "Non-nil when an async poll request is in flight.
+Prevents overlapping poll requests.")
+
 (defconst task-conductor-dev-env--idle-debounce-seconds 0.5
   "Debounce interval for idle detection in seconds.")
 
@@ -115,32 +125,69 @@ and y is one of 8, 9, a, or b."
           (random 65536)
           (random 65536)))
 
+;;; EDN conversion
+
+(defun task-conductor-dev-env--edn-to-plist (edn)
+  "Convert parsed EDN hash-table to plist recursively."
+  (cond
+   ((hash-table-p edn)
+    (let ((result nil))
+      (maphash (lambda (k v)
+                 (setq result (plist-put result k (task-conductor-dev-env--edn-to-plist v))))
+               edn)
+      result))
+   ((listp edn)
+    (mapcar #'task-conductor-dev-env--edn-to-plist edn))
+   (t edn)))
+
+(defun task-conductor-dev-env--plist-to-edn (plist)
+  "Convert elisp PLIST to EDN string for Clojure."
+  (let ((pairs nil))
+    (while plist
+      (let ((key (car plist))
+            (val (cadr plist)))
+        (push (format "%s %s"
+                      key
+                      (cond
+                       ((keywordp val) (symbol-name val))
+                       ((stringp val) (format "%S" val))
+                       ((null val) "nil")
+                       ((eq val t) "true")
+                       (t (format "%s" val))))
+              pairs))
+      (setq plist (cddr plist)))
+    (format "{%s}" (string-join (reverse pairs) " "))))
+
 ;;; nREPL communication
 
 (defun task-conductor-dev-env--eval-sync (form)
   "Evaluate Clojure FORM synchronously via nREPL.
-Returns the value on success, or signals an error on failure."
-  (unless (cider-connected-p)
-    (user-error "Not connected to CIDER. Run M-x cider-connect first"))
-  (let* ((result (cider-nrepl-sync-request:eval form))
-         (value (nrepl-dict-get result "value"))
-         (err (nrepl-dict-get result "err"))
-         (ex (nrepl-dict-get result "ex")))
-    (when (or err ex)
-      (error "nREPL eval error for %s: %s" form (or err ex)))
-    (when value
-      (read value))))
+Returns the parsed value as plist on success, or signals an error on failure.
+Uses `task-conductor-dev-env--project-dir' for CIDER session context."
+  (let ((default-directory (or task-conductor-dev-env--project-dir default-directory)))
+    (unless (cider-connected-p)
+      (user-error "Not connected to CIDER. Run M-x cider-connect first"))
+    (let* ((result (cider-nrepl-sync-request:eval form))
+           (value (nrepl-dict-get result "value"))
+           (err (nrepl-dict-get result "err"))
+           (ex (nrepl-dict-get result "ex")))
+      (when (or err ex)
+        (error "nREPL eval error for %s: %s" form (or err ex)))
+      (when value
+        (task-conductor-dev-env--edn-to-plist (parseedn-read-str value))))))
 
 ;;; Response helpers
 
 (defun task-conductor-dev-env--send-response (command-id response)
   "Send RESPONSE for COMMAND-ID to the orchestrator.
+COMMAND-ID is a UUID string.  RESPONSE is a plist.
 Returns t if delivered, nil if command not found."
-  (task-conductor-dev-env--eval-sync
-   (format "(task-conductor.emacs-dev-env.interface/send-response-by-id %S %S '%S)"
-           task-conductor-dev-env--dev-env-id
-           command-id
-           response)))
+  (let ((default-directory (or task-conductor-dev-env--project-dir default-directory)))
+    (task-conductor-dev-env--eval-sync
+     (format "(task-conductor.emacs-dev-env.interface/send-response-by-id %S #uuid %S %s)"
+             task-conductor-dev-env--dev-env-id
+             command-id
+             (task-conductor-dev-env--plist-to-edn response)))))
 
 (defun task-conductor-dev-env--send-hook-event (hook-type session-id reason)
   "Send hook event to the orchestrator.
@@ -266,8 +313,11 @@ Returns t on success."
 
 (cl-defun task-conductor-dev-env--handle-start-session (params)
   "Handle :start-session command with PARAMS.
-PARAMS should contain :session-id.  Starts a claude-code session
-with --resume <session-id>.  Returns response plist."
+PARAMS should contain :session-id.  Associates an existing claude-code
+buffer with the session-id.  Returns response plist.
+
+Note: claude-code--start does not return the buffer, so we find the
+most recent buffer for the project directory."
   (let ((session-id (plist-get params :session-id)))
     (unless session-id
       (cl-return-from task-conductor-dev-env--handle-start-session
@@ -275,16 +325,14 @@ with --resume <session-id>.  Returns response plist."
     (let ((existing-buffer (gethash session-id task-conductor-dev-env--sessions)))
       (if (and existing-buffer (buffer-live-p existing-buffer))
           `(:status :ok :buffer-name ,(buffer-name existing-buffer))
-        (condition-case err
-            (let ((buffer (claude-code--start nil (list "--resume" session-id))))
-              (if (and buffer (buffer-live-p buffer))
-                  (progn
-                    (puthash session-id buffer task-conductor-dev-env--sessions)
-                    `(:status :ok :buffer-name ,(buffer-name buffer)))
-                '(:status :error :message "claude-code--start returned nil or dead buffer")))
-          (error
-           `(:status :error :message ,(format "Failed to start session: %s"
-                                              (error-message-string err)))))))))
+        ;; Find existing claude buffer for project
+        (let* ((dir (or task-conductor-dev-env--project-dir default-directory))
+               (bufs (claude-code--find-claude-buffers-for-directory dir)))
+          (if bufs
+              (let ((buf (car bufs)))
+                (puthash session-id buf task-conductor-dev-env--sessions)
+                `(:status :ok :buffer-name ,(buffer-name buf)))
+            '(:status :error :message "No claude-code buffer found for project")))))))
 
 (cl-defun task-conductor-dev-env--handle-register-hook (params)
   "Handle :register-hook command with PARAMS.
@@ -393,48 +441,61 @@ Returns the response to send back to the orchestrator."
       (task-conductor-dev-env--send-response command-id response)
       response)))
 
-;;; Poll loop
+;;; Async poll loop
+
+(defun task-conductor-dev-env--poll-callback (response)
+  "Callback for async poll RESPONSE.
+Processes the response and dispatches commands.  Non-blocking."
+  (setq task-conductor-dev-env--polling nil)
+  (let ((value (nrepl-dict-get response "value"))
+        (err (nrepl-dict-get response "err")))
+    (cond
+     (err
+      (message "task-conductor: Poll error: %s" err))
+     (value
+      (let ((result (task-conductor-dev-env--edn-to-plist (parseedn-read-str value))))
+        (pcase (plist-get result :status)
+          (:ok
+           (let ((command (plist-get result :command)))
+             (task-conductor-dev-env--dispatch-command command)))
+          (:timeout nil) ; Normal, wait for next poll
+          (:closed
+           (message "task-conductor: Channel closed, stopping poll loop")
+           (task-conductor-dev-env--stop-poll-loop)
+           (setq task-conductor-dev-env--dev-env-id nil))
+          (:error
+           (message "task-conductor: Poll error: %s" (plist-get result :message)))))))))
 
 (defun task-conductor-dev-env--poll-loop ()
-  "One iteration of the command subscription loop.
-Polls for a command with 5s timeout, dispatches if received.
-Handles disconnection gracefully by stopping the loop."
-  (condition-case err
-      (when (task-conductor-dev-env--connected-p)
-        (let ((result (task-conductor-dev-env--eval-sync
-                       (format "(task-conductor.emacs-dev-env.interface/await-command-by-id %S 5000)"
-                               task-conductor-dev-env--dev-env-id))))
-          (pcase (plist-get result :status)
-            (:ok
-             (let ((command (plist-get result :command)))
-               (task-conductor-dev-env--dispatch-command command)))
-            (:timeout
-             nil)  ; Normal, just wait for next poll
-            (:closed
-             (message "task-conductor: Command channel closed, stopping poll loop")
-             (task-conductor-dev-env--stop-poll-loop)
-             (setq task-conductor-dev-env--dev-env-id nil))
-            (:error
-             (message "task-conductor: Poll error: %s" (plist-get result :message))
-             (task-conductor-dev-env--stop-poll-loop)
-             (setq task-conductor-dev-env--dev-env-id nil)))))
-    (error
-     (message "task-conductor: nREPL error in poll loop: %s" (error-message-string err))
-     (task-conductor-dev-env--stop-poll-loop)
-     (setq task-conductor-dev-env--dev-env-id nil))))
+  "One iteration of the async command subscription loop.
+Non-blocking - uses callback for response handling."
+  (when (and task-conductor-dev-env--dev-env-id
+             (not task-conductor-dev-env--polling))
+    (setq task-conductor-dev-env--polling t)
+    (let ((default-directory (or task-conductor-dev-env--project-dir default-directory)))
+      (condition-case err
+          (cider-nrepl-request:eval
+           (format "(task-conductor.emacs-dev-env.interface/await-command-by-id %S 5000)"
+                   task-conductor-dev-env--dev-env-id)
+           #'task-conductor-dev-env--poll-callback)
+        (error
+         (setq task-conductor-dev-env--polling nil)
+         (message "task-conductor: Async poll error: %s" (error-message-string err)))))))
 
 (defun task-conductor-dev-env--start-poll-loop ()
-  "Start the command subscription poll loop."
+  "Start the async command subscription poll loop."
   (unless task-conductor-dev-env--poll-timer
+    (setq task-conductor-dev-env--polling nil)
     (setq task-conductor-dev-env--poll-timer
-          (run-with-timer 1 1 #'task-conductor-dev-env--poll-loop))
-    (message "task-conductor: Poll loop started")))
+          (run-with-timer 0.5 0.5 #'task-conductor-dev-env--poll-loop))
+    (message "task-conductor: Async poll loop started")))
 
 (defun task-conductor-dev-env--stop-poll-loop ()
   "Stop the command subscription poll loop."
   (when task-conductor-dev-env--poll-timer
     (cancel-timer task-conductor-dev-env--poll-timer)
     (setq task-conductor-dev-env--poll-timer nil)
+    (setq task-conductor-dev-env--polling nil)
     (message "task-conductor: Poll loop stopped")))
 
 ;;; Connection management
@@ -448,6 +509,8 @@ subsequent operations and starts the command subscription loop."
   (require 'cider)
   (when (task-conductor-dev-env--connected-p)
     (user-error "Already connected as dev-env %s" task-conductor-dev-env--dev-env-id))
+  ;; Store project directory for CIDER session context
+  (setq task-conductor-dev-env--project-dir default-directory)
   (let ((dev-env-id (task-conductor-dev-env--eval-sync
                      "(task-conductor.emacs-dev-env.interface/register-emacs-dev-env)")))
     (setq task-conductor-dev-env--dev-env-id dev-env-id)
@@ -466,6 +529,7 @@ Stops the command subscription loop before unregistering."
      (format "(task-conductor.emacs-dev-env.interface/unregister-emacs-dev-env %S)"
              dev-env-id))
     (setq task-conductor-dev-env--dev-env-id nil)
+    (setq task-conductor-dev-env--project-dir nil)
     (clrhash task-conductor-dev-env--sessions)
     (clrhash task-conductor-dev-env--session-hooks)
     (message "Disconnected from task-conductor")))
