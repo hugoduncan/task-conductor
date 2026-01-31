@@ -110,7 +110,7 @@ Returns the value on success, or signals an error on failure."
          (err (nrepl-dict-get result "err"))
          (ex (nrepl-dict-get result "ex")))
     (when (or err ex)
-      (error "nREPL eval error: %s" (or err ex)))
+      (error "nREPL eval error for %s: %s" form (or err ex)))
     (when value
       (read value))))
 
