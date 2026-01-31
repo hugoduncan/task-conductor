@@ -123,7 +123,27 @@
     false))
 
 (defn make-noop-dev-env
-  "Create a NoOpDevEnv for testing.
-  Returns the dev-env instance. Access atoms via :calls and :hooks keys."
+  "Create a NoOpDevEnv instance for testing.
+
+  Returns a dev-env that implements the DevEnv protocol but performs no
+  real operations. All method calls are tracked for test assertions.
+
+  Access tracked data on the returned instance:
+    (:calls dev-env) - Atom containing vector of call records, each with:
+                       :op         - Operation keyword (:start-session, :register-hook, etc.)
+                       :session-id - Session ID if applicable
+                       :opts       - Options map if applicable (start-session)
+                       :hook-type  - Hook type if applicable (register-hook)
+                       :hook-id    - Generated hook ID (register-hook)
+                       :timestamp  - java.time.Instant when call occurred
+
+    (:hooks dev-env) - Atom containing map of hook-id -> {:type :callback}
+                       Hooks are stored but never fired (no real sessions)
+
+  Example:
+    (let [dev-env (make-noop-dev-env)]
+      (start-session dev-env \"abc123\" {:dir \"/tmp\"})
+      @(:calls dev-env))
+    ;=> [{:op :start-session :session-id \"abc123\" :opts {:dir \"/tmp\"} ...}]"
   []
   (->NoOpDevEnv (atom []) (atom {})))
