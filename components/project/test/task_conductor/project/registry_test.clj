@@ -165,7 +165,19 @@
                                                  :unexpected "value"})]
               (is (= "new" (:project/name updated)))
               (is (= dir (:project/path updated)))
-              (is (nil? (:unexpected updated))))))))))
+              (is (nil? (:unexpected updated)))))))
+
+      (testing "returns existing project unchanged for empty updates"
+        (fs/with-temp-dir [tmp]
+          (let [dir (str (fs/canonicalize tmp))
+                project (registry/register! dir {:project/name "orig"})
+                result (registry/update! dir {})]
+            (is (= project result)))))
+
+      (testing "returns :project-not-found for empty updates on missing project"
+        (fs/with-temp-dir [tmp]
+          (let [result (registry/update! (str tmp) {})]
+            (is (= :project-not-found (:error result)))))))))
 
 ;;; Lookup
 
