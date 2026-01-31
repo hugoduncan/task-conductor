@@ -64,6 +64,10 @@ When nil, uses the current CIDER connection."
   "The dev-env-id returned from task-conductor registration.
 This is a UUID string used to identify this Emacs instance.")
 
+(defvar task-conductor-dev-env--poll-timer nil
+  "Timer for the command subscription loop.
+Stores the timer object for cleanup on disconnect.")
+
 (defun task-conductor-dev-env--connected-p ()
   "Return non-nil if connected to task-conductor as a dev-env."
   (and task-conductor-dev-env--dev-env-id
@@ -85,26 +89,110 @@ Returns the value on success, or signals an error on failure."
     (when value
       (read value))))
 
+;;; Response helpers
+
+(defun task-conductor-dev-env--send-response (command-id response)
+  "Send RESPONSE for COMMAND-ID to the orchestrator.
+Returns t if delivered, nil if command not found."
+  (task-conductor-dev-env--eval-sync
+   (format "(task-conductor.emacs-dev-env.interface/send-response-by-id %S %S '%S)"
+           task-conductor-dev-env--dev-env-id
+           command-id
+           response)))
+
+;;; Command dispatch
+
+(defun task-conductor-dev-env--dispatch-command (command)
+  "Dispatch COMMAND to the appropriate handler.
+COMMAND is a plist with :command-id, :command, and :params.
+Returns the response to send back to the orchestrator."
+  (let ((command-type (plist-get command :command))
+        (command-id (plist-get command :command-id))
+        (_params (plist-get command :params)))
+    (let ((response
+           (pcase command-type
+             (:start-session
+              '(:error :not-implemented :message "start-session not yet implemented"))
+             (:register-hook
+              '(:error :not-implemented :message "register-hook not yet implemented"))
+             (:query-transcript
+              '(:error :not-implemented :message "query-transcript not yet implemented"))
+             (:query-events
+              '(:error :not-implemented :message "query-events not yet implemented"))
+             (:close-session
+              '(:error :not-implemented :message "close-session not yet implemented"))
+             (_
+              `(:error :unknown-command :message ,(format "Unknown command: %s" command-type))))))
+      (task-conductor-dev-env--send-response command-id response)
+      response)))
+
+;;; Poll loop
+
+(defun task-conductor-dev-env--poll-loop ()
+  "One iteration of the command subscription loop.
+Polls for a command with 5s timeout, dispatches if received.
+Handles disconnection gracefully by stopping the loop."
+  (condition-case err
+      (when (task-conductor-dev-env--connected-p)
+        (let ((result (task-conductor-dev-env--eval-sync
+                       (format "(task-conductor.emacs-dev-env.interface/await-command-by-id %S 5000)"
+                               task-conductor-dev-env--dev-env-id))))
+          (pcase (plist-get result :status)
+            (:ok
+             (let ((command (plist-get result :command)))
+               (task-conductor-dev-env--dispatch-command command)))
+            (:timeout
+             nil)  ; Normal, just wait for next poll
+            (:closed
+             (message "task-conductor: Command channel closed, stopping poll loop")
+             (task-conductor-dev-env--stop-poll-loop)
+             (setq task-conductor-dev-env--dev-env-id nil))
+            (:error
+             (message "task-conductor: Poll error: %s" (plist-get result :message))
+             (task-conductor-dev-env--stop-poll-loop)
+             (setq task-conductor-dev-env--dev-env-id nil)))))
+    (error
+     (message "task-conductor: nREPL error in poll loop: %s" (error-message-string err))
+     (task-conductor-dev-env--stop-poll-loop)
+     (setq task-conductor-dev-env--dev-env-id nil))))
+
+(defun task-conductor-dev-env--start-poll-loop ()
+  "Start the command subscription poll loop."
+  (unless task-conductor-dev-env--poll-timer
+    (setq task-conductor-dev-env--poll-timer
+          (run-with-timer 0.1 0.1 #'task-conductor-dev-env--poll-loop))
+    (message "task-conductor: Poll loop started")))
+
+(defun task-conductor-dev-env--stop-poll-loop ()
+  "Stop the command subscription poll loop."
+  (when task-conductor-dev-env--poll-timer
+    (cancel-timer task-conductor-dev-env--poll-timer)
+    (setq task-conductor-dev-env--poll-timer nil)
+    (message "task-conductor: Poll loop stopped")))
+
 ;;; Connection management
 
 ;;;###autoload
 (defun task-conductor-dev-env-connect ()
   "Connect to task-conductor and register as a dev-env.
 Requires an active CIDER connection.  Stores the dev-env-id for
-subsequent operations."
+subsequent operations and starts the command subscription loop."
   (interactive)
   (when (task-conductor-dev-env--connected-p)
     (user-error "Already connected as dev-env %s" task-conductor-dev-env--dev-env-id))
   (let ((dev-env-id (task-conductor-dev-env--eval-sync
                      "(task-conductor.emacs-dev-env.interface/register-emacs-dev-env)")))
     (setq task-conductor-dev-env--dev-env-id dev-env-id)
+    (task-conductor-dev-env--start-poll-loop)
     (message "Connected to task-conductor as dev-env: %s" dev-env-id)))
 
 (defun task-conductor-dev-env-disconnect ()
-  "Disconnect from task-conductor and unregister this dev-env."
+  "Disconnect from task-conductor and unregister this dev-env.
+Stops the command subscription loop before unregistering."
   (interactive)
   (unless (task-conductor-dev-env--connected-p)
     (user-error "Not connected to task-conductor"))
+  (task-conductor-dev-env--stop-poll-loop)
   (let ((dev-env-id task-conductor-dev-env--dev-env-id))
     (task-conductor-dev-env--eval-sync
      (format "(task-conductor.emacs-dev-env.interface/unregister-emacs-dev-env %S)"
