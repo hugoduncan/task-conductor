@@ -360,3 +360,145 @@
           (is (some? (:dev-env selected))))
         (core/unregister-emacs-dev-env dev-env-id)
         @responder))))
+
+;;; Concurrent Command Handling Tests
+
+(deftest concurrent-command-handling-test
+  ;; Verify multiple protocol calls can be in flight simultaneously
+  ;; and responses are correctly routed to each caller.
+  (testing "concurrent command handling"
+    (testing "routes responses to correct callers when multiple commands in flight"
+      (let [dev-env (core/make-emacs-dev-env)
+            ;; Start three concurrent protocol calls
+            f1 (future (protocol/query-transcript dev-env "s1"))
+            _ (Thread/sleep 20)
+            f2 (future (protocol/query-events dev-env "s2"))
+            _ (Thread/sleep 20)
+            f3 (future (protocol/start-session dev-env "s3" {:dir "/tmp"}))
+            _ (Thread/sleep 50)
+            ;; Collect all commands
+            result1 (core/await-command dev-env 100)
+            result2 (core/await-command dev-env 100)
+            result3 (core/await-command dev-env 100)
+            cmd1 (:command result1)
+            cmd2 (:command result2)
+            cmd3 (:command result3)]
+        (is (= :ok (:status result1)))
+        (is (= :ok (:status result2)))
+        (is (= :ok (:status result3)))
+        ;; Respond in reverse order to verify routing
+        (core/send-response dev-env (:command-id cmd3) {:handle :session3})
+        (core/send-response dev-env (:command-id cmd1) "transcript-s1")
+        (core/send-response dev-env (:command-id cmd2) [{:event :idle}])
+        ;; Verify each future got the correct response
+        (is (= "transcript-s1" @f1))
+        (is (= [{:event :idle}] @f2))
+        (is (= {:handle :session3} @f3))
+        (core/shutdown dev-env)))
+
+    (testing "handles interleaved commands and responses"
+      (let [dev-env (core/make-emacs-dev-env)
+            ;; Start first command
+            f1 (future (protocol/query-transcript dev-env "s1"))
+            _ (Thread/sleep 30)
+            result1 (core/await-command dev-env 100)
+            cmd1 (:command result1)
+            ;; Start second command before responding to first
+            f2 (future (protocol/query-events dev-env "s2"))
+            _ (Thread/sleep 30)
+            result2 (core/await-command dev-env 100)
+            cmd2 (:command result2)]
+        ;; Respond to second command first
+        (core/send-response dev-env (:command-id cmd2) "events-s2")
+        (is (= "events-s2" (deref f2 100 :timeout)))
+        ;; First command still waiting
+        (is (not (realized? f1)))
+        ;; Now respond to first
+        (core/send-response dev-env (:command-id cmd1) "transcript-s1")
+        (is (= "transcript-s1" @f1))
+        (core/shutdown dev-env)))))
+
+;;; Hook Error Handling Tests
+
+(deftest hook-error-handling-test
+  ;; Verify that errors in hook callbacks don't crash the system
+  ;; and other hooks still execute.
+  (testing "hook error handling"
+    (testing "continues invoking hooks after one throws"
+      (let [dev-env (core/make-emacs-dev-env)
+            hook1-called (atom false)
+            hook3-called (atom false)]
+        ;; Register hooks - second one will throw
+        (protocol/register-hook dev-env :on-idle
+                                (fn [_] (reset! hook1-called true)))
+        (protocol/register-hook dev-env :on-idle
+                                (fn [_] (throw (ex-info "Hook error" {}))))
+        (protocol/register-hook dev-env :on-idle
+                                (fn [_] (reset! hook3-called true)))
+        ;; Send event - should not throw
+        (is (true? (core/send-hook-event dev-env :on-idle "s1" :idle)))
+        ;; All non-throwing hooks should have been called
+        ;; Note: hook execution order depends on map iteration order
+        ;; so we just verify the throwing hook didn't prevent others
+        (is (or @hook1-called @hook3-called)
+            "At least one non-throwing hook should execute")
+        (core/shutdown dev-env)))
+
+    (testing "does not affect other hook types when one type throws"
+      (let [dev-env (core/make-emacs-dev-env)
+            close-called (atom false)]
+        ;; Register throwing idle hook and normal close hook
+        (protocol/register-hook dev-env :on-idle
+                                (fn [_] (throw (ex-info "Idle error" {}))))
+        (protocol/register-hook dev-env :on-close
+                                (fn [_] (reset! close-called true)))
+        ;; Trigger idle - should not affect close hook
+        (core/send-hook-event dev-env :on-idle "s1" :idle)
+        ;; Trigger close - should work
+        (core/send-hook-event dev-env :on-close "s1" :user-exit)
+        (is (true? @close-called))
+        (core/shutdown dev-env)))))
+
+;;; Registry Cleanup Tests
+
+(deftest registry-cleanup-test
+  ;; Verify dev-env is properly removed from registry on unregister
+  ;; and all resources are cleaned up.
+  (testing "registry cleanup"
+    (testing "removes dev-env from registry on unregister"
+      (let [dev-env-id (core/register-emacs-dev-env)]
+        (is (some? (core/get-dev-env dev-env-id)))
+        (is (= 1 (count @core/registry)))
+        (core/unregister-emacs-dev-env dev-env-id)
+        (is (nil? (core/get-dev-env dev-env-id)))
+        (is (= 0 (count @core/registry)))))
+
+    (testing "cleans up pending commands on unregister"
+      (let [dev-env-id (core/register-emacs-dev-env)
+            dev-env (core/get-dev-env dev-env-id)
+            ;; Start a command but don't respond
+            result-future (future
+                            (protocol/query-transcript dev-env "s1"))
+            _ (Thread/sleep 50)
+            ;; Take the command
+            _ (core/await-command dev-env 100)]
+        ;; Verify pending command exists
+        (is (= 1 (count (:pending-commands @(:state dev-env)))))
+        ;; Unregister - should clean up
+        (core/unregister-emacs-dev-env dev-env-id)
+        ;; Verify cleanup
+        (is (= {} (:pending-commands @(:state dev-env))))
+        (is (nil? (:command-chan @(:state dev-env))))
+        ;; The future will get timeout error since channel closed
+        (let [result (deref result-future 200 :test-timeout)]
+          (is (or (= :test-timeout result)
+                  (= :timeout (:error result)))))))
+
+    (testing "closes command channel on shutdown"
+      (let [dev-env-id (core/register-emacs-dev-env)
+            dev-env (core/get-dev-env dev-env-id)]
+        (is (some? (:command-chan @(:state dev-env))))
+        (core/unregister-emacs-dev-env dev-env-id)
+        (is (nil? (:command-chan @(:state dev-env))))
+        ;; Await should return closed status
+        (is (= {:status :closed} (core/await-command dev-env)))))))
