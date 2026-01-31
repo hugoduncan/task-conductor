@@ -60,6 +60,12 @@ When nil, uses the current CIDER connection."
                  (integer :tag "Port number"))
   :group 'task-conductor-dev-env)
 
+(defcustom task-conductor-dev-env-transcript-limit (* 100 1024)
+  "Maximum size in bytes for transcript responses.
+When buffer content exceeds this limit, only the last N bytes are returned."
+  :type 'integer
+  :group 'task-conductor-dev-env)
+
 ;;; State
 
 (defvar task-conductor-dev-env--dev-env-id nil
@@ -289,6 +295,34 @@ Returns response plist with :status and :hook-id on success."
                `(:status :ok :hook-id ,hook-id)
              '(:status :error :message "Failed to setup on-close hook"))))))))
 
+(defun task-conductor-dev-env--strip-ansi-codes (string)
+  "Remove ANSI escape codes from STRING."
+  (replace-regexp-in-string "\033\\[[0-9;]*m" "" string))
+
+(defun task-conductor-dev-env--handle-query-transcript (params)
+  "Handle :query-transcript command with PARAMS.
+PARAMS should contain :session-id.  Returns buffer content with ANSI codes
+stripped, limited to `task-conductor-dev-env-transcript-limit' bytes."
+  (let ((session-id (plist-get params :session-id)))
+    (unless session-id
+      (cl-return-from task-conductor-dev-env--handle-query-transcript
+        '(:status :error :message "Missing :session-id")))
+    (let ((buffer (gethash session-id task-conductor-dev-env--sessions)))
+      (unless buffer
+        (cl-return-from task-conductor-dev-env--handle-query-transcript
+          `(:status :error :message ,(format "Session not found: %s" session-id))))
+      (unless (buffer-live-p buffer)
+        (cl-return-from task-conductor-dev-env--handle-query-transcript
+          `(:status :error :message ,(format "Session buffer is dead: %s" session-id))))
+      (with-current-buffer buffer
+        (let* ((content (buffer-substring-no-properties (point-min) (point-max)))
+               (stripped (task-conductor-dev-env--strip-ansi-codes content))
+               (transcript (if (> (length stripped) task-conductor-dev-env-transcript-limit)
+                               (substring stripped (- (length stripped)
+                                                      task-conductor-dev-env-transcript-limit))
+                             stripped)))
+          `(:status :ok :transcript ,transcript))))))
+
 ;;; Command dispatch
 
 (defun task-conductor-dev-env--dispatch-command (command)
@@ -305,7 +339,7 @@ Returns the response to send back to the orchestrator."
              (:register-hook
               (task-conductor-dev-env--handle-register-hook params))
              (:query-transcript
-              '(:error :not-implemented :message "query-transcript not yet implemented"))
+              (task-conductor-dev-env--handle-query-transcript params))
              (:query-events
               '(:error :not-implemented :message "query-events not yet implemented"))
              (:close-session
