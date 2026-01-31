@@ -129,8 +129,6 @@
     false)
 
   (connected? [_]
-    (swap! calls conj {:op :connected?
-                       :timestamp (java.time.Instant/now)})
     true))
 
 (defn make-noop-dev-env
