@@ -154,7 +154,18 @@
       (testing "returns :project-not-found error for non-existent project"
         (fs/with-temp-dir [tmp]
           (let [result (registry/update! (str tmp) {:project/name "new"})]
-            (is (= :project-not-found (:error result)))))))))
+            (is (= :project-not-found (:error result))))))
+
+      (testing "ignores keys other than :project/name"
+        (fs/with-temp-dir [tmp]
+          (let [dir (str (fs/canonicalize tmp))]
+            (registry/register! dir {:project/name "orig"})
+            (let [updated (registry/update! dir {:project/name "new"
+                                                 :project/path "/other"
+                                                 :unexpected "value"})]
+              (is (= "new" (:project/name updated)))
+              (is (= dir (:project/path updated)))
+              (is (nil? (:unexpected updated))))))))))
 
 ;;; Lookup
 

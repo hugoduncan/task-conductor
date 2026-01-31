@@ -92,23 +92,28 @@
         [old-state _] (swap-vals! registry dissoc canonical)]
     (get old-state canonical)))
 
+(def ^:private updatable-keys
+  "Keys that can be modified via update!"
+  #{:project/name})
+
 (defn update!
-  "Merges updates into existing project. Validates name uniqueness.
+  "Updates project name. Only :project/name can be modified.
    Returns updated project or error map."
   [path updates]
   (let [canonical (canonicalize-path path)
+        allowed-updates (select-keys updates updatable-keys)
         result (atom nil)]
     (swap! registry
            (fn [m]
              (if-let [existing (get m canonical)]
-               (let [new-name (:project/name updates)]
+               (let [new-name (:project/name allowed-updates)]
                  (if (and new-name
                           (not= new-name (:project/name existing))
                           (find-by-name m new-name))
                    (do (reset! result {:error :duplicate-name
                                        :message (str "Project name already exists: " new-name)})
                        m)
-                   (let [updated (merge existing updates)]
+                   (let [updated (merge existing allowed-updates)]
                      (reset! result updated)
                      (assoc m canonical updated))))
                (do (reset! result {:error :project-not-found
