@@ -39,7 +39,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'cider)
+(require 'claude-code)
 
 (defgroup task-conductor-dev-env nil
   "Emacs dev-env for task-conductor."
@@ -67,6 +69,11 @@ This is a UUID string used to identify this Emacs instance.")
 (defvar task-conductor-dev-env--poll-timer nil
   "Timer for the command subscription loop.
 Stores the timer object for cleanup on disconnect.")
+
+(defvar task-conductor-dev-env--sessions
+  (make-hash-table :test 'equal)
+  "Hash table mapping session-id strings to buffer objects.
+Used to track active claude-code sessions started by the orchestrator.")
 
 (defun task-conductor-dev-env--connected-p ()
   "Return non-nil if connected to task-conductor as a dev-env."
@@ -100,6 +107,30 @@ Returns t if delivered, nil if command not found."
            command-id
            response)))
 
+;;; Command handlers
+
+(defun task-conductor-dev-env--handle-start-session (params)
+  "Handle :start-session command with PARAMS.
+PARAMS should contain :session-id.  Starts a claude-code session
+with --resume <session-id>.  Returns response plist."
+  (let ((session-id (plist-get params :session-id)))
+    (unless session-id
+      (cl-return-from task-conductor-dev-env--handle-start-session
+        '(:status :error :message "Missing :session-id in params")))
+    (let ((existing-buffer (gethash session-id task-conductor-dev-env--sessions)))
+      (if (and existing-buffer (buffer-live-p existing-buffer))
+          `(:status :ok :buffer-name ,(buffer-name existing-buffer))
+        (condition-case err
+            (let ((buffer (claude-code--start nil (list "--resume" session-id))))
+              (if (and buffer (buffer-live-p buffer))
+                  (progn
+                    (puthash session-id buffer task-conductor-dev-env--sessions)
+                    `(:status :ok :buffer-name ,(buffer-name buffer)))
+                '(:status :error :message "claude-code--start returned nil or dead buffer")))
+          (error
+           `(:status :error :message ,(format "Failed to start session: %s"
+                                              (error-message-string err)))))))))
+
 ;;; Command dispatch
 
 (defun task-conductor-dev-env--dispatch-command (command)
@@ -108,11 +139,11 @@ COMMAND is a plist with :command-id, :command, and :params.
 Returns the response to send back to the orchestrator."
   (let ((command-type (plist-get command :command))
         (command-id (plist-get command :command-id))
-        (_params (plist-get command :params)))
+        (params (plist-get command :params)))
     (let ((response
            (pcase command-type
              (:start-session
-              '(:error :not-implemented :message "start-session not yet implemented"))
+              (task-conductor-dev-env--handle-start-session params))
              (:register-hook
               '(:error :not-implemented :message "register-hook not yet implemented"))
              (:query-transcript
