@@ -1,4 +1,5 @@
 {:lint-as {com.wsscode.pathom3.connect.operation/defresolver clojure.core/defn
            com.wsscode.pathom3.connect.operation/defmutation clojure.core/defn
            task-conductor.pathom-graph.interface/defresolver clojure.core/defn
-           task-conductor.pathom-graph.interface/defmutation clojure.core/defn}}
+           task-conductor.pathom-graph.interface/defmutation clojure.core/defn}
+ :hooks {:analyze-call {task-conductor.dev-env.interface/with-session hooks.dev-env/with-session}}}
