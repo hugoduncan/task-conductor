@@ -303,7 +303,19 @@
                  :type :emacs
                  :connected? true}]
                (core/list-dev-envs)))
-        (core/unregister-emacs-dev-env dev-env-id)))))
+        (core/unregister-emacs-dev-env dev-env-id)))
+
+    (testing "shows disconnected status when dev-env not connected"
+      ;; Create a dev-env and add to registry without connecting
+      (let [dev-env (core/make-emacs-dev-env)
+            dev-env-id "test-disconnected-id"]
+        (swap! core/registry assoc dev-env-id dev-env)
+        (is (= [{:dev-env-id dev-env-id
+                 :type :emacs
+                 :connected? false}]
+               (core/list-dev-envs)))
+        (core/shutdown dev-env)
+        (swap! core/registry dissoc dev-env-id)))))
 
 (deftest list-healthy-dev-envs-test
   ;; Verify filtering of dev-envs by health check (ping).
