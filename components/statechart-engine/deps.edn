@@ -1,5 +1,6 @@
 {:paths ["src" "resources"]
  :deps {com.fulcrologic/statecharts {:mvn/version "1.2.25"}
-        task-conductor/pathom-graph {:local/root "../pathom-graph"}}
+        task-conductor/pathom-graph {:local/root "../pathom-graph"}
+        task-conductor/dev-env {:local/root "../dev-env"}}
  :aliases
  {:test {:extra-paths ["test"]}}}
