@@ -6,11 +6,13 @@
            :source-paths ["bases/agent-runner/src"
                           "components/claude-cli/src"
                           "components/dev-env/src"
+                          "components/emacs-dev-env/src"
                           "components/pathom-graph/src"
                           "components/statechart-engine/src"]
            :test-paths   ["bases/agent-runner/test"
                           "components/claude-cli/test"
                           "components/dev-env/test"
+                          "components/emacs-dev-env/test"
                           "components/pathom-graph/test"
                           "components/statechart-engine/test"]
            :skip-meta    [:integration]}
