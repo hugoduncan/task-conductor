@@ -40,8 +40,11 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'cider)
 (require 'claude-code)
+
+(declare-function cider-connected-p "cider-connection")
+(declare-function cider-nrepl-sync-request:eval "cider-client")
+(declare-function nrepl-dict-get "nrepl-dict")
 
 (defgroup task-conductor-dev-env nil
   "Emacs dev-env for task-conductor."
@@ -92,6 +95,7 @@ Each entry is (:on-idle (:hook-id X :timer Y) :on-close (:hook-id X :fn Y)).")
 (defun task-conductor-dev-env--connected-p ()
   "Return non-nil if connected to task-conductor as a dev-env."
   (and task-conductor-dev-env--dev-env-id
+       (fboundp 'cider-connected-p)
        (cider-connected-p)))
 
 ;;; nREPL communication
@@ -424,6 +428,7 @@ Handles disconnection gracefully by stopping the loop."
 Requires an active CIDER connection.  Stores the dev-env-id for
 subsequent operations and starts the command subscription loop."
   (interactive)
+  (require 'cider)
   (when (task-conductor-dev-env--connected-p)
     (user-error "Already connected as dev-env %s" task-conductor-dev-env--dev-env-id))
   (let ((dev-env-id (task-conductor-dev-env--eval-sync
