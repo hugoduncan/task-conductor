@@ -89,14 +89,8 @@
   "Removes project by path. Returns removed project or nil."
   [path]
   (let [canonical (canonicalize-path path)
-        result (atom nil)]
-    (swap! registry
-           (fn [m]
-             (if-let [project (get m canonical)]
-               (do (reset! result project)
-                   (dissoc m canonical))
-               m)))
-    @result))
+        [old-state _] (swap-vals! registry dissoc canonical)]
+    (get old-state canonical)))
 
 (defn update!
   "Merges updates into existing project. Validates name uniqueness.
