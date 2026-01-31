@@ -241,22 +241,20 @@
           ;; Statechart should have transitioned to :done
           (is (= #{:received} (sc/current-state session-id))))))
 
-    (testing "throws for non-existent dev-env"
+    (testing "returns error for non-existent dev-env"
       (with-clean-state
         (sc/register! ::hook-chart3 (waiting-chart))
-        (let [session-id (sc/start! ::hook-chart3)]
-          (try
-            (graph/query
-             [`(resolvers/engine-register-dev-env-hook!
-                {:dev-env/id "missing"
-                 :dev-env/hook-type :on-close
-                 :engine/session-id ~session-id
-                 :engine/event :dev-env-closed})])
-            (is false "Expected exception to be thrown")
-            (catch clojure.lang.ExceptionInfo e
-              ;; Pathom wraps the exception; check root cause
-              (let [root-cause (ex-cause e)]
-                (is (= :dev-env-not-found (:error (ex-data root-cause))))))))))))
+        (let [session-id (sc/start! ::hook-chart3)
+              result (graph/query
+                      [`(resolvers/engine-register-dev-env-hook!
+                         {:dev-env/id "missing"
+                          :dev-env/hook-type :on-close
+                          :engine/session-id ~session-id
+                          :engine/event :dev-env-closed})])
+              hook-result (get-in result [`resolvers/engine-register-dev-env-hook!
+                                          :engine/hook-id])]
+          (is (= :not-found (:error hook-result)))
+          (is (string? (:message hook-result))))))))
 
 (deftest engine-unregister-dev-env-hook-test
   ;; Verifies hook unregistration removes tracking.

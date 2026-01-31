@@ -75,8 +75,7 @@
               :engine-session-id session-id
               :event event})
       {:engine/hook-id hook-id})
-    (throw (ex-info "Dev-env not found"
-                    {:error :dev-env-not-found :dev-env/id id}))))
+    {:engine/hook-id {:error :not-found :message (str "Dev-env not found: " id)}}))
 
 (graph/defmutation engine-unregister-dev-env-hook!
   "Unregister a dev-env hook.
