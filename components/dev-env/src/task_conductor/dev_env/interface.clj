@@ -30,7 +30,7 @@
                 :on-idle  - Session waiting for user input
     callback  - Function (fn [context]) called when event occurs
 
-  Returns a hook registration (opaque, for potential deregistration)."
+  Returns a hook registration ID."
   [dev-env hook-type callback]
   (protocol/register-hook dev-env hook-type callback))
 

@@ -50,7 +50,7 @@
                   :on-idle  - Session waiting for user input
       callback  - Function (fn [context]) called when event occurs
 
-    Returns a hook registration (opaque, for potential deregistration).
+    Returns a hook registration ID.
     Callbacks receive a context map with :session-id, :timestamp, :reason.")
 
   (query-transcript [dev-env session-id]
