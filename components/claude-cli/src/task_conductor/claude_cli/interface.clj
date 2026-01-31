@@ -22,9 +22,12 @@
     --verbose --output-format stream-json --print conversation-summary
 
   The result-promise delivers:
-    {:exit-code n :events [...]} on success
+    {:exit-code n :events [...] :session-id \"uuid\"} on success
     {:exit-code nil :error :timeout} on timeout
-    {:exit-code nil :error :interrupted :exception e} on interruption"
+    {:exit-code nil :error :interrupted :exception e} on interruption
+
+  The :session-id is extracted from Claude CLI's output events. It may be nil
+  if the session ended before emitting a session-id (e.g., early error)."
   [opts]
   (core/invoke-process opts))
 
