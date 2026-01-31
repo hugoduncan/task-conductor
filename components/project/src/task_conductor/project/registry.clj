@@ -63,17 +63,27 @@
    (let [canonical (canonicalize-path path)]
      (if-let [error (validate-path canonical)]
        error
-       (if (contains? @registry canonical)
-         {:error :duplicate-path
-          :message (str "Project already registered: " canonical)}
-         (let [name (or (:project/name opts) (path-segment canonical))]
-           (if (find-by-name @registry name)
-             {:error :duplicate-name
-              :message (str "Project name already exists: " name)}
-             (let [project {:project/path canonical
-                            :project/name name}]
-               (swap! registry assoc canonical project)
-               project))))))))
+       (let [name (or (:project/name opts) (path-segment canonical))
+             result (atom nil)]
+         (swap! registry
+                (fn [m]
+                  (cond
+                    (contains? m canonical)
+                    (do (reset! result {:error :duplicate-path
+                                        :message (str "Project already registered: " canonical)})
+                        m)
+
+                    (find-by-name m name)
+                    (do (reset! result {:error :duplicate-name
+                                        :message (str "Project name already exists: " name)})
+                        m)
+
+                    :else
+                    (let [project {:project/path canonical
+                                   :project/name name}]
+                      (reset! result project)
+                      (assoc m canonical project)))))
+         @result)))))
 
 (defn unregister!
   "Removes project by path. Returns removed project or nil."
@@ -92,23 +102,25 @@
   "Merges updates into existing project. Validates name uniqueness.
    Returns updated project or error map."
   [path updates]
-  (let [canonical (canonicalize-path path)]
-    (if-let [existing (get @registry canonical)]
-      (if-let [new-name (:project/name updates)]
-        ;; Check name uniqueness only if name is changing
-        (if (and (not= new-name (:project/name existing))
-                 (find-by-name @registry new-name))
-          {:error :duplicate-name
-           :message (str "Project name already exists: " new-name)}
-          (let [updated (merge existing updates)]
-            (swap! registry assoc canonical updated)
-            updated))
-        ;; No name change, just merge
-        (let [updated (merge existing updates)]
-          (swap! registry assoc canonical updated)
-          updated))
-      {:error :project-not-found
-       :message (str "Project not found: " canonical)})))
+  (let [canonical (canonicalize-path path)
+        result (atom nil)]
+    (swap! registry
+           (fn [m]
+             (if-let [existing (get m canonical)]
+               (let [new-name (:project/name updates)]
+                 (if (and new-name
+                          (not= new-name (:project/name existing))
+                          (find-by-name m new-name))
+                   (do (reset! result {:error :duplicate-name
+                                       :message (str "Project name already exists: " new-name)})
+                       m)
+                   (let [updated (merge existing updates)]
+                     (reset! result updated)
+                     (assoc m canonical updated))))
+               (do (reset! result {:error :project-not-found
+                                   :message (str "Project not found: " canonical)})
+                   m))))
+    @result))
 
 (defn clear!
   "Resets registry. For testing."
