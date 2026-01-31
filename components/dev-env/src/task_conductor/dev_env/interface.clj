@@ -78,6 +78,16 @@
   [dev-env session-id]
   (protocol/close-session dev-env session-id))
 
+(defn connected?
+  "Check if the dev-env is connected and operational.
+
+  Parameters:
+    dev-env - A DevEnv implementation
+
+  Returns true if the dev-env can accept commands, false otherwise."
+  [dev-env]
+  (protocol/connected? dev-env))
+
 ;;; Helpers
 
 (defn register-hooks

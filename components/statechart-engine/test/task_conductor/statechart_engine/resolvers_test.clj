@@ -1,9 +1,11 @@
 (ns task-conductor.statechart-engine.resolvers-test
   ;; Tests for engine resolvers and mutations.
   ;; Verifies: session listing, chart listing, session state, session history,
-  ;; and mutations for start!/send!/stop! via EQL.
+  ;; mutations for start!/send!/stop!, and dev-env hook registration via EQL.
   (:require
    [clojure.test :refer [deftest is testing]]
+   [task-conductor.dev-env.protocol :as protocol]
+   [task-conductor.dev-env.registry :as dev-env-registry]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.statechart-engine.interface :as sc]
    [task-conductor.statechart-engine.resolvers :as resolvers]
@@ -180,3 +182,109 @@
                      (graph/query
                       [`(resolvers/engine-stop!
                          {:engine/session-id "invalid"})])))))))
+
+;;; Dev-env Hook Registration Tests
+
+(defn waiting-chart
+  "Statechart for testing hook integration: idle → waiting → received.
+   Transitions on :dev-env-closed event to :received (non-final for testing)."
+  []
+  (sc/statechart {}
+                 (sc/initial {}
+                             (sc/transition {:target :idle}))
+                 (sc/state {:id :idle}
+                           (sc/transition {:event :start-waiting :target :waiting}))
+                 (sc/state {:id :waiting}
+                           (sc/transition {:event :dev-env-closed :target :received}))
+                 (sc/state {:id :received})))
+
+(deftest engine-register-dev-env-hook-test
+  ;; Verifies hook registration connects dev-env callbacks to statechart events.
+  (testing "engine-register-dev-env-hook!"
+    (testing "registers hook and returns hook-id"
+      (with-clean-state
+        (let [dev-env (protocol/make-noop-dev-env)
+              dev-env-id (dev-env-registry/register! dev-env :test)
+              _ (sc/register! ::hook-chart (waiting-chart))
+              session-id (sc/start! ::hook-chart)
+              result (graph/query
+                      [`(resolvers/engine-register-dev-env-hook!
+                         {:dev-env/id ~dev-env-id
+                          :dev-env/hook-type :on-close
+                          :engine/session-id ~session-id
+                          :engine/event :dev-env-closed})])
+              hook-id (get-in result [`resolvers/engine-register-dev-env-hook!
+                                      :engine/hook-id])]
+          (is (some? hook-id))
+          (is (uuid? hook-id)))))
+
+    (testing "hook callback sends event to statechart"
+      (with-clean-state
+        (let [dev-env (protocol/make-noop-dev-env)
+              dev-env-id (dev-env-registry/register! dev-env :test)
+              _ (sc/register! ::hook-chart2 (waiting-chart))
+              session-id (sc/start! ::hook-chart2)
+              _ (sc/send! session-id :start-waiting)
+              _ (is (= #{:waiting} (sc/current-state session-id)))
+              result (graph/query
+                      [`(resolvers/engine-register-dev-env-hook!
+                         {:dev-env/id ~dev-env-id
+                          :dev-env/hook-type :on-close
+                          :engine/session-id ~session-id
+                          :engine/event :dev-env-closed})])
+              hook-id (get-in result [`resolvers/engine-register-dev-env-hook!
+                                      :engine/hook-id])
+              ;; Get the callback from the noop dev-env's hooks atom
+              callback (get-in @(:hooks dev-env) [hook-id :callback])]
+          ;; Invoke the callback as dev-env would
+          (callback {:session-id "test" :timestamp (java.time.Instant/now)})
+          ;; Statechart should have transitioned to :done
+          (is (= #{:received} (sc/current-state session-id))))))
+
+    (testing "returns error for non-existent dev-env"
+      (with-clean-state
+        (sc/register! ::hook-chart3 (waiting-chart))
+        (let [session-id (sc/start! ::hook-chart3)
+              result (graph/query
+                      [`(resolvers/engine-register-dev-env-hook!
+                         {:dev-env/id "missing"
+                          :dev-env/hook-type :on-close
+                          :engine/session-id ~session-id
+                          :engine/event :dev-env-closed})])
+              hook-result (get-in result [`resolvers/engine-register-dev-env-hook!
+                                          :engine/hook-id])]
+          (is (= :not-found (:error hook-result)))
+          (is (string? (:message hook-result))))))))
+
+(deftest engine-unregister-dev-env-hook-test
+  ;; Verifies hook unregistration removes tracking.
+  (testing "engine-unregister-dev-env-hook!"
+    (testing "returns true when hook existed"
+      (with-clean-state
+        (let [dev-env (protocol/make-noop-dev-env)
+              dev-env-id (dev-env-registry/register! dev-env :test)
+              _ (sc/register! ::unreg-chart (waiting-chart))
+              session-id (sc/start! ::unreg-chart)
+              _ (graph/query
+                 [`(resolvers/engine-register-dev-env-hook!
+                    {:dev-env/id ~dev-env-id
+                     :dev-env/hook-type :on-close
+                     :engine/session-id ~session-id
+                     :engine/event :dev-env-closed})])
+              result (graph/query
+                      [`(resolvers/engine-unregister-dev-env-hook!
+                         {:dev-env/id ~dev-env-id
+                          :dev-env/hook-type :on-close})])
+              unregistered? (get-in result [`resolvers/engine-unregister-dev-env-hook!
+                                            :engine/unregistered?])]
+          (is (true? unregistered?)))))
+
+    (testing "returns false when hook did not exist"
+      (with-clean-state
+        (let [result (graph/query
+                      [`(resolvers/engine-unregister-dev-env-hook!
+                         {:dev-env/id "any"
+                          :dev-env/hook-type :on-close})])
+              unregistered? (get-in result [`resolvers/engine-unregister-dev-env-hook!
+                                            :engine/unregistered?])]
+          (is (false? unregistered?)))))))

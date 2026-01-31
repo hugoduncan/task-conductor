@@ -6,16 +6,10 @@
   (:require
    [clojure.core.async :as async]
    [taoensso.timbre :as log]
-   [task-conductor.dev-env.protocol :as protocol])
+   [task-conductor.dev-env.protocol :as protocol]
+   [task-conductor.dev-env.registry :as generic-registry])
   (:import
    [java.util UUID]))
-
-;;; Registry
-
-(defonce ^{:doc "Registry of dev-env-id -> EmacsDevEnv instances.
-  Allows Emacs to reference dev-envs by ID via nREPL."}
-  registry
-  (atom {}))
 
 (def ^:const default-await-timeout-ms
   "Default timeout for await-command in milliseconds."
@@ -98,7 +92,10 @@
                                         default-response-timeout-ms)]
       (when (and result (not (:error result)))
         (swap! state update :sessions dissoc session-id))
-      result)))
+      result))
+
+  (connected? [_]
+    (:connected? @state)))
 
 ;;; Lifecycle
 
@@ -131,30 +128,28 @@
                               :pending-commands {}
                               :connected? false})))
 
-;;; Registry functions
-
 (defn get-dev-env
   "Look up a dev-env by ID from the registry.
   Returns nil if not found."
   [dev-env-id]
-  (get @registry dev-env-id))
+  (generic-registry/get-dev-env dev-env-id))
 
 ;;; nREPL-callable functions
 
 (defn register-emacs-dev-env
   "Called by Emacs to register itself as a dev-env.
 
-  Creates a new EmacsDevEnv, stores it in the registry, and marks it connected.
-  Returns the dev-env-id (UUID string) for use in subsequent calls.
+  Creates a new EmacsDevEnv, stores it in the generic dev-env registry,
+  then marks it connected.
+  Returns the dev-env-id for use in subsequent calls.
 
   Arity:
     ()        - Create new dev-env, register, return ID (for Emacs)
     (dev-env) - Mark existing dev-env as connected (for internal use)"
   ([]
    (let [dev-env (make-emacs-dev-env)
-         dev-env-id (str (UUID/randomUUID))]
+         dev-env-id (generic-registry/register! dev-env :emacs {})]
      (swap! (:state dev-env) assoc :connected? true)
-     (swap! registry assoc dev-env-id dev-env)
      dev-env-id))
   ([dev-env]
    (swap! (:state dev-env) assoc :connected? true)
@@ -169,7 +164,7 @@
   (if-let [dev-env (get-dev-env dev-env-id)]
     (do
       (shutdown dev-env)
-      (swap! registry dissoc dev-env-id)
+      (generic-registry/unregister! dev-env-id)
       true)
     false))
 
@@ -387,7 +382,7 @@
 ;;; Dev-Env Selection
 
 (defn list-dev-envs
-  "List all registered dev-envs with their connection status.
+  "List all registered emacs dev-envs with their connection status.
 
   Returns a vector of maps:
     [{:dev-env-id \"...\"
@@ -395,13 +390,15 @@
       :connected? true/false}]"
   []
   (vec
-   (for [[dev-env-id dev-env] @registry]
-     {:dev-env-id dev-env-id
+   (for [{:keys [id type]} (generic-registry/list-dev-envs)
+         :when (= :emacs type)
+         :let [dev-env (generic-registry/get-dev-env id)]]
+     {:dev-env-id id
       :type :emacs
       :connected? (connected? dev-env)})))
 
 (defn list-healthy-dev-envs
-  "List all registered dev-envs that respond to ping.
+  "List all registered emacs dev-envs that respond to ping.
 
   Pings each connected dev-env and returns only those that respond.
   Uses a short timeout to avoid long waits.
@@ -417,11 +414,13 @@
    (list-healthy-dev-envs default-ping-timeout-ms))
   ([timeout-ms]
    (vec
-    (for [[dev-env-id dev-env] @registry
+    (for [{:keys [id type]} (generic-registry/list-dev-envs)
+          :when (= :emacs type)
+          :let [dev-env (generic-registry/get-dev-env id)]
           :when (connected? dev-env)
           :let [ping-result (ping dev-env timeout-ms)]
           :when (= :ok (:status ping-result))]
-      {:dev-env-id dev-env-id
+      {:dev-env-id id
        :type :emacs
        :connected? true}))))
 

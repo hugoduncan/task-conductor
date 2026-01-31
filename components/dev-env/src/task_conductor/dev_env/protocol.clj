@@ -78,7 +78,13 @@
       session-id - The session to close (string)
 
     Returns true if close was initiated, false if session not found.
-    The actual close may be asynchronous; use :on-close hook for notification."))
+    The actual close may be asynchronous; use :on-close hook for notification.")
+
+  (connected? [dev-env]
+    "Check if the dev-env is connected and operational.
+
+    Returns true if the dev-env can accept commands, false otherwise.
+    Implementations should perform a lightweight check (e.g., ping)."))
 
 ;;; NoOp Implementation
 
@@ -120,7 +126,10 @@
     (swap! calls conj {:op :close-session
                        :session-id session-id
                        :timestamp (java.time.Instant/now)})
-    false))
+    false)
+
+  (connected? [_]
+    true))
 
 (defn make-noop-dev-env
   "Create a NoOpDevEnv instance for testing.

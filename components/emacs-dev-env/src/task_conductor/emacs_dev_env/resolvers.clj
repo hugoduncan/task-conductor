@@ -1,6 +1,14 @@
 (ns task-conductor.emacs-dev-env.resolvers
-  "EQL resolvers for dev-env selection and operations.
-   Registered on namespace load."
+  "DEPRECATED: Use task-conductor.dev-env.resolvers instead.
+
+  This namespace provided Emacs-specific dev-env resolvers. With the addition
+  of the generic dev-env registry and resolvers, this namespace is no longer
+  needed. The generic resolvers in task-conductor.dev-env.resolvers work with
+  any dev-env implementation registered in the generic registry.
+
+  This namespace remains for backward compatibility but will be removed in
+  a future release."
+  {:deprecated "0.1.0"}
   (:require
    [com.wsscode.pathom3.connect.operation :as pco]
    [task-conductor.dev-env.interface :as dev-env]
