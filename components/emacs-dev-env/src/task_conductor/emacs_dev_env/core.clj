@@ -6,7 +6,8 @@
   (:require
    [clojure.core.async :as async]
    [taoensso.timbre :as log]
-   [task-conductor.dev-env.protocol :as protocol])
+   [task-conductor.dev-env.protocol :as protocol]
+   [task-conductor.dev-env.registry :as generic-registry])
   (:import
    [java.util UUID]))
 
@@ -147,7 +148,8 @@
 (defn register-emacs-dev-env
   "Called by Emacs to register itself as a dev-env.
 
-  Creates a new EmacsDevEnv, stores it in the registry, and marks it connected.
+  Creates a new EmacsDevEnv, stores it in the local registry and the generic
+  dev-env registry, then marks it connected.
   Returns the dev-env-id (UUID string) for use in subsequent calls.
 
   Arity:
@@ -155,8 +157,10 @@
     (dev-env) - Mark existing dev-env as connected (for internal use)"
   ([]
    (let [dev-env (make-emacs-dev-env)
-         dev-env-id (str (UUID/randomUUID))]
+         ;; Register with generic registry first - it generates the ID
+         dev-env-id (generic-registry/register! dev-env :emacs {})]
      (swap! (:state dev-env) assoc :connected? true)
+     ;; Also store in local registry for backward compatibility
      (swap! registry assoc dev-env-id dev-env)
      dev-env-id))
   ([dev-env]
@@ -166,13 +170,14 @@
 (defn unregister-emacs-dev-env
   "Called by Emacs to unregister and shutdown a dev-env.
 
-  Removes the dev-env from the registry and shuts it down.
+  Removes the dev-env from both registries and shuts it down.
   Returns true if found and removed, false if not found."
   [dev-env-id]
   (if-let [dev-env (get-dev-env dev-env-id)]
     (do
       (shutdown dev-env)
       (swap! registry dissoc dev-env-id)
+      (generic-registry/unregister! dev-env-id)
       true)
     false))
 

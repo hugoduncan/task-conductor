@@ -4,6 +4,7 @@
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.dev-env.protocol :as protocol]
+   [task-conductor.dev-env.registry :as generic-registry]
    [task-conductor.emacs-dev-env.core :as core]))
 
 (deftest make-emacs-dev-env-test
@@ -31,7 +32,8 @@
     (testing "with no args creates dev-env and returns id"
       (let [dev-env-id (core/register-emacs-dev-env)]
         (is (string? dev-env-id))
-        (is (re-matches #"[0-9a-f-]+" dev-env-id))
+        ;; ID format from generic registry: "dev-env-123"
+        (is (re-matches #"dev-env-\d+" dev-env-id))
         (let [dev-env (core/get-dev-env dev-env-id)]
           (is (some? dev-env))
           (is (core/connected? dev-env)))
@@ -514,3 +516,52 @@
         (is (nil? (:command-chan @(:state dev-env))))
         ;; Await should return closed status
         (is (= {:status :closed} (core/await-command dev-env)))))))
+
+;;; Generic Registry Integration Tests
+
+(deftest generic-registry-integration-test
+  ;; Verify EmacsDevEnv registration integrates with generic dev-env registry.
+  ;; This enables generic resolvers to discover and query emacs dev-envs.
+  (testing "generic registry integration"
+    (generic-registry/clear!)
+    (try
+      (testing "register-emacs-dev-env adds to generic registry"
+        (let [dev-env-id (core/register-emacs-dev-env)
+              generic-entry (generic-registry/get-dev-env-entry dev-env-id)]
+          (is (some? generic-entry)
+              "dev-env should appear in generic registry")
+          (is (= :emacs (:type generic-entry))
+              "generic registry entry should have :emacs type")
+          (is (some? (:dev-env generic-entry))
+              "generic registry entry should include dev-env instance")
+          (is (= (core/get-dev-env dev-env-id) (:dev-env generic-entry))
+              "generic registry should reference same instance as local registry")
+          (core/unregister-emacs-dev-env dev-env-id)))
+
+      (testing "unregister-emacs-dev-env removes from generic registry"
+        (let [dev-env-id (core/register-emacs-dev-env)]
+          (is (some? (generic-registry/get-dev-env dev-env-id)))
+          (core/unregister-emacs-dev-env dev-env-id)
+          (is (nil? (generic-registry/get-dev-env dev-env-id))
+              "dev-env should be removed from generic registry")))
+
+      (testing "list-dev-envs shows emacs dev-env in generic registry"
+        (let [dev-env-id (core/register-emacs-dev-env)
+              listed (generic-registry/list-dev-envs)
+              entry (first (filter #(= dev-env-id (:id %)) listed))]
+          (is (some? entry)
+              "emacs dev-env should appear in list")
+          (is (= :emacs (:type entry)))
+          (core/unregister-emacs-dev-env dev-env-id)))
+
+      (testing "generic resolvers can query emacs dev-env"
+        (let [dev-env-id (core/register-emacs-dev-env)
+              dev-env (generic-registry/get-dev-env dev-env-id)]
+          (is (satisfies? protocol/DevEnv dev-env)
+              "retrieved dev-env should satisfy DevEnv protocol")
+          (is (protocol/connected? dev-env)
+              "dev-env should report connected")
+          (core/unregister-emacs-dev-env dev-env-id)))
+
+      (finally
+        (generic-registry/clear!)))))
