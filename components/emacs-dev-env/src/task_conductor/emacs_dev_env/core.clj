@@ -5,6 +5,7 @@
   for responses from Emacs, which handles the actual Claude CLI process."
   (:require
    [clojure.core.async :as async]
+   [taoensso.timbre :as log]
    [task-conductor.dev-env.protocol :as protocol])
   (:import
    [java.util UUID]))
@@ -242,7 +243,9 @@
       (try
         (callback context)
         (catch Exception e
-          (println "Hook callback error:" (.getMessage e)))))))
+          (log/error e "Hook callback error"
+                     {:hook-type hook-type
+                      :context context}))))))
 
 (defn send-hook-event
   "Called by Emacs to notify of session events.
