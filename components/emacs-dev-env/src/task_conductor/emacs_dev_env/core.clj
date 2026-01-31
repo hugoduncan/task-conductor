@@ -28,6 +28,28 @@
   "Sentinel value returned when response times out."
   ::response-timeout)
 
+(defn- send-command-and-wait
+  "Send a command to Emacs and wait for response.
+
+  Parameters:
+    command-chan - The command channel to send on
+    command-kw   - Keyword for the command (e.g., :start-session)
+    params       - Map of parameters for the command
+    timeout-ms   - Timeout for response in milliseconds
+
+  Returns the response from Emacs, or {:error :timeout :message \"...\"} on timeout."
+  [command-chan command-kw params timeout-ms]
+  (let [response-promise (promise)
+        command {:command-id (UUID/randomUUID)
+                 :command command-kw
+                 :params params
+                 :response-promise response-promise}]
+    (async/>!! command-chan command)
+    (let [result (deref response-promise timeout-ms response-timeout-sentinel)]
+      (if (= result response-timeout-sentinel)
+        {:error :timeout :message (str "Response timeout waiting for " (name command-kw))}
+        result))))
+
 (defrecord EmacsDevEnv [state]
   ;; state is an atom containing:
   ;;   :command-chan - core.async channel for command queue
@@ -38,19 +60,11 @@
   protocol/DevEnv
 
   (start-session [_ session-id opts]
-    (let [{:keys [command-chan]} @state
-          response-promise (promise)
-          command {:command-id (UUID/randomUUID)
-                   :command :start-session
-                   :params {:session-id session-id
-                            :opts opts}
-                   :response-promise response-promise}]
-      (async/>!! command-chan command)
+    (let [{:keys [command-chan]} @state]
       (swap! state assoc-in [:sessions session-id] {:status :starting})
-      (let [result (deref response-promise default-response-timeout-ms response-timeout-sentinel)]
-        (if (= result response-timeout-sentinel)
-          {:error :timeout :message "Response timeout waiting for start-session"}
-          result))))
+      (send-command-and-wait command-chan :start-session
+                             {:session-id session-id :opts opts}
+                             default-response-timeout-ms)))
 
   (register-hook [_ hook-type callback]
     (let [hook-id (UUID/randomUUID)]
@@ -59,46 +73,25 @@
       hook-id))
 
   (query-transcript [_ session-id]
-    (let [{:keys [command-chan]} @state
-          response-promise (promise)
-          command {:command-id (UUID/randomUUID)
-                   :command :query-transcript
-                   :params {:session-id session-id}
-                   :response-promise response-promise}]
-      (async/>!! command-chan command)
-      (let [result (deref response-promise default-response-timeout-ms response-timeout-sentinel)]
-        (if (= result response-timeout-sentinel)
-          {:error :timeout :message "Response timeout waiting for query-transcript"}
-          result))))
+    (let [{:keys [command-chan]} @state]
+      (send-command-and-wait command-chan :query-transcript
+                             {:session-id session-id}
+                             default-response-timeout-ms)))
 
   (query-events [_ session-id]
-    (let [{:keys [command-chan]} @state
-          response-promise (promise)
-          command {:command-id (UUID/randomUUID)
-                   :command :query-events
-                   :params {:session-id session-id}
-                   :response-promise response-promise}]
-      (async/>!! command-chan command)
-      (let [result (deref response-promise default-response-timeout-ms response-timeout-sentinel)]
-        (if (= result response-timeout-sentinel)
-          {:error :timeout :message "Response timeout waiting for query-events"}
-          result))))
+    (let [{:keys [command-chan]} @state]
+      (send-command-and-wait command-chan :query-events
+                             {:session-id session-id}
+                             default-response-timeout-ms)))
 
   (close-session [_ session-id]
     (let [{:keys [command-chan]} @state
-          response-promise (promise)
-          command {:command-id (UUID/randomUUID)
-                   :command :close-session
-                   :params {:session-id session-id}
-                   :response-promise response-promise}]
-      (async/>!! command-chan command)
-      (let [result (deref response-promise default-response-timeout-ms response-timeout-sentinel)]
-        (if (= result response-timeout-sentinel)
-          {:error :timeout :message "Response timeout waiting for close-session"}
-          (do
-            (when result
-              (swap! state update :sessions dissoc session-id))
-            result))))))
+          result (send-command-and-wait command-chan :close-session
+                                        {:session-id session-id}
+                                        default-response-timeout-ms)]
+      (when (and result (not (:error result)))
+        (swap! state update :sessions dissoc session-id))
+      result)))
 
 ;;; Lifecycle
 
@@ -347,18 +340,16 @@
        {:status :error :message "Command channel closed"}
 
        :else
-       (let [response-promise (promise)
-             command {:command-id (UUID/randomUUID)
-                      :command :ping
-                      :params {}
-                      :response-promise response-promise}]
-         (async/>!! command-chan command)
-         (let [result (deref response-promise timeout-ms response-timeout-sentinel)]
-           (if (= result response-timeout-sentinel)
-             {:status :timeout}
-             (if (= :ok (:status result))
-               {:status :ok}
-               {:status :error :message (or (:message result) "Ping failed")}))))))))
+       (let [result (send-command-and-wait command-chan :ping {} timeout-ms)]
+         (cond
+           (:error result)
+           {:status :timeout}
+
+           (= :ok (:status result))
+           {:status :ok}
+
+           :else
+           {:status :error :message (or (:message result) "Ping failed")}))))))
 
 (defn ping-by-id
   "Send a ping command using dev-env-id.
