@@ -226,7 +226,7 @@ Returns t on success."
         (when close-data
           (task-conductor-dev-env--send-hook-event :on-close session-id :user-exit))))))
 
-(defun task-conductor-dev-env--setup-on-close-hook (session-id hook-id)
+(cl-defun task-conductor-dev-env--setup-on-close-hook (session-id hook-id)
   "Set up :on-close hook for SESSION-ID with HOOK-ID.
 Returns t on success."
   (let ((buffer (gethash session-id task-conductor-dev-env--sessions)))
@@ -264,7 +264,7 @@ Returns t on success."
 
 ;;; Command handlers
 
-(defun task-conductor-dev-env--handle-start-session (params)
+(cl-defun task-conductor-dev-env--handle-start-session (params)
   "Handle :start-session command with PARAMS.
 PARAMS should contain :session-id.  Starts a claude-code session
 with --resume <session-id>.  Returns response plist."
@@ -286,7 +286,7 @@ with --resume <session-id>.  Returns response plist."
            `(:status :error :message ,(format "Failed to start session: %s"
                                               (error-message-string err)))))))))
 
-(defun task-conductor-dev-env--handle-register-hook (params)
+(cl-defun task-conductor-dev-env--handle-register-hook (params)
   "Handle :register-hook command with PARAMS.
 PARAMS should contain :session-id and :hook-type (:on-idle or :on-close).
 Returns response plist with :status and :hook-id on success."
@@ -320,7 +320,7 @@ Returns response plist with :status and :hook-id on success."
   "Remove ANSI escape codes from STRING."
   (replace-regexp-in-string "\033\\[[0-9;]*m" "" string))
 
-(defun task-conductor-dev-env--handle-query-transcript (params)
+(cl-defun task-conductor-dev-env--handle-query-transcript (params)
   "Handle :query-transcript command with PARAMS.
 PARAMS should contain :session-id.  Returns buffer content with ANSI codes
 stripped, limited to `task-conductor-dev-env-transcript-limit' bytes."
@@ -344,7 +344,7 @@ stripped, limited to `task-conductor-dev-env-transcript-limit' bytes."
                              stripped)))
           `(:status :ok :transcript ,transcript))))))
 
-(defun task-conductor-dev-env--handle-close-session (params)
+(cl-defun task-conductor-dev-env--handle-close-session (params)
   "Handle :close-session command with PARAMS.
 PARAMS should contain :session-id.  Kills the buffer (triggering :on-close
 hook if registered), removes from sessions table, and cleans up hooks."
@@ -466,6 +466,8 @@ Stops the command subscription loop before unregistering."
      (format "(task-conductor.emacs-dev-env.interface/unregister-emacs-dev-env %S)"
              dev-env-id))
     (setq task-conductor-dev-env--dev-env-id nil)
+    (clrhash task-conductor-dev-env--sessions)
+    (clrhash task-conductor-dev-env--session-hooks)
     (message "Disconnected from task-conductor")))
 
 (provide 'task-conductor-dev-env)
