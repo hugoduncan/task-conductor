@@ -2,4 +2,7 @@
            com.wsscode.pathom3.connect.operation/defmutation clojure.core/defn
            task-conductor.pathom-graph.interface/defresolver clojure.core/defn
            task-conductor.pathom-graph.interface/defmutation clojure.core/defn}
- :hooks {:analyze-call {task-conductor.dev-env.interface/with-session hooks.dev-env/with-session}}}
+ :hooks {:analyze-call {task-conductor.dev-env.interface/with-session hooks.dev-env/with-session}}
+ :linters {:unresolved-symbol {:exclude [(task-conductor.project.registry-test/with-temp-dir)
+                                         (task-conductor.project.registry-test/with-temp-file)
+                                         (task-conductor.project.registry-test/with-clean-project-state)]}}}
