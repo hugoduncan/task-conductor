@@ -57,7 +57,13 @@
 (graph/defmutation engine-register-dev-env-hook!
   "Register a dev-env hook that sends an event to a statechart session.
    When the dev-env fires the hook, the specified event is sent to the
-   statechart session."
+   statechart session.
+
+   Only one hook per (dev-env-id, hook-type) pair is tracked. Registering
+   a second hook with the same pair overwrites the previous registration.
+   The underlying dev-env callback from the first registration remains
+   registered (DevEnv protocol has no unregister method), but the tracking
+   in `dev-env-hooks` is replaced."
   [{:dev-env/keys [id hook-type] :engine/keys [session-id event]}]
   {::pco/output [:engine/hook-id]}
   (if-let [dev-env (dev-env-registry/get-dev-env id)]
