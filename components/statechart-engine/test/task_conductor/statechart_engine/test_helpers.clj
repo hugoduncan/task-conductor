@@ -17,8 +17,12 @@
          (core/reset-engine!)))))
 
 (defmacro with-clean-state
-  "Execute body with fresh engine, graph, and dev-env state.
-   Resets engine, Pathom graph, and dev-env registry, then registers resolvers."
+  "Execute body with fresh engine, graph, dev-env registry, and hooks.
+   Resets engine, Pathom graph, dev-env registry, and dev-env hooks,
+   then registers resolvers. Cleans up afterwards.
+
+   Note: This extends the basic dev-env cleanup with statechart-engine
+   specific state (engine and dev-env hooks)."
   [& body]
   `(do
      (core/reset-engine!)

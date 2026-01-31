@@ -7,25 +7,13 @@
    [task-conductor.dev-env.protocol :as protocol]
    [task-conductor.dev-env.registry :as registry]
    [task-conductor.dev-env.resolvers :as resolvers]
+   [task-conductor.dev-env.test-helpers :refer [with-clean-dev-env-state]]
    [task-conductor.pathom-graph.interface :as graph]))
-
-(defmacro with-clean-state
-  "Execute body with clean registry and graph, ensuring cleanup afterwards."
-  [& body]
-  `(do
-     (registry/clear!)
-     (graph/reset-graph!)
-     (resolvers/register-resolvers!)
-     (try
-       ~@body
-       (finally
-         (registry/clear!)
-         (graph/reset-graph!)))))
 
 ;;; Resolver Tests
 
 (deftest dev-env-list-test
-  (with-clean-state
+  (with-clean-dev-env-state
     (testing "dev-env-list"
       (testing "returns empty list when no dev-envs registered"
         (let [result (graph/query [:dev-env/available])]
@@ -46,7 +34,7 @@
                  (get by-id id2))))))))
 
 (deftest dev-env-selected-test
-  (with-clean-state
+  (with-clean-dev-env-state
     (testing "dev-env-selected"
       (testing "returns nil when no dev-envs registered"
         (let [result (graph/query [:dev-env/selected])]
@@ -63,7 +51,7 @@
           (is (some? (:dev-env selected))))))))
 
 (deftest dev-env-by-id-test
-  (with-clean-state
+  (with-clean-dev-env-state
     (testing "dev-env-by-id"
       (testing "returns dev-env details for existing ID"
         (let [dev-env (protocol/make-noop-dev-env)
@@ -88,7 +76,7 @@
 ;;; Mutation Tests
 
 (deftest dev-env-start-session-test
-  (with-clean-state
+  (with-clean-dev-env-state
     (testing "dev-env-start-session!"
       (testing "calls start-session on the dev-env"
         (let [dev-env (protocol/make-noop-dev-env)
@@ -112,7 +100,7 @@
           (is (= :not-found (:error session-result))))))))
 
 (deftest dev-env-close-session-test
-  (with-clean-state
+  (with-clean-dev-env-state
     (testing "dev-env-close-session!"
       (testing "calls close-session on the dev-env"
         (let [dev-env (protocol/make-noop-dev-env)
@@ -133,7 +121,7 @@
           (is (= :not-found (:error close-result))))))))
 
 (deftest dev-env-query-transcript-test
-  (with-clean-state
+  (with-clean-dev-env-state
     (testing "dev-env-query-transcript!"
       (testing "calls query-transcript on the dev-env"
         (let [dev-env (protocol/make-noop-dev-env)
@@ -154,7 +142,7 @@
           (is (= :not-found (:error transcript))))))))
 
 (deftest dev-env-query-events-test
-  (with-clean-state
+  (with-clean-dev-env-state
     (testing "dev-env-query-events!"
       (testing "calls query-events on the dev-env"
         (let [dev-env (protocol/make-noop-dev-env)
