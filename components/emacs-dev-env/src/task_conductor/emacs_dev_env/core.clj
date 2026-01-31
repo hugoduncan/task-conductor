@@ -9,6 +9,18 @@
   (:import
    [java.util UUID]))
 
+(def ^:const default-await-timeout-ms
+  "Default timeout for await-command in milliseconds."
+  30000)
+
+(def ^:const default-response-timeout-ms
+  "Default timeout for waiting on command responses in milliseconds."
+  30000)
+
+(def ^:private response-timeout-sentinel
+  "Sentinel value returned when response times out."
+  ::response-timeout)
+
 (defrecord EmacsDevEnv [state]
   ;; state is an atom containing:
   ;;   :command-chan - core.async channel for command queue
@@ -28,7 +40,10 @@
                    :response-promise response-promise}]
       (async/>!! command-chan command)
       (swap! state assoc-in [:sessions session-id] {:status :starting})
-      @response-promise))
+      (let [result (deref response-promise default-response-timeout-ms response-timeout-sentinel)]
+        (if (= result response-timeout-sentinel)
+          {:error :timeout :message "Response timeout waiting for start-session"}
+          result))))
 
   (register-hook [_ hook-type callback]
     (let [hook-id (UUID/randomUUID)]
@@ -44,7 +59,10 @@
                    :params {:session-id session-id}
                    :response-promise response-promise}]
       (async/>!! command-chan command)
-      @response-promise))
+      (let [result (deref response-promise default-response-timeout-ms response-timeout-sentinel)]
+        (if (= result response-timeout-sentinel)
+          {:error :timeout :message "Response timeout waiting for query-transcript"}
+          result))))
 
   (query-events [_ session-id]
     (let [{:keys [command-chan]} @state
@@ -54,7 +72,10 @@
                    :params {:session-id session-id}
                    :response-promise response-promise}]
       (async/>!! command-chan command)
-      @response-promise))
+      (let [result (deref response-promise default-response-timeout-ms response-timeout-sentinel)]
+        (if (= result response-timeout-sentinel)
+          {:error :timeout :message "Response timeout waiting for query-events"}
+          result))))
 
   (close-session [_ session-id]
     (let [{:keys [command-chan]} @state
@@ -64,10 +85,13 @@
                    :params {:session-id session-id}
                    :response-promise response-promise}]
       (async/>!! command-chan command)
-      (let [result @response-promise]
-        (when result
-          (swap! state update :sessions dissoc session-id))
-        result))))
+      (let [result (deref response-promise default-response-timeout-ms response-timeout-sentinel)]
+        (if (= result response-timeout-sentinel)
+          {:error :timeout :message "Response timeout waiting for close-session"}
+          (do
+            (when result
+              (swap! state update :sessions dissoc session-id))
+            result))))))
 
 ;;; Lifecycle
 
@@ -112,20 +136,41 @@
 (defn await-command
   "Called by Emacs to poll for the next command.
 
-  Blocks until a command is available or the channel is closed.
-  Returns a command map (without the response-promise) or nil if closed.
+  Blocks until a command is available, timeout expires, or channel closes.
+  Returns:
+    {:status :ok :command cmd}      - command received
+    {:status :timeout}              - timeout expired
+    {:status :closed}               - channel was closed
 
   Command map format:
     {:command-id <uuid>
      :command    :start-session|:query-transcript|:query-events|:close-session
-     :params     {...}}"
-  [dev-env]
-  (let [{:keys [command-chan]} @(:state dev-env)]
-    (when command-chan
-      (when-let [command (async/<!! command-chan)]
-        (swap! (:state dev-env) assoc-in [:pending-commands (:command-id command)]
-               (:response-promise command))
-        (dissoc command :response-promise)))))
+     :params     {...}}
+
+  Parameters:
+    dev-env    - The EmacsDevEnv instance
+    timeout-ms - Optional timeout in ms (default 30000)"
+  ([dev-env]
+   (await-command dev-env default-await-timeout-ms))
+  ([dev-env timeout-ms]
+   (let [{:keys [command-chan]} @(:state dev-env)]
+     (if-not command-chan
+       {:status :closed}
+       (let [timeout-chan (async/timeout timeout-ms)
+             [value port] (async/alts!! [command-chan timeout-chan])]
+         (cond
+           (= port timeout-chan)
+           {:status :timeout}
+
+           (nil? value)
+           {:status :closed}
+
+           :else
+           (do
+             (swap! (:state dev-env) assoc-in [:pending-commands (:command-id value)]
+                    (:response-promise value))
+             {:status :ok
+              :command (dissoc value :response-promise)})))))))
 
 (defn send-response
   "Called by Emacs to send a response for a command.

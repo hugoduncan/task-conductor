@@ -30,14 +30,16 @@
 
 (deftest await-command-test
   (testing "await-command"
-    (testing "returns command without response-promise"
+    (testing "returns {:status :ok :command cmd} on success"
       (let [dev-env (core/make-emacs-dev-env)
             ;; Simulate a protocol call in a separate thread
             result-future (future
                             (protocol/start-session dev-env "s1" {:dir "/tmp"}))
             ;; Give it time to put command on channel
             _ (Thread/sleep 50)
-            cmd (core/await-command dev-env)]
+            result (core/await-command dev-env)
+            cmd (:command result)]
+        (is (= :ok (:status result)))
         (is (uuid? (:command-id cmd)))
         (is (= :start-session (:command cmd)))
         (is (= {:session-id "s1" :opts {:dir "/tmp"}} (:params cmd)))
@@ -47,10 +49,16 @@
         (is (= {:handle :test} @result-future))
         (core/shutdown dev-env)))
 
-    (testing "returns nil when channel closed"
+    (testing "returns {:status :timeout} on timeout"
+      (let [dev-env (core/make-emacs-dev-env)
+            result (core/await-command dev-env 50)]
+        (is (= {:status :timeout} result))
+        (core/shutdown dev-env)))
+
+    (testing "returns {:status :closed} when channel closed"
       (let [dev-env (core/make-emacs-dev-env)]
         (core/shutdown dev-env)
-        (is (nil? (core/await-command dev-env)))))))
+        (is (= {:status :closed} (core/await-command dev-env)))))))
 
 (deftest send-response-test
   (testing "send-response"
@@ -59,7 +67,9 @@
             result-future (future
                             (protocol/query-transcript dev-env "s1"))
             _ (Thread/sleep 50)
-            cmd (core/await-command dev-env)]
+            result (core/await-command dev-env)
+            cmd (:command result)]
+        (is (= :ok (:status result)))
         (is (true? (core/send-response dev-env (:command-id cmd) "transcript")))
         (is (= "transcript" @result-future))
         (core/shutdown dev-env)))
@@ -113,7 +123,9 @@
             start-future (future
                            (protocol/start-session dev-env "s1" {}))
             _ (Thread/sleep 50)
-            start-cmd (core/await-command dev-env)]
+            start-result (core/await-command dev-env)
+            start-cmd (:command start-result)]
+        (is (= :ok (:status start-result)))
         (core/send-response dev-env (:command-id start-cmd) {:handle :test})
         @start-future
         ;; Session should be tracked
@@ -122,12 +134,35 @@
         (let [close-future (future
                              (protocol/close-session dev-env "s1"))
               _ (Thread/sleep 50)
-              close-cmd (core/await-command dev-env)]
+              close-result (core/await-command dev-env)
+              close-cmd (:command close-result)]
+          (is (= :ok (:status close-result)))
           (core/send-response dev-env (:command-id close-cmd) true)
           (is (true? @close-future))
           ;; Session should be removed
           (is (not (contains? (:sessions @(:state dev-env)) "s1"))))
         (core/shutdown dev-env)))))
+
+(deftest response-timeout-test
+  ;; Verify that protocol methods return timeout error when Emacs
+  ;; doesn't respond within the timeout period.
+  (testing "response timeout"
+    (testing "returns error map when response not received"
+      ;; Use with-redefs to use a short timeout for testing
+      (with-redefs [core/default-response-timeout-ms 100]
+        (let [dev-env (core/make-emacs-dev-env)
+              ;; Start a session but don't respond
+              result-future (future
+                              (protocol/start-session dev-env "s1" {}))
+              _ (Thread/sleep 50)
+              ;; Take the command but don't respond
+              await-result (core/await-command dev-env)]
+          (is (= :ok (:status await-result)))
+          ;; Wait for timeout
+          (let [result @result-future]
+            (is (= :timeout (:error result)))
+            (is (string? (:message result))))
+          (core/shutdown dev-env))))))
 
 (deftest command-queue-ordering-test
   (testing "command queue"
@@ -139,8 +174,12 @@
             f2 (future (protocol/query-events dev-env "s2"))
             _ (Thread/sleep 20)
             ;; Read them in order
-            cmd1 (core/await-command dev-env)
-            cmd2 (core/await-command dev-env)]
+            result1 (core/await-command dev-env)
+            result2 (core/await-command dev-env)
+            cmd1 (:command result1)
+            cmd2 (:command result2)]
+        (is (= :ok (:status result1)))
+        (is (= :ok (:status result2)))
         (is (= :query-transcript (:command cmd1)))
         (is (= "s1" (get-in cmd1 [:params :session-id])))
         (is (= :query-events (:command cmd2)))
