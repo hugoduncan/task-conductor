@@ -33,22 +33,27 @@
   "Send a command to Emacs and wait for response.
 
   Parameters:
+    state        - The dev-env state atom
     command-chan - The command channel to send on
     command-kw   - Keyword for the command (e.g., :start-session)
     params       - Map of parameters for the command
     timeout-ms   - Timeout for response in milliseconds
 
   Returns the response from Emacs, or {:error :timeout :message \"...\"} on timeout."
-  [command-chan command-kw params timeout-ms]
-  (let [response-promise (promise)
-        command {:command-id (UUID/randomUUID)
+  [state command-chan command-kw params timeout-ms]
+  (let [command-id (UUID/randomUUID)
+        response-promise (promise)
+        command {:command-id command-id
                  :command command-kw
                  :params params
                  :response-promise response-promise}]
     (async/>!! command-chan command)
     (let [result (deref response-promise timeout-ms response-timeout-sentinel)]
       (if (= result response-timeout-sentinel)
-        {:error :timeout :message (str "Response timeout waiting for " (name command-kw))}
+        (do
+          ;; Clean up pending command on timeout to prevent late response delivery
+          (swap! state update :pending-commands dissoc command-id)
+          {:error :timeout :message (str "Response timeout waiting for " (name command-kw))})
         result))))
 
 (defrecord EmacsDevEnv [state]
@@ -64,7 +69,7 @@
   (start-session [_ session-id opts]
     (let [{:keys [command-chan]} @state]
       (swap! state assoc-in [:sessions session-id] {:status :starting})
-      (send-command-and-wait command-chan :start-session
+      (send-command-and-wait state command-chan :start-session
                              {:session-id session-id :opts opts}
                              default-response-timeout-ms)))
 
@@ -76,19 +81,19 @@
 
   (query-transcript [_ session-id]
     (let [{:keys [command-chan]} @state]
-      (send-command-and-wait command-chan :query-transcript
+      (send-command-and-wait state command-chan :query-transcript
                              {:session-id session-id}
                              default-response-timeout-ms)))
 
   (query-events [_ session-id]
     (let [{:keys [command-chan]} @state]
-      (send-command-and-wait command-chan :query-events
+      (send-command-and-wait state command-chan :query-events
                              {:session-id session-id}
                              default-response-timeout-ms)))
 
   (close-session [_ session-id]
     (let [{:keys [command-chan]} @state
-          result (send-command-and-wait command-chan :close-session
+          result (send-command-and-wait state command-chan :close-session
                                         {:session-id session-id}
                                         default-response-timeout-ms)]
       (when (and result (not (:error result)))
@@ -337,7 +342,8 @@
   ([dev-env]
    (ping dev-env default-ping-timeout-ms))
   ([dev-env timeout-ms]
-   (let [{:keys [command-chan connected?]} @(:state dev-env)]
+   (let [state (:state dev-env)
+         {:keys [command-chan connected?]} @state]
      (cond
        (not connected?)
        {:status :error :message "Dev-env not connected"}
@@ -346,7 +352,7 @@
        {:status :error :message "Command channel closed"}
 
        :else
-       (let [result (send-command-and-wait command-chan :ping {} timeout-ms)]
+       (let [result (send-command-and-wait state command-chan :ping {} timeout-ms)]
          (cond
            (:error result)
            {:status :timeout}
