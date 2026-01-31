@@ -410,7 +410,7 @@ Handles disconnection gracefully by stopping the loop."
   "Start the command subscription poll loop."
   (unless task-conductor-dev-env--poll-timer
     (setq task-conductor-dev-env--poll-timer
-          (run-with-timer 0.1 0.1 #'task-conductor-dev-env--poll-loop))
+          (run-with-timer 1 1 #'task-conductor-dev-env--poll-loop))
     (message "task-conductor: Poll loop started")))
 
 (defun task-conductor-dev-env--stop-poll-loop ()
