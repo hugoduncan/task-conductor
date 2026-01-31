@@ -22,11 +22,51 @@
 
 (deftest register-emacs-dev-env-test
   (testing "register-emacs-dev-env"
-    (testing "marks dev-env as connected"
+    (testing "with dev-env arg marks it as connected"
       (let [dev-env (core/make-emacs-dev-env)]
         (is (true? (core/register-emacs-dev-env dev-env)))
         (is (core/connected? dev-env))
-        (core/shutdown dev-env)))))
+        (core/shutdown dev-env)))
+
+    (testing "with no args creates dev-env and returns id"
+      (let [dev-env-id (core/register-emacs-dev-env)]
+        (is (string? dev-env-id))
+        (is (re-matches #"[0-9a-f-]+" dev-env-id))
+        (let [dev-env (core/get-dev-env dev-env-id)]
+          (is (some? dev-env))
+          (is (core/connected? dev-env)))
+        (core/unregister-emacs-dev-env dev-env-id)))))
+
+(deftest unregister-emacs-dev-env-test
+  (testing "unregister-emacs-dev-env"
+    (testing "removes dev-env from registry"
+      (let [dev-env-id (core/register-emacs-dev-env)]
+        (is (some? (core/get-dev-env dev-env-id)))
+        (is (true? (core/unregister-emacs-dev-env dev-env-id)))
+        (is (nil? (core/get-dev-env dev-env-id)))))
+
+    (testing "returns false for unknown id"
+      (is (false? (core/unregister-emacs-dev-env "nonexistent"))))))
+
+(deftest id-based-functions-test
+  (testing "ID-based nREPL functions"
+    (testing "await-command-by-id returns error for unknown id"
+      (is (= {:status :error :message "Dev-env not found: unknown"}
+             (core/await-command-by-id "unknown"))))
+
+    (testing "send-response-by-id returns error for unknown id"
+      (let [result (core/send-response-by-id "unknown" (java.util.UUID/randomUUID) nil)]
+        (is (= :not-found (:error result)))))
+
+    (testing "send-hook-event-by-id returns error for unknown id"
+      (let [result (core/send-hook-event-by-id "unknown" :on-idle "s1" :idle)]
+        (is (= :not-found (:error result)))))
+
+    (testing "await-command-by-id works with valid id"
+      (let [dev-env-id (core/register-emacs-dev-env)
+            result (core/await-command-by-id dev-env-id 50)]
+        (is (= {:status :timeout} result))
+        (core/unregister-emacs-dev-env dev-env-id)))))
 
 (deftest await-command-test
   (testing "await-command"

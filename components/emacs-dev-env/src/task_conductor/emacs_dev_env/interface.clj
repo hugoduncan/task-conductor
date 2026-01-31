@@ -4,17 +4,21 @@
   This component provides a DevEnv implementation that delegates to Emacs
   via nREPL. Emacs polls for commands and sends responses back.
 
-  Typical usage:
-    ;; JVM side - create and use the dev-env
-    (def dev-env (make-emacs-dev-env))
+  Typical usage from Emacs (via nREPL eval):
+    ;; Register and get dev-env-id
+    (def dev-env-id (register-emacs-dev-env))
 
-    ;; Emacs side - register and start command loop
-    (register-emacs-dev-env dev-env)
+    ;; Command loop
     (loop []
-      (when-let [cmd (await-command dev-env)]
-        (let [result (handle-command cmd)]
-          (send-response dev-env (:command-id cmd) result))
-        (recur)))"
+      (let [result (await-command-by-id dev-env-id)]
+        (when (= :ok (:status result))
+          (let [cmd (:command result)
+                response (handle-command cmd)]
+            (send-response-by-id dev-env-id (:command-id cmd) response))
+          (recur))))
+
+    ;; Cleanup
+    (unregister-emacs-dev-env dev-env-id)"
   (:require
    [task-conductor.emacs-dev-env.core :as core]))
 
@@ -44,12 +48,32 @@
 ;; These are called by Emacs via nREPL eval
 
 (defn register-emacs-dev-env
-  "Called by Emacs to register itself with this dev-env.
+  "Called by Emacs to register itself as a dev-env.
 
-  Marks the dev-env as connected and ready to receive commands.
-  Returns true on success."
-  [dev-env]
-  (core/register-emacs-dev-env dev-env))
+  Arity:
+    ()        - Create new dev-env, register in global registry, return dev-env-id
+    (dev-env) - Mark existing dev-env as connected (for internal use)
+
+  Returns dev-env-id (string) when called with no args.
+  Returns true when called with dev-env instance."
+  ([]
+   (core/register-emacs-dev-env))
+  ([dev-env]
+   (core/register-emacs-dev-env dev-env)))
+
+(defn unregister-emacs-dev-env
+  "Called by Emacs to unregister and shutdown a dev-env.
+
+  Removes the dev-env from the registry and shuts it down.
+  Returns true if found and removed, false if not found."
+  [dev-env-id]
+  (core/unregister-emacs-dev-env dev-env-id))
+
+(defn get-dev-env
+  "Look up a dev-env by ID from the registry.
+  Returns the EmacsDevEnv instance or nil if not found."
+  [dev-env-id]
+  (core/get-dev-env dev-env-id))
 
 (defn await-command
   "Called by Emacs to poll for the next command.
@@ -88,3 +112,50 @@
   Returns true after invoking hooks."
   [dev-env hook-type session-id reason]
   (core/send-hook-event dev-env hook-type session-id reason))
+
+;;; ID-based nREPL functions
+;; These are the primary API for Emacs to interact with the dev-env.
+;; They take a dev-env-id string and look up the dev-env in the registry.
+
+(defn await-command-by-id
+  "Called by Emacs to poll for the next command using dev-env-id.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    timeout-ms - Optional timeout in ms (default 30000)
+
+  Returns:
+    {:status :ok :command cmd}        - command received
+    {:status :timeout}                - timeout expired
+    {:status :closed}                 - channel was closed
+    {:status :error :message \"...\"}   - dev-env not found"
+  ([dev-env-id]
+   (core/await-command-by-id dev-env-id))
+  ([dev-env-id timeout-ms]
+   (core/await-command-by-id dev-env-id timeout-ms)))
+
+(defn send-response-by-id
+  "Called by Emacs to send a response for a command using dev-env-id.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    command-id - UUID of the command being responded to
+    response   - The response value
+
+  Returns true if response was delivered, false if command not found,
+  or {:error ...} if dev-env not found."
+  [dev-env-id command-id response]
+  (core/send-response-by-id dev-env-id command-id response))
+
+(defn send-hook-event-by-id
+  "Called by Emacs to notify of session events using dev-env-id.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    hook-type  - :on-idle or :on-close
+    session-id - The session that triggered the event
+    reason     - Why the event occurred (:user-exit, :error, :timeout, :idle)
+
+  Returns true after invoking hooks, or {:error ...} if dev-env not found."
+  [dev-env-id hook-type session-id reason]
+  (core/send-hook-event-by-id dev-env-id hook-type session-id reason))

@@ -58,13 +58,59 @@ When nil, uses the current CIDER connection."
                  (integer :tag "Port number"))
   :group 'task-conductor-dev-env)
 
+;;; State
+
+(defvar task-conductor-dev-env--dev-env-id nil
+  "The dev-env-id returned from task-conductor registration.
+This is a UUID string used to identify this Emacs instance.")
+
+(defun task-conductor-dev-env--connected-p ()
+  "Return non-nil if connected to task-conductor as a dev-env."
+  (and task-conductor-dev-env--dev-env-id
+       (cider-connected-p)))
+
+;;; nREPL communication
+
+(defun task-conductor-dev-env--eval-sync (form)
+  "Evaluate Clojure FORM synchronously via nREPL.
+Returns the value on success, or signals an error on failure."
+  (unless (cider-connected-p)
+    (user-error "Not connected to CIDER. Run M-x cider-connect first"))
+  (let* ((result (cider-nrepl-sync-request:eval form))
+         (value (nrepl-dict-get result "value"))
+         (err (nrepl-dict-get result "err"))
+         (ex (nrepl-dict-get result "ex")))
+    (when (or err ex)
+      (error "nREPL eval error: %s" (or err ex)))
+    (when value
+      (read value))))
+
+;;; Connection management
+
 ;;;###autoload
 (defun task-conductor-dev-env-connect ()
   "Connect to task-conductor and register as a dev-env.
-This starts the command subscription loop that receives commands
-from the orchestrator and dispatches them to claude-code.el."
+Requires an active CIDER connection.  Stores the dev-env-id for
+subsequent operations."
   (interactive)
-  (message "task-conductor-dev-env: connect not yet implemented"))
+  (when (task-conductor-dev-env--connected-p)
+    (user-error "Already connected as dev-env %s" task-conductor-dev-env--dev-env-id))
+  (let ((dev-env-id (task-conductor-dev-env--eval-sync
+                     "(task-conductor.emacs-dev-env.interface/register-emacs-dev-env)")))
+    (setq task-conductor-dev-env--dev-env-id dev-env-id)
+    (message "Connected to task-conductor as dev-env: %s" dev-env-id)))
+
+(defun task-conductor-dev-env-disconnect ()
+  "Disconnect from task-conductor and unregister this dev-env."
+  (interactive)
+  (unless (task-conductor-dev-env--connected-p)
+    (user-error "Not connected to task-conductor"))
+  (let ((dev-env-id task-conductor-dev-env--dev-env-id))
+    (task-conductor-dev-env--eval-sync
+     (format "(task-conductor.emacs-dev-env.interface/unregister-emacs-dev-env %S)"
+             dev-env-id))
+    (setq task-conductor-dev-env--dev-env-id nil)
+    (message "Disconnected from task-conductor")))
 
 (provide 'task-conductor-dev-env)
 ;;; task-conductor-dev-env.el ends here

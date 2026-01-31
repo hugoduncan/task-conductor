@@ -9,6 +9,13 @@
   (:import
    [java.util UUID]))
 
+;;; Registry
+
+(defonce ^{:doc "Registry of dev-env-id -> EmacsDevEnv instances.
+  Allows Emacs to reference dev-envs by ID via nREPL."}
+  registry
+  (atom {}))
+
 (def ^:const default-await-timeout-ms
   "Default timeout for await-command in milliseconds."
   30000)
@@ -122,16 +129,47 @@
                               :sessions {}
                               :connected? false})))
 
+;;; Registry functions
+
+(defn get-dev-env
+  "Look up a dev-env by ID from the registry.
+  Returns nil if not found."
+  [dev-env-id]
+  (get @registry dev-env-id))
+
 ;;; nREPL-callable functions
 
 (defn register-emacs-dev-env
-  "Called by Emacs to register itself with this dev-env.
+  "Called by Emacs to register itself as a dev-env.
 
-  Marks the dev-env as connected and ready to receive commands.
-  Returns true on success."
-  [dev-env]
-  (swap! (:state dev-env) assoc :connected? true)
-  true)
+  Creates a new EmacsDevEnv, stores it in the registry, and marks it connected.
+  Returns the dev-env-id (UUID string) for use in subsequent calls.
+
+  Arity:
+    ()        - Create new dev-env, register, return ID (for Emacs)
+    (dev-env) - Mark existing dev-env as connected (for internal use)"
+  ([]
+   (let [dev-env (make-emacs-dev-env)
+         dev-env-id (str (UUID/randomUUID))]
+     (swap! (:state dev-env) assoc :connected? true)
+     (swap! registry assoc dev-env-id dev-env)
+     dev-env-id))
+  ([dev-env]
+   (swap! (:state dev-env) assoc :connected? true)
+   true))
+
+(defn unregister-emacs-dev-env
+  "Called by Emacs to unregister and shutdown a dev-env.
+
+  Removes the dev-env from the registry and shuts it down.
+  Returns true if found and removed, false if not found."
+  [dev-env-id]
+  (if-let [dev-env (get-dev-env dev-env-id)]
+    (do
+      (shutdown dev-env)
+      (swap! registry dissoc dev-env-id)
+      true)
+    false))
 
 (defn await-command
   "Called by Emacs to poll for the next command.
@@ -226,3 +264,56 @@
                  :reason reason}]
     (invoke-hook dev-env hook-type context)
     true))
+
+;;; ID-based nREPL functions
+;; These functions take a dev-env-id string and look up the dev-env in the registry.
+;; They are the primary API for Emacs to interact with the dev-env.
+
+(defn await-command-by-id
+  "Called by Emacs to poll for the next command using dev-env-id.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    timeout-ms - Optional timeout in ms (default 30000)
+
+  Returns:
+    {:status :ok :command cmd}      - command received
+    {:status :timeout}              - timeout expired
+    {:status :closed}               - channel was closed
+    {:status :error :message \"...\"}  - dev-env not found"
+  ([dev-env-id]
+   (await-command-by-id dev-env-id default-await-timeout-ms))
+  ([dev-env-id timeout-ms]
+   (if-let [dev-env (get-dev-env dev-env-id)]
+     (await-command dev-env timeout-ms)
+     {:status :error :message (str "Dev-env not found: " dev-env-id)})))
+
+(defn send-response-by-id
+  "Called by Emacs to send a response for a command using dev-env-id.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    command-id - UUID of the command being responded to
+    response   - The response value
+
+  Returns true if response was delivered, false if command not found,
+  or {:error ...} if dev-env not found."
+  [dev-env-id command-id response]
+  (if-let [dev-env (get-dev-env dev-env-id)]
+    (send-response dev-env command-id response)
+    {:error :not-found :message (str "Dev-env not found: " dev-env-id)}))
+
+(defn send-hook-event-by-id
+  "Called by Emacs to notify of session events using dev-env-id.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    hook-type  - :on-idle or :on-close
+    session-id - The session that triggered the event
+    reason     - Why the event occurred (:user-exit, :error, :timeout, :idle)
+
+  Returns true after invoking hooks, or {:error ...} if dev-env not found."
+  [dev-env-id hook-type session-id reason]
+  (if-let [dev-env (get-dev-env dev-env-id)]
+    (send-hook-event dev-env hook-type session-id reason)
+    {:error :not-found :message (str "Dev-env not found: " dev-env-id)}))
