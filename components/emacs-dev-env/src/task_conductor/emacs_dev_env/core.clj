@@ -98,7 +98,10 @@
                                         default-response-timeout-ms)]
       (when (and result (not (:error result)))
         (swap! state update :sessions dissoc session-id))
-      result)))
+      result))
+
+  (connected? [_]
+    (:connected? @state)))
 
 ;;; Lifecycle
 

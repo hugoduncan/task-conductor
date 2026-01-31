@@ -1,4 +1,4 @@
 {:paths ["src"]
- :deps {}
+ :deps {task-conductor/pathom-graph {:local/root "../../components/pathom-graph"}}
  :aliases
  {:test {:extra-paths ["test"]}}}
