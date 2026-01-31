@@ -19,13 +19,34 @@
 
 (deftest register-hook-test
   (testing "register-hook"
-    (testing "delegates to protocol/register-hook"
+    (testing "delegates to protocol/register-hook for :on-close"
       (let [dev-env (protocol/make-noop-dev-env)
             callback (fn [_] :test)
             result (interface/register-hook dev-env :on-close callback)]
         (is (uuid? result))
         (let [calls @(:calls dev-env)]
-          (is (= :register-hook (:op (first calls)))))))))
+          (is (= :register-hook (:op (first calls)))))))
+
+    (testing "delegates to protocol/register-hook for :on-idle"
+      (let [dev-env (protocol/make-noop-dev-env)
+            callback (fn [_] :test)
+            result (interface/register-hook dev-env :on-idle callback)]
+        (is (uuid? result))
+        (let [calls @(:calls dev-env)]
+          (is (= :register-hook (:op (first calls)))))))
+
+    (testing "throws on unsupported hook-type"
+      (let [dev-env (protocol/make-noop-dev-env)
+            callback (fn [_] :test)]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo
+             #"Unsupported hook-type: :on-unknown"
+             (interface/register-hook dev-env :on-unknown callback)))
+        (try
+          (interface/register-hook dev-env :on-unknown callback)
+          (catch clojure.lang.ExceptionInfo e
+            (is (= :on-unknown (:hook-type (ex-data e))))
+            (is (= #{:on-close :on-idle} (:valid-hook-types (ex-data e))))))))))
 
 (deftest query-transcript-test
   (testing "query-transcript"

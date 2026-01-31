@@ -6,6 +6,10 @@
   (:require
    [task-conductor.dev-env.protocol :as protocol]))
 
+(def ^:private valid-hook-types
+  "The set of supported hook types for register-hook."
+  #{:on-close :on-idle})
+
 (defn start-session
   "Resume a Claude session interactively in the dev environment.
 
@@ -30,8 +34,15 @@
                 :on-idle  - Session waiting for user input
     callback  - Function (fn [context]) called when event occurs
 
-  Returns a hook registration ID."
+  Returns a hook registration ID.
+
+  Throws ex-info if hook-type is not supported."
   [dev-env hook-type callback]
+  (when-not (contains? valid-hook-types hook-type)
+    (throw (ex-info (str "Unsupported hook-type: " hook-type
+                         ". Supported types are: " (pr-str valid-hook-types))
+                    {:hook-type hook-type
+                     :valid-hook-types valid-hook-types})))
   (protocol/register-hook dev-env hook-type callback))
 
 (defn query-transcript
