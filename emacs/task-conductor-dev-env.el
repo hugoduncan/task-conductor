@@ -323,6 +323,27 @@ stripped, limited to `task-conductor-dev-env-transcript-limit' bytes."
                              stripped)))
           `(:status :ok :transcript ,transcript))))))
 
+(defun task-conductor-dev-env--handle-close-session (params)
+  "Handle :close-session command with PARAMS.
+PARAMS should contain :session-id.  Kills the buffer (triggering :on-close
+hook if registered), removes from sessions table, and cleans up hooks."
+  (let ((session-id (plist-get params :session-id)))
+    (unless session-id
+      (cl-return-from task-conductor-dev-env--handle-close-session
+        '(:status :error :message "Missing :session-id")))
+    (let ((buffer (gethash session-id task-conductor-dev-env--sessions)))
+      (unless buffer
+        (cl-return-from task-conductor-dev-env--handle-close-session
+          `(:status :error :message ,(format "Session not found: %s" session-id))))
+      ;; Kill buffer if still alive (triggers :on-close hook)
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      ;; Remove from sessions table
+      (remhash session-id task-conductor-dev-env--sessions)
+      ;; Clean up hooks
+      (task-conductor-dev-env--cleanup-session-hooks session-id)
+      '(:status :ok))))
+
 ;;; Command dispatch
 
 (defun task-conductor-dev-env--dispatch-command (command)
@@ -343,7 +364,7 @@ Returns the response to send back to the orchestrator."
              (:query-events
               '(:error :not-implemented :message "query-events not yet implemented"))
              (:close-session
-              '(:error :not-implemented :message "close-session not yet implemented"))
+              (task-conductor-dev-env--handle-close-session params))
              (_
               `(:error :unknown-command :message ,(format "Unknown command: %s" command-type))))))
       (task-conductor-dev-env--send-response command-id response)
