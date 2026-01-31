@@ -4,6 +4,99 @@
 ;; These tests mock external dependencies (cider, claude-code) to verify
 ;; the package's internal logic without requiring a running nREPL server.
 
+;;; Manual Integration Testing
+;;
+;; This section describes how to manually test the integration between
+;; task-conductor-dev-env.el and the Clojure emacs-dev-env component
+;; with actual Emacs and claude-code.el.
+;;
+;; Prerequisites:
+;; - Emacs 28.1+ with cider and claude-code.el installed
+;; - Claude CLI installed and authenticated
+;; - JVM with task-conductor running
+;;
+;; Step 1: Start the task-conductor REPL with nREPL
+;;
+;;   cd /path/to/task-conductor
+;;   clj -M:dev:nrepl
+;;
+;; Step 2: In Emacs, connect to the nREPL server
+;;
+;;   M-x cider-connect RET localhost RET <port> RET
+;;
+;;   The port is typically written to .nrepl-port in the project directory.
+;;
+;; Step 3: Load the task-conductor-dev-env package
+;;
+;;   M-x load-file RET /path/to/emacs/task-conductor-dev-env.el RET
+;;
+;; Step 4: Connect to task-conductor as a dev-env
+;;
+;;   M-x task-conductor-dev-env-connect RET
+;;
+;;   You should see: "Connected to task-conductor as dev-env: <uuid>"
+;;   This registers Emacs with the orchestrator and starts the poll loop.
+;;
+;; Step 5: Verify registration from the REPL
+;;
+;;   In the Clojure REPL, run:
+;;     (require '[task-conductor.emacs-dev-env.interface :as ede])
+;;     (ede/list-dev-envs)
+;;     ;; => [{:dev-env-id "abc-123" :type :emacs :connected? true}]
+;;
+;;     (ede/list-healthy-dev-envs)
+;;     ;; => [{:dev-env-id "abc-123" :type :emacs :connected? true}]
+;;     ;; Emacs should respond to the ping command
+;;
+;; Step 6: Test start-session command
+;;
+;;   From the Clojure REPL:
+;;     (def dev-env (ede/select-dev-env))
+;;     (require '[task-conductor.dev-env.protocol :as proto])
+;;     (proto/start-session (:dev-env dev-env) "test-session-1" {})
+;;     ;; => {:status :ok :buffer-name "*claude: ..."}
+;;
+;;   A new claude-code buffer should appear in Emacs with Claude CLI running.
+;;
+;; Step 7: Test hook registration
+;;
+;;   From the Clojure REPL:
+;;     (def on-idle-callback (fn [ctx] (println "Idle event:" ctx)))
+;;     (proto/register-hook (:dev-env dev-env) :on-idle on-idle-callback)
+;;
+;;   When Claude goes idle (bell character detected), you should see
+;;   "Idle event: {...}" printed in the REPL after a 0.5s debounce.
+;;
+;; Step 8: Test query-transcript
+;;
+;;   From the Clojure REPL:
+;;     (proto/query-transcript (:dev-env dev-env) "test-session-1")
+;;     ;; => {:status :ok :transcript "...buffer content..."}
+;;
+;; Step 9: Test close-session
+;;
+;;   From the Clojure REPL:
+;;     (proto/close-session (:dev-env dev-env) "test-session-1")
+;;     ;; => {:status :ok}
+;;
+;;   The claude-code buffer should be killed in Emacs.
+;;
+;; Step 10: Disconnect
+;;
+;;   In Emacs:
+;;     M-x task-conductor-dev-env-disconnect RET
+;;
+;;   You should see: "Disconnected from task-conductor"
+;;
+;; Troubleshooting:
+;;
+;; - "Not connected to CIDER": Run M-x cider-connect first
+;; - "nREPL eval error": Check that emacs-dev-env component is on classpath
+;; - "command channel closed": The JVM may have restarted; reconnect
+;; - Poll loop errors appear in *Messages* buffer
+;; - Use (ede/ping-by-id "<id>") to test connectivity
+;; - Check @task-conductor.emacs-dev-env.core/registry for registered envs
+
 (require 'ert)
 (require 'cl-lib)
 (require 'task-conductor-dev-env)
