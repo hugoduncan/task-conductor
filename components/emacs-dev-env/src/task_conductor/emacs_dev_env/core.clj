@@ -52,10 +52,11 @@
 
 (defrecord EmacsDevEnv [state]
   ;; state is an atom containing:
-  ;;   :command-chan - core.async channel for command queue
-  ;;   :hooks        - map of hook-id -> {:type :callback}
-  ;;   :sessions     - map of session-id -> session-state
-  ;;   :connected?   - whether Emacs has registered
+  ;;   :command-chan     - core.async channel for command queue
+  ;;   :hooks            - map of hook-id -> {:type :callback}
+  ;;   :sessions         - map of session-id -> session-state
+  ;;   :pending-commands - map of command-id -> response promise
+  ;;   :connected?       - whether Emacs has registered
 
   protocol/DevEnv
 
@@ -105,6 +106,7 @@
    (atom {:command-chan (async/chan 32)
           :hooks {}
           :sessions {}
+          :pending-commands {}
           :connected? false})))
 
 (defn connected?
@@ -120,6 +122,7 @@
     (reset! (:state dev-env) {:command-chan nil
                               :hooks {}
                               :sessions {}
+                              :pending-commands {}
                               :connected? false})))
 
 ;;; Registry functions
