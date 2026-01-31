@@ -159,3 +159,82 @@
   Returns true after invoking hooks, or {:error ...} if dev-env not found."
   [dev-env-id hook-type session-id reason]
   (core/send-hook-event-by-id dev-env-id hook-type session-id reason))
+
+;;; Health Check
+
+(defn ping
+  "Send a ping command to verify Emacs is responsive.
+
+  Parameters:
+    dev-env    - The EmacsDevEnv instance
+    timeout-ms - Optional timeout in ms (default 5000)
+
+  Returns:
+    {:status :ok}       - Emacs responded
+    {:status :timeout}  - No response within timeout
+    {:status :error :message \"...\"}  - Error occurred"
+  ([dev-env]
+   (core/ping dev-env))
+  ([dev-env timeout-ms]
+   (core/ping dev-env timeout-ms)))
+
+(defn ping-by-id
+  "Send a ping command using dev-env-id.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    timeout-ms - Optional timeout in ms (default 5000)
+
+  Returns:
+    {:status :ok}       - Emacs responded
+    {:status :timeout}  - No response within timeout
+    {:status :error :message \"...\"}  - Error or dev-env not found"
+  ([dev-env-id]
+   (core/ping-by-id dev-env-id))
+  ([dev-env-id timeout-ms]
+   (core/ping-by-id dev-env-id timeout-ms)))
+
+;;; Dev-Env Selection
+
+(defn list-dev-envs
+  "List all registered dev-envs with their connection status.
+
+  Returns a vector of maps:
+    [{:dev-env-id \"...\"
+      :type :emacs
+      :connected? true/false}]"
+  []
+  (core/list-dev-envs))
+
+(defn list-healthy-dev-envs
+  "List all registered dev-envs that respond to ping.
+
+  Pings each connected dev-env and returns only those that respond.
+
+  Parameters:
+    timeout-ms - Optional ping timeout per dev-env (default 5000)
+
+  Returns a vector of maps:
+    [{:dev-env-id \"...\"
+      :type :emacs
+      :connected? true}]"
+  ([]
+   (core/list-healthy-dev-envs))
+  ([timeout-ms]
+   (core/list-healthy-dev-envs timeout-ms)))
+
+(defn select-dev-env
+  "Select the best available dev-env.
+
+  Currently only Emacs dev-envs exist. Returns the first healthy one,
+  or nil if none available.
+
+  Parameters:
+    timeout-ms - Optional ping timeout per dev-env (default 5000)
+
+  Returns:
+    {:dev-env-id \"...\" :type :emacs :dev-env <instance>} or nil"
+  ([]
+   (core/select-dev-env))
+  ([timeout-ms]
+   (core/select-dev-env timeout-ms)))

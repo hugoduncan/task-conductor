@@ -355,6 +355,8 @@ Returns the response to send back to the orchestrator."
         (params (plist-get command :params)))
     (let ((response
            (pcase command-type
+             (:ping
+              '(:status :ok))
              (:start-session
               (task-conductor-dev-env--handle-start-session params))
              (:register-hook

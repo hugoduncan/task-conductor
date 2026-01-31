@@ -317,3 +317,124 @@
   (if-let [dev-env (get-dev-env dev-env-id)]
     (send-hook-event dev-env hook-type session-id reason)
     {:error :not-found :message (str "Dev-env not found: " dev-env-id)}))
+
+;;; Health Check
+
+(def ^:const default-ping-timeout-ms
+  "Default timeout for ping in milliseconds (shorter than command timeout)."
+  5000)
+
+(defn ping
+  "Send a ping command to verify Emacs is responsive.
+
+  Parameters:
+    dev-env    - The EmacsDevEnv instance
+    timeout-ms - Optional timeout in ms (default 5000)
+
+  Returns:
+    {:status :ok}       - Emacs responded
+    {:status :timeout}  - No response within timeout
+    {:status :error :message \"...\"}  - Error occurred"
+  ([dev-env]
+   (ping dev-env default-ping-timeout-ms))
+  ([dev-env timeout-ms]
+   (let [{:keys [command-chan connected?]} @(:state dev-env)]
+     (cond
+       (not connected?)
+       {:status :error :message "Dev-env not connected"}
+
+       (not command-chan)
+       {:status :error :message "Command channel closed"}
+
+       :else
+       (let [response-promise (promise)
+             command {:command-id (UUID/randomUUID)
+                      :command :ping
+                      :params {}
+                      :response-promise response-promise}]
+         (async/>!! command-chan command)
+         (let [result (deref response-promise timeout-ms response-timeout-sentinel)]
+           (if (= result response-timeout-sentinel)
+             {:status :timeout}
+             (if (= :ok (:status result))
+               {:status :ok}
+               {:status :error :message (or (:message result) "Ping failed")}))))))))
+
+(defn ping-by-id
+  "Send a ping command using dev-env-id.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    timeout-ms - Optional timeout in ms (default 5000)
+
+  Returns:
+    {:status :ok}       - Emacs responded
+    {:status :timeout}  - No response within timeout
+    {:status :error :message \"...\"}  - Error or dev-env not found"
+  ([dev-env-id]
+   (ping-by-id dev-env-id default-ping-timeout-ms))
+  ([dev-env-id timeout-ms]
+   (if-let [dev-env (get-dev-env dev-env-id)]
+     (ping dev-env timeout-ms)
+     {:status :error :message (str "Dev-env not found: " dev-env-id)})))
+
+;;; Dev-Env Selection
+
+(defn list-dev-envs
+  "List all registered dev-envs with their connection status.
+
+  Returns a vector of maps:
+    [{:dev-env-id \"...\"
+      :type :emacs
+      :connected? true/false}]"
+  []
+  (vec
+   (for [[dev-env-id dev-env] @registry]
+     {:dev-env-id dev-env-id
+      :type :emacs
+      :connected? (connected? dev-env)})))
+
+(defn list-healthy-dev-envs
+  "List all registered dev-envs that respond to ping.
+
+  Pings each connected dev-env and returns only those that respond.
+  Uses a short timeout to avoid long waits.
+
+  Parameters:
+    timeout-ms - Optional ping timeout per dev-env (default 5000)
+
+  Returns a vector of maps:
+    [{:dev-env-id \"...\"
+      :type :emacs
+      :connected? true}]"
+  ([]
+   (list-healthy-dev-envs default-ping-timeout-ms))
+  ([timeout-ms]
+   (vec
+    (for [[dev-env-id dev-env] @registry
+          :when (connected? dev-env)
+          :let [ping-result (ping dev-env timeout-ms)]
+          :when (= :ok (:status ping-result))]
+      {:dev-env-id dev-env-id
+       :type :emacs
+       :connected? true}))))
+
+(defn select-dev-env
+  "Select the best available dev-env.
+
+  Currently only Emacs dev-envs exist. Returns the first healthy one,
+  or nil if none available.
+
+  Parameters:
+    timeout-ms - Optional ping timeout per dev-env (default 5000)
+
+  Returns:
+    {:dev-env-id \"...\" :type :emacs :dev-env <instance>} or nil"
+  ([]
+   (select-dev-env default-ping-timeout-ms))
+  ([timeout-ms]
+   (let [healthy (list-healthy-dev-envs timeout-ms)]
+     (when-let [{:keys [dev-env-id]} (first healthy)]
+       {:dev-env-id dev-env-id
+        :type :emacs
+        :dev-env (get-dev-env dev-env-id)}))))

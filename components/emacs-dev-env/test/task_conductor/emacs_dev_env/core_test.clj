@@ -230,3 +230,133 @@
         @f1
         @f2
         (core/shutdown dev-env)))))
+
+;;; Health Check Tests
+
+(deftest ping-test
+  ;; Verify ping sends a :ping command and interprets the response.
+  (testing "ping"
+    (testing "returns :error when not connected"
+      (let [dev-env (core/make-emacs-dev-env)]
+        (is (= {:status :error :message "Dev-env not connected"}
+               (core/ping dev-env)))
+        (core/shutdown dev-env)))
+
+    (testing "returns :error when channel closed"
+      ;; shutdown also sets connected? to false, so we get that error first
+      (let [dev-env (core/make-emacs-dev-env)]
+        (core/register-emacs-dev-env dev-env)
+        (core/shutdown dev-env)
+        (is (= {:status :error :message "Dev-env not connected"}
+               (core/ping dev-env)))))
+
+    (testing "returns :ok when Emacs responds"
+      (let [dev-env (core/make-emacs-dev-env)]
+        (core/register-emacs-dev-env dev-env)
+        ;; Simulate Emacs responding to ping in a thread
+        (let [ping-future (future (core/ping dev-env 1000))
+              _ (Thread/sleep 50)
+              result (core/await-command dev-env)
+              cmd (:command result)]
+          (is (= :ok (:status result)))
+          (is (= :ping (:command cmd)))
+          (core/send-response dev-env (:command-id cmd) {:status :ok})
+          (is (= {:status :ok} @ping-future)))
+        (core/shutdown dev-env)))
+
+    (testing "returns :timeout when no response"
+      (let [dev-env (core/make-emacs-dev-env)]
+        (core/register-emacs-dev-env dev-env)
+        ;; Don't respond to the ping
+        (is (= {:status :timeout} (core/ping dev-env 100)))
+        (core/shutdown dev-env)))))
+
+(deftest ping-by-id-test
+  (testing "ping-by-id"
+    (testing "returns error for unknown id"
+      (is (= {:status :error :message "Dev-env not found: unknown"}
+             (core/ping-by-id "unknown"))))
+
+    (testing "pings valid dev-env"
+      (let [dev-env-id (core/register-emacs-dev-env)]
+        ;; Respond in a thread
+        (let [ping-future (future (core/ping-by-id dev-env-id 1000))
+              _ (Thread/sleep 50)
+              result (core/await-command-by-id dev-env-id)
+              cmd (:command result)]
+          (is (= :ping (:command cmd)))
+          (core/send-response-by-id dev-env-id (:command-id cmd) {:status :ok})
+          (is (= {:status :ok} @ping-future)))
+        (core/unregister-emacs-dev-env dev-env-id)))))
+
+;;; Dev-Env Selection Tests
+
+(deftest list-dev-envs-test
+  ;; Verify listing of registered dev-envs with connection status.
+  (testing "list-dev-envs"
+    (testing "returns empty vector when no dev-envs registered"
+      (is (= [] (core/list-dev-envs))))
+
+    (testing "returns registered dev-envs with status"
+      (let [dev-env-id (core/register-emacs-dev-env)]
+        (is (= [{:dev-env-id dev-env-id
+                 :type :emacs
+                 :connected? true}]
+               (core/list-dev-envs)))
+        (core/unregister-emacs-dev-env dev-env-id)))))
+
+(deftest list-healthy-dev-envs-test
+  ;; Verify filtering of dev-envs by health check (ping).
+  (testing "list-healthy-dev-envs"
+    (testing "returns empty when no dev-envs respond to ping"
+      (let [dev-env-id (core/register-emacs-dev-env)]
+        ;; No responder, short timeout
+        (is (= [] (core/list-healthy-dev-envs 50)))
+        (core/unregister-emacs-dev-env dev-env-id)))
+
+    (testing "returns dev-envs that respond to ping"
+      (let [dev-env-id (core/register-emacs-dev-env)
+            ;; Start a responder thread
+            responder (future
+                        (loop []
+                          (let [result (core/await-command-by-id dev-env-id 100)]
+                            (when (= :ok (:status result))
+                              (let [cmd (:command result)]
+                                (when (= :ping (:command cmd))
+                                  (core/send-response-by-id dev-env-id (:command-id cmd)
+                                                            {:status :ok}))
+                                (recur))))))]
+        (Thread/sleep 50)
+        (let [healthy (core/list-healthy-dev-envs 1000)]
+          (is (= 1 (count healthy)))
+          (is (= dev-env-id (:dev-env-id (first healthy)))))
+        (core/unregister-emacs-dev-env dev-env-id)
+        ;; responder will exit on channel close
+        @responder))))
+
+(deftest select-dev-env-test
+  ;; Verify selection of best available dev-env.
+  (testing "select-dev-env"
+    (testing "returns nil when no healthy dev-envs"
+      (is (nil? (core/select-dev-env 50))))
+
+    (testing "returns first healthy dev-env"
+      (let [dev-env-id (core/register-emacs-dev-env)
+            ;; Start a responder
+            responder (future
+                        (loop []
+                          (let [result (core/await-command-by-id dev-env-id 100)]
+                            (when (= :ok (:status result))
+                              (let [cmd (:command result)]
+                                (when (= :ping (:command cmd))
+                                  (core/send-response-by-id dev-env-id (:command-id cmd)
+                                                            {:status :ok}))
+                                (recur))))))]
+        (Thread/sleep 50)
+        (let [selected (core/select-dev-env 1000)]
+          (is (some? selected))
+          (is (= dev-env-id (:dev-env-id selected)))
+          (is (= :emacs (:type selected)))
+          (is (some? (:dev-env selected))))
+        (core/unregister-emacs-dev-env dev-env-id)
+        @responder))))
