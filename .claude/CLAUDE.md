@@ -156,6 +156,15 @@ Polylith-style monorepo:
 Top-level deps.edn references bases/components via `:local/root`. Each
 base/component has its own deps.edn.
 
+## Error Handling
+
+Return error maps rather than throwing exceptions. Errors are data that statecharts can route, not control flow interruptions.
+
+```clojure
+{:error :error-keyword
+ :message "Human readable message"}
+```
+
 ## Git Hooks
 
 Pre-commit hook runs cljfmt and clj-kondo on staged files. Configure with:
