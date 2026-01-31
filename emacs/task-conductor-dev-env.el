@@ -75,6 +75,14 @@ Stores the timer object for cleanup on disconnect.")
   "Hash table mapping session-id strings to buffer objects.
 Used to track active claude-code sessions started by the orchestrator.")
 
+(defvar task-conductor-dev-env--session-hooks
+  (make-hash-table :test 'equal)
+  "Hash table mapping session-id to hook data plist.
+Each entry is (:on-idle (:hook-id X :timer Y) :on-close (:hook-id X :fn Y)).")
+
+(defconst task-conductor-dev-env--idle-debounce-seconds 0.5
+  "Debounce interval for idle detection in seconds.")
+
 (defun task-conductor-dev-env--connected-p ()
   "Return non-nil if connected to task-conductor as a dev-env."
   (and task-conductor-dev-env--dev-env-id
@@ -107,6 +115,126 @@ Returns t if delivered, nil if command not found."
            command-id
            response)))
 
+(defun task-conductor-dev-env--send-hook-event (hook-type session-id reason)
+  "Send hook event to the orchestrator.
+HOOK-TYPE is :on-idle or :on-close.
+SESSION-ID identifies the session.
+REASON is :idle, :user-exit, etc."
+  (condition-case err
+      (task-conductor-dev-env--eval-sync
+       (format "(task-conductor.emacs-dev-env.interface/send-hook-event-by-id %S %s %S %s)"
+               task-conductor-dev-env--dev-env-id
+               hook-type
+               session-id
+               reason))
+    (error
+     (message "task-conductor: Failed to send hook event: %s" (error-message-string err)))))
+
+;;; Hook registration
+
+(defun task-conductor-dev-env--find-session-for-buffer (buffer)
+  "Find the session-id for BUFFER in our sessions table.
+Returns session-id string or nil if not found."
+  (let ((result nil))
+    (maphash (lambda (session-id session-buffer)
+               (when (eq session-buffer buffer)
+                 (setq result session-id)))
+             task-conductor-dev-env--sessions)
+    result))
+
+(defun task-conductor-dev-env--on-idle-debounced (session-id)
+  "Called when bell detected in SESSION-ID's buffer, with debounce.
+Cancels any pending timer and starts a new one."
+  (let* ((hooks (gethash session-id task-conductor-dev-env--session-hooks))
+         (idle-data (plist-get hooks :on-idle))
+         (existing-timer (plist-get idle-data :timer)))
+    (when existing-timer
+      (cancel-timer existing-timer))
+    (let ((new-timer
+           (run-with-timer
+            task-conductor-dev-env--idle-debounce-seconds nil
+            (lambda ()
+              (task-conductor-dev-env--send-hook-event :on-idle session-id :idle)))))
+      (puthash session-id
+               (plist-put hooks :on-idle
+                          (plist-put idle-data :timer new-timer))
+               task-conductor-dev-env--session-hooks))))
+
+(defun task-conductor-dev-env--bell-advice (orig-fun &rest args)
+  "Advice around `claude-code--notify' to detect idle in our sessions.
+ORIG-FUN is the original function, ARGS are its arguments."
+  (let ((session-id (task-conductor-dev-env--find-session-for-buffer (current-buffer))))
+    (when session-id
+      (let* ((hooks (gethash session-id task-conductor-dev-env--session-hooks))
+             (idle-data (plist-get hooks :on-idle)))
+        (when idle-data
+          (task-conductor-dev-env--on-idle-debounced session-id)))))
+  (apply orig-fun args))
+
+(defun task-conductor-dev-env--setup-on-idle-hook (session-id hook-id)
+  "Set up :on-idle hook for SESSION-ID with HOOK-ID.
+Returns t on success."
+  (let ((hooks (or (gethash session-id task-conductor-dev-env--session-hooks)
+                   (puthash session-id '() task-conductor-dev-env--session-hooks))))
+    ;; Cancel any existing timer for this session
+    (let* ((existing (plist-get hooks :on-idle))
+           (existing-timer (plist-get existing :timer)))
+      (when existing-timer
+        (cancel-timer existing-timer)))
+    ;; Store hook data
+    (puthash session-id
+             (plist-put hooks :on-idle (list :hook-id hook-id :timer nil))
+             task-conductor-dev-env--session-hooks)
+    ;; Add advice to claude-code--notify if not already added
+    (unless (advice-member-p #'task-conductor-dev-env--bell-advice 'claude-code--notify)
+      (advice-add 'claude-code--notify :around #'task-conductor-dev-env--bell-advice))
+    t))
+
+(defun task-conductor-dev-env--on-close-handler ()
+  "Handler for kill-buffer-hook to detect session close."
+  (let ((session-id (task-conductor-dev-env--find-session-for-buffer (current-buffer))))
+    (when session-id
+      (let* ((hooks (gethash session-id task-conductor-dev-env--session-hooks))
+             (close-data (plist-get hooks :on-close)))
+        (when close-data
+          (task-conductor-dev-env--send-hook-event :on-close session-id :user-exit))))))
+
+(defun task-conductor-dev-env--setup-on-close-hook (session-id hook-id)
+  "Set up :on-close hook for SESSION-ID with HOOK-ID.
+Returns t on success."
+  (let ((buffer (gethash session-id task-conductor-dev-env--sessions)))
+    (unless (and buffer (buffer-live-p buffer))
+      (cl-return-from task-conductor-dev-env--setup-on-close-hook nil))
+    (let ((hooks (or (gethash session-id task-conductor-dev-env--session-hooks)
+                     (puthash session-id '() task-conductor-dev-env--session-hooks))))
+      ;; Store hook data
+      (puthash session-id
+               (plist-put hooks :on-close (list :hook-id hook-id))
+               task-conductor-dev-env--session-hooks)
+      ;; Add kill-buffer-hook in the session buffer
+      (with-current-buffer buffer
+        (add-hook 'kill-buffer-hook #'task-conductor-dev-env--on-close-handler nil t))
+      t)))
+
+(defun task-conductor-dev-env--cleanup-session-hooks (session-id)
+  "Clean up all hooks for SESSION-ID."
+  (let ((hooks (gethash session-id task-conductor-dev-env--session-hooks)))
+    (when hooks
+      ;; Cancel idle timer if any
+      (let ((idle-timer (plist-get (plist-get hooks :on-idle) :timer)))
+        (when idle-timer
+          (cancel-timer idle-timer)))
+      ;; Remove from hash table
+      (remhash session-id task-conductor-dev-env--session-hooks)
+      ;; Remove bell advice if no more sessions with on-idle hooks
+      (let ((has-idle-hooks nil))
+        (maphash (lambda (_k v)
+                   (when (plist-get v :on-idle)
+                     (setq has-idle-hooks t)))
+                 task-conductor-dev-env--session-hooks)
+        (unless has-idle-hooks
+          (advice-remove 'claude-code--notify #'task-conductor-dev-env--bell-advice))))))
+
 ;;; Command handlers
 
 (defun task-conductor-dev-env--handle-start-session (params)
@@ -131,6 +259,36 @@ with --resume <session-id>.  Returns response plist."
            `(:status :error :message ,(format "Failed to start session: %s"
                                               (error-message-string err)))))))))
 
+(defun task-conductor-dev-env--handle-register-hook (params)
+  "Handle :register-hook command with PARAMS.
+PARAMS should contain :session-id and :hook-type (:on-idle or :on-close).
+Returns response plist with :status and :hook-id on success."
+  (let ((session-id (plist-get params :session-id))
+        (hook-type (plist-get params :hook-type)))
+    (unless session-id
+      (cl-return-from task-conductor-dev-env--handle-register-hook
+        '(:status :error :message "Missing :session-id")))
+    (unless hook-type
+      (cl-return-from task-conductor-dev-env--handle-register-hook
+        '(:status :error :message "Missing :hook-type")))
+    (unless (memq hook-type '(:on-idle :on-close))
+      (cl-return-from task-conductor-dev-env--handle-register-hook
+        `(:status :error :message ,(format "Invalid hook-type: %s" hook-type))))
+    (let ((buffer (gethash session-id task-conductor-dev-env--sessions)))
+      (unless (and buffer (buffer-live-p buffer))
+        (cl-return-from task-conductor-dev-env--handle-register-hook
+          `(:status :error :message ,(format "Session not found or buffer dead: %s" session-id))))
+      (let ((hook-id (format "%s-%s-%s" session-id hook-type (random 100000))))
+        (pcase hook-type
+          (:on-idle
+           (if (task-conductor-dev-env--setup-on-idle-hook session-id hook-id)
+               `(:status :ok :hook-id ,hook-id)
+             '(:status :error :message "Failed to setup on-idle hook")))
+          (:on-close
+           (if (task-conductor-dev-env--setup-on-close-hook session-id hook-id)
+               `(:status :ok :hook-id ,hook-id)
+             '(:status :error :message "Failed to setup on-close hook"))))))))
+
 ;;; Command dispatch
 
 (defun task-conductor-dev-env--dispatch-command (command)
@@ -145,7 +303,7 @@ Returns the response to send back to the orchestrator."
              (:start-session
               (task-conductor-dev-env--handle-start-session params))
              (:register-hook
-              '(:error :not-implemented :message "register-hook not yet implemented"))
+              (task-conductor-dev-env--handle-register-hook params))
              (:query-transcript
               '(:error :not-implemented :message "query-transcript not yet implemented"))
              (:query-events
