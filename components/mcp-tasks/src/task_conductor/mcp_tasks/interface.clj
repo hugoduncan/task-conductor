@@ -30,6 +30,63 @@
   ```"
   (:require [task-conductor.mcp-tasks.core :as core]))
 
+;;; Nullable API
+
+(defn make-nullable
+  "Create a Nullable mcp-tasks for testing.
+
+  Returns a nullable instance that can be used with `with-nullable-mcp-tasks`.
+  When bound, all mcp-tasks operations return configured responses without
+  spawning CLI subprocesses.
+
+  Config options:
+    :responses - Vector of response maps to return in order. Each call to
+                 any mcp-tasks operation consumes the next response.
+                 Supports task state progression by providing different
+                 responses for successive calls.
+
+  Access tracked operations via `operations` function.
+
+  Example:
+    (let [nullable (make-nullable
+                     {:responses [{:tasks [{:id 1 :title \"Task\"}]
+                                   :metadata {:total 1}}
+                                  {:task {:id 1 :status \"closed\"}}]})]
+      (with-nullable-mcp-tasks nullable
+        (list-tasks {:project-dir \"/p\"})   ; returns first response
+        (complete-task {:project-dir \"/p\" :task-id 1}))  ; returns second
+      (operations nullable))
+    ;=> {:queries [{:opts {...} :timestamp #inst \"...\"}]
+    ;    :mutations [{:opts {...} :timestamp #inst \"...\"}]}"
+  ([]
+   (make-nullable {}))
+  ([config]
+   {:responses (atom (vec (:responses config)))
+    :operations (atom {:queries [] :mutations []})}))
+
+(defmacro with-nullable-mcp-tasks
+  "Execute body with nullable mcp-tasks bound.
+
+  All mcp-tasks operations within body use the nullable instead of
+  spawning real CLI processes. Operations are tracked and can be
+  retrieved via `operations`."
+  [nullable & body]
+  `(binding [core/*nullable* ~nullable]
+     ~@body))
+
+(defn operations
+  "Get operations recorded by a nullable.
+
+  Returns map with:
+    :queries   - Vector of query operations (list-tasks, show-task, why-blocked)
+    :mutations - Vector of mutation operations (add, complete, update, delete, reopen)
+
+  Each operation is a map with:
+    :opts      - The options map passed to the operation
+    :timestamp - java.time.Instant when operation occurred"
+  [nullable]
+  @(:operations nullable))
+
 (def run-cli
   "Execute mcp-tasks CLI with args in the given project directory.
   Always uses --format edn for native Clojure parsing.

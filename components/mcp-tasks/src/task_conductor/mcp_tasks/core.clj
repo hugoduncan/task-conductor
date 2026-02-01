@@ -4,6 +4,37 @@
   (:require [babashka.process :as p]
             [cheshire.core :as json]))
 
+;;; Nullable Support
+
+(def ^:dynamic *nullable*
+  "When bound to a nullable config map, run-cli returns configured
+  responses instead of spawning real processes. Used for testing."
+  nil)
+
+(defn- classify-operation
+  "Classify CLI args as :query or :mutation based on command."
+  [args]
+  (let [cmd (first args)]
+    (if (#{"list" "show" "why-blocked"} cmd)
+      :query
+      :mutation)))
+
+(defn- nullable-run-cli
+  "Handle run-cli when *nullable* is bound.
+  Records the operation and returns the next configured response."
+  [nullable opts]
+  (let [{:keys [operations responses]} nullable
+        op-type (classify-operation (:args opts))
+        response (let [resps @responses]
+                   (if (seq resps)
+                     (do (swap! responses rest)
+                         (first resps))
+                     {:error :no-more-responses
+                      :message "Nullable has no more configured responses"}))]
+    (swap! operations update (if (= op-type :query) :queries :mutations)
+           conj {:opts opts :timestamp (java.time.Instant/now)})
+    response))
+
 (defn- safe-read-string
   "Read a string as Clojure data with *read-eval* disabled.
   Uses clojure.core/read-string to support ::keyword syntax which
@@ -22,23 +53,27 @@
 
   Options:
     :project-dir - Working directory for .mcp-tasks.edn discovery (required)
-    :args        - Vector of command arguments"
-  [{:keys [project-dir args]}]
-  (try
-    (let [full-args (into ["mcp-tasks"] (conj (vec args) "--format" "edn"))
-          result (apply p/shell {:dir project-dir
-                                 :out :string
-                                 :err :string
-                                 :continue true}
-                        full-args)]
-      (if (zero? (:exit result))
-        (safe-read-string (:out result))
-        {:error :cli-error
-         :exit-code (:exit result)
-         :stderr (:err result)}))
-    (catch java.io.IOException e
-      {:error :io-error
-       :message (.getMessage e)})))
+    :args        - Vector of command arguments
+
+  When *nullable* is bound, returns configured response without subprocess."
+  [{:keys [project-dir args] :as opts}]
+  (if *nullable*
+    (nullable-run-cli *nullable* opts)
+    (try
+      (let [full-args (into ["mcp-tasks"] (conj (vec args) "--format" "edn"))
+            result (apply p/shell {:dir project-dir
+                                   :out :string
+                                   :err :string
+                                   :continue true}
+                          full-args)]
+        (if (zero? (:exit result))
+          (safe-read-string (:out result))
+          {:error :cli-error
+           :exit-code (:exit result)
+           :stderr (:err result)}))
+      (catch java.io.IOException e
+        {:error :io-error
+         :message (.getMessage e)}))))
 
 (defn build-list-args
   "Construct CLI arguments for the list command from options map.
