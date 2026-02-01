@@ -65,8 +65,21 @@
 ;;; The mcp-tasks resolvers add :task/ namespace via prefix-keys.
 
 (defn make-task-response
-  "Create mcp-tasks show-task response with sensible defaults.
-  Returns {:task {...} :metadata {...}} format."
+  "Build a show-task CLI response map with sensible defaults.
+
+  The mcp-tasks CLI returns unnamespaced keys; resolvers add :task/ prefix.
+  Use this to configure task state for test scenarios.
+
+  Options (in `overrides`):
+    :id          - task ID (integer)
+    :type        - :task or :story
+    :status      - :open, :closed, :in-progress, etc.
+    :meta        - map with :refined, etc. (nil if unrefined)
+    :pr-num      - PR number if task has open PR (nil otherwise)
+    :code-reviewed - timestamp if reviewed (nil otherwise)
+    Any other task fields the mcp-tasks CLI returns.
+
+  Returns {:task {...} :metadata {...}} matching CLI output format."
   ([] (make-task-response {}))
   ([overrides]
    {:task (merge {:type :task
@@ -78,8 +91,15 @@
     :metadata {}}))
 
 (defn make-blocking-response
-  "Create mcp-tasks why-blocked response.
-  Returns {:blocked-by [] :blocking-reason nil} format."
+  "Build a why-blocked CLI response map.
+
+  Use to simulate blocking relationships between tasks.
+
+  Options (in `overrides`):
+    :blocked-by      - vector of blocking task IDs
+    :blocking-reason - human-readable explanation (nil if unblocked)
+
+  Returns {:blocked-by [...] :blocking-reason ...} matching CLI output format."
   ([] (make-blocking-response {}))
   ([overrides]
    (merge {:blocked-by []
@@ -87,25 +107,50 @@
           overrides)))
 
 (defn make-children-response
-  "Create mcp-tasks list-tasks response for children.
-  Returns {:tasks [...] :metadata {...}} format."
+  "Build a list-tasks CLI response for story children.
+
+  Each child map defaults to {:status :open}, merged with provided values.
+  Use to simulate stories with various child task configurations.
+
+  Args:
+    children - vector of child task maps (each will be merged with defaults)
+
+  Returns {:tasks [...] :metadata {:total N}} matching CLI output format."
   ([] (make-children-response []))
   ([children]
    {:tasks (mapv (fn [c] (merge {:status :open} c)) children)
     :metadata {:total (count children)}}))
 
 (defn task-responses
-  "Create command-keyed responses for a single task fetch.
-  Pathom may call both show and why-blocked resolvers.
-  Returns map keyed by command for mcp-tasks Nullable."
+  "Build command-keyed responses for a task in mcp-tasks Nullable.
+
+  Pathom queries task data via multiple resolvers (show-task, why-blocked).
+  This bundles them into the command-keyed format expected by the Nullable.
+
+  Use for simple task scenarios. For stories, use `story-responses`.
+
+  Args:
+    task-overrides - map passed to `make-task-response`
+
+  Returns {:show [...] :why-blocked [...]} for mcp-tasks Nullable :responses."
   ([] (task-responses {}))
   ([task-overrides]
    {:show [(make-task-response task-overrides)]
     :why-blocked [(make-blocking-response)]}))
 
 (defn merge-responses
-  "Merge multiple command-keyed response maps.
-  Concatenates response vectors for each command."
+  "Combine multiple command-keyed response maps for sequential queries.
+
+  The mcp-tasks Nullable consumes responses in order. When a test triggers
+  multiple queries (e.g., initial fetch then re-derive after skill), merge
+  their responses so each query gets the correct data.
+
+  Example:
+    (merge-responses
+      (task-responses)              ; initial unrefined state
+      (task-responses {:meta {...}})) ; refined state after skill
+
+  Returns merged map with concatenated response vectors per command."
   [& response-maps]
   (apply merge-with into response-maps))
 
@@ -263,8 +308,16 @@
 ;;; Story Tests
 
 (defn story-responses
-  "Create command-keyed responses for a story fetch.
-  Returns map keyed by command for mcp-tasks Nullable."
+  "Build command-keyed responses for a story with children.
+
+  Stories require additional :list response for child task queries.
+  Use to test story-specific states (:has-tasks, :awaiting-review, etc.).
+
+  Args:
+    story-overrides - map passed to `make-task-response` (type forced to :story)
+    children        - vector of child task maps for `make-children-response`
+
+  Returns {:show [...] :why-blocked [...] :list [...]} for mcp-tasks Nullable."
   [story-overrides children]
   {:show [(make-task-response (merge {:type :story} story-overrides))]
    :why-blocked [(make-blocking-response)]
