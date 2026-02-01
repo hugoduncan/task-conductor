@@ -95,7 +95,10 @@
 ;; Uses the current project directory which has a .mcp-tasks.edn file.
 
 (def project-dir
-  "/Users/duncan/projects/hugoduncan/task-conductor/330-create-story-component-wrapping")
+  "Project directory for integration tests.
+   Uses the current working directory, which should be the project root
+   containing .mcp-tasks.edn when tests are run."
+  (System/getProperty "user.dir"))
 
 (deftest list-tasks-integration-test
   (testing "list-tasks"
