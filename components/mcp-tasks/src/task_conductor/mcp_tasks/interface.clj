@@ -40,29 +40,49 @@
   spawning CLI subprocesses.
 
   Config options:
-    :responses - Vector of response maps to return in order. Each call to
-                 any mcp-tasks operation consumes the next response.
-                 Supports task state progression by providing different
-                 responses for successive calls.
+    :responses - Response configuration in one of two formats:
+
+      1. Simple queue (vector): Responses consumed in order regardless of command
+         [{:task {...}} {:tasks [...]}]
+
+      2. Command-keyed map: Responses consumed per-command type
+         {:show [{:task {...}}]
+          :list [{:tasks [...]}]
+          :why-blocked [{:blocked-by [] :blocking-reason nil}]}
+
+      Command keys: :show, :list, :why-blocked, :add, :complete, :update,
+                    :delete, :reopen
+
+    :debug? - When true, prints each request and response to stdout
 
   Access tracked operations via `operations` function.
 
-  Example:
+  Example (simple queue):
     (let [nullable (make-nullable
                      {:responses [{:tasks [{:id 1 :title \"Task\"}]
                                    :metadata {:total 1}}
                                   {:task {:id 1 :status \"closed\"}}]})]
       (with-nullable-mcp-tasks nullable
-        (list-tasks {:project-dir \"/p\"})   ; returns first response
-        (complete-task {:project-dir \"/p\" :task-id 1}))  ; returns second
+        (list-tasks {:project-dir \"/p\"})
+        (complete-task {:project-dir \"/p\" :task-id 1}))
       (operations nullable))
-    ;=> {:queries [{:opts {...} :timestamp #inst \"...\"}]
-    ;    :mutations [{:opts {...} :timestamp #inst \"...\"}]}"
+
+  Example (command-keyed - recommended for integration tests):
+    (let [nullable (make-nullable
+                     {:responses {:show [{:task {:id 1 :type :task}}]
+                                  :why-blocked [{:blocked-by []}]}
+                      :debug? true})]
+      (with-nullable-mcp-tasks nullable
+        ;; Pathom may call both show and why-blocked resolvers
+        (graph/query {:task/id 1} [:task/type :task/status])))"
   ([]
    (make-nullable {}))
   ([config]
-   {:responses (atom (vec (:responses config)))
-    :operations (atom {:queries [] :mutations []})}))
+   {:responses (atom (if (map? (:responses config))
+                       (:responses config)
+                       (vec (:responses config))))
+    :operations (atom {:queries [] :mutations []})
+    :debug? (:debug? config false)}))
 
 (defmacro with-nullable-mcp-tasks
   "Execute body with nullable mcp-tasks bound.

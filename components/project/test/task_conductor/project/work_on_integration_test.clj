@@ -3,7 +3,7 @@
 
   These tests exercise the statechart lifecycle without subprocess execution:
   - Uses claude-cli Nullable for skill invocations (no real CLI processes)
-  - Uses nullable task fetcher for task data (no EQL resolver calls)
+  - Uses mcp-tasks Nullable for task data (no mcp-tasks CLI subprocesses)
   - Uses NoOpDevEnv for dev-env escalation
   - Asserts on statechart states via current-state, not interaction counts
 
@@ -18,6 +18,8 @@
    [task-conductor.dev-env.protocol :as dev-env-protocol]
    [task-conductor.dev-env.registry :as dev-env-registry]
    [task-conductor.dev-env.resolvers :as dev-env-resolvers]
+   [task-conductor.mcp-tasks.interface :as mcp-tasks]
+   [task-conductor.mcp-tasks.resolvers :as mcp-tasks-resolvers]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
    [task-conductor.project.resolvers :as resolvers]
@@ -42,9 +44,10 @@
      (resolvers/reset-skill-threads!)
      ;; Register statecharts
      (work-on/register-statecharts!)
-     ;; Register resolvers (project resolvers include work-on! mutation)
+     ;; Register resolvers
      (engine-resolvers/register-resolvers!)
      (dev-env-resolvers/register-resolvers!)
+     (mcp-tasks-resolvers/register-resolvers!)
      (resolvers/register-resolvers!)
      (try
        ~@body
@@ -58,38 +61,65 @@
          (engine-resolvers/reset-dev-env-hooks!)))))
 
 ;;; Test Data Builders
-;;; Uses namespaced keys (:task/...) as returned by EQL resolvers.
+;;; Builds responses in mcp-tasks CLI format (unnamespaced keys).
+;;; The mcp-tasks resolvers add :task/ namespace via prefix-keys.
 
-(defn make-task
-  "Create task data with sensible defaults.
-  Uses namespaced keys as returned by EQL resolvers."
-  ([] (make-task {}))
+(defn make-task-response
+  "Create mcp-tasks show-task response with sensible defaults.
+  Returns {:task {...} :metadata {...}} format."
+  ([] (make-task-response {}))
   ([overrides]
-   (merge {:task/type :task
-           :task/status :open
-           :task/meta nil
-           :task/pr-num nil
-           :task/code-reviewed nil}
+   {:task (merge {:type :task
+                  :status :open
+                  :meta nil
+                  :pr-num nil
+                  :code-reviewed nil}
+                 overrides)
+    :metadata {}}))
+
+(defn make-blocking-response
+  "Create mcp-tasks why-blocked response.
+  Returns {:blocked-by [] :blocking-reason nil} format."
+  ([] (make-blocking-response {}))
+  ([overrides]
+   (merge {:blocked-by []
+           :blocking-reason nil}
           overrides)))
 
-(defn make-child
-  "Create child task data with defaults."
-  ([] (make-child {}))
-  ([overrides]
-   (merge {:task/status :open} overrides)))
+(defn make-children-response
+  "Create mcp-tasks list-tasks response for children.
+  Returns {:tasks [...] :metadata {...}} format."
+  ([] (make-children-response []))
+  ([children]
+   {:tasks (mapv (fn [c] (merge {:status :open} c)) children)
+    :metadata {:total (count children)}}))
+
+(defn task-responses
+  "Create command-keyed responses for a single task fetch.
+  Pathom may call both show and why-blocked resolvers.
+  Returns map keyed by command for mcp-tasks Nullable."
+  ([] (task-responses {}))
+  ([task-overrides]
+   {:show [(make-task-response task-overrides)]
+    :why-blocked [(make-blocking-response)]}))
+
+(defn merge-responses
+  "Merge multiple command-keyed response maps.
+  Concatenates response vectors for each command."
+  [& response-maps]
+  (apply merge-with into response-maps))
 
 ;;; Session Startup Tests
 
 (deftest session-startup-test
   ;; Verify work-on! correctly starts a statechart session and derives
-  ;; initial state. Uses nullable task fetcher for task data.
+  ;; initial state. Uses mcp-tasks Nullable for task data.
   (testing "session startup"
     (testing "starts session for unrefined task"
       (with-integration-state
-        (let [fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task))
-                        :children-fn (fn [_ _] [])})]
-          (resolvers/with-nullable-task-fetcher fetcher
+        (let [nullable (mcp-tasks/make-nullable
+                        {:responses (task-responses)})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -106,10 +136,9 @@
 
     (testing "starts session for refined task"
       (with-integration-state
-        (let [fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task {:task/meta {:refined "true"}}))
-                        :children-fn (fn [_ _] [])})]
-          (resolvers/with-nullable-task-fetcher fetcher
+        (let [nullable (mcp-tasks/make-nullable
+                        {:responses (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -120,11 +149,10 @@
 
     (testing "starts session for task with PR"
       (with-integration-state
-        (let [fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task {:task/meta {:refined "true"}
-                                                       :task/pr-num 42}))
-                        :children-fn (fn [_ _] [])})]
-          (resolvers/with-nullable-task-fetcher fetcher
+        (let [nullable (mcp-tasks/make-nullable
+                        {:responses (task-responses {:meta {:refined "true"}
+                                                     :pr-num 42})})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -142,13 +170,14 @@
     (testing "invokes skill when entering :unrefined state"
       (with-integration-state
         (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
-              fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task))
-                        :children-fn (fn [_ _] [])})
+              ;; Responses: initial work-on! (show+blocking), re-derive after skill (show+blocking)
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (merge-responses (task-responses)
+                                                         (task-responses {:meta {:refined "true"}}))})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
 
-          (resolvers/with-nullable-task-fetcher fetcher
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -177,13 +206,12 @@
       (with-integration-state
         (let [;; Configure cli to return error
               cli-nullable (claude-cli/make-nullable {:error :timeout})
-              fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task))
-                        :children-fn (fn [_ _] [])})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses)})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
 
-          (resolvers/with-nullable-task-fetcher fetcher
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -209,13 +237,12 @@
     (testing "error from :refined state goes to :escalated"
       (with-integration-state
         (let [cli-nullable (claude-cli/make-nullable {:error :interrupted})
-              fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task {:task/meta {:refined "true"}}))
-                        :children-fn (fn [_ _] [])})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses {:meta {:refined "true"}})})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
 
-          (resolvers/with-nullable-task-fetcher fetcher
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -235,17 +262,25 @@
 
 ;;; Story Tests
 
+(defn story-responses
+  "Create command-keyed responses for a story fetch.
+  Returns map keyed by command for mcp-tasks Nullable."
+  [story-overrides children]
+  {:show [(make-task-response (merge {:type :story} story-overrides))]
+   :why-blocked [(make-blocking-response)]
+   :list [(make-children-response children)]})
+
 (deftest story-session-test
   ;; Verify work-on! handles stories correctly with children.
   (testing "story session"
     (testing "derives :has-tasks for story with incomplete children"
       (with-integration-state
-        (let [fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task {:task/type :story
-                                                       :task/meta {:refined "true"}}))
-                        :children-fn (fn [_ _] [(make-child)
-                                                (make-child {:task/status :closed})])})]
-          (resolvers/with-nullable-task-fetcher fetcher
+        (let [mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (story-responses
+                                         {:meta {:refined "true"}}
+                                         [{:status :open}
+                                          {:status :closed}])})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -256,12 +291,12 @@
 
     (testing "derives :awaiting-review for story with all children complete"
       (with-integration-state
-        (let [fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task {:task/type :story
-                                                       :task/meta {:refined "true"}}))
-                        :children-fn (fn [_ _] [(make-child {:task/status :closed})
-                                                (make-child {:task/status :closed})])})]
-          (resolvers/with-nullable-task-fetcher fetcher
+        (let [mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (story-responses
+                                         {:meta {:refined "true"}}
+                                         [{:status :closed}
+                                          {:status :closed}])})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -277,10 +312,9 @@
   (testing "state transitions"
     (testing "task can transition directly to :complete from :idle"
       (with-integration-state
-        (let [fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task))
-                        :children-fn (fn [_ _] [])})]
-          (resolvers/with-nullable-task-fetcher fetcher
+        (let [mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses)})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -296,11 +330,11 @@
 
     (testing "story transitions through :has-tasks loop"
       (with-integration-state
-        (let [fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task {:task/type :story
-                                                       :task/meta {:refined "true"}}))
-                        :children-fn (fn [_ _] [(make-child)])})]
-          (resolvers/with-nullable-task-fetcher fetcher
+        (let [mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (story-responses
+                                         {:meta {:refined "true"}}
+                                         [{:status :open}])})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -326,11 +360,12 @@
     (testing "tracks claude-cli invocations during skill execution"
       (with-integration-state
         (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
-              fetcher (resolvers/make-nullable-task-fetcher
-                       {:task-fn (fn [_ _] (make-task))
-                        :children-fn (fn [_ _] [])})]
+              ;; Responses: initial work-on! (show+blocking), re-derive after skill (show+blocking)
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (merge-responses (task-responses)
+                                                         (task-responses {:meta {:refined "true"}}))})]
 
-          (resolvers/with-nullable-task-fetcher fetcher
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/my/project"

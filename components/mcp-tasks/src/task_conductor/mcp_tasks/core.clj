@@ -19,20 +19,53 @@
       :query
       :mutation)))
 
+(defn- get-command
+  "Extract CLI command from args."
+  [args]
+  (keyword (first args)))
+
 (defn- nullable-run-cli
   "Handle run-cli when *nullable* is bound.
-  Records the operation and returns the next configured response."
+  Records the operation and returns configured response.
+
+  Supports two response formats:
+  1. Simple queue: {:responses [r1 r2 ...]} - responses consumed in order
+  2. Command-keyed: {:responses {:show [r1] :list [r2] :why-blocked [r3]}}
+     - responses consumed per-command"
   [nullable opts]
-  (let [{:keys [operations responses]} nullable
+  (let [{:keys [operations responses debug?]} nullable
         op-type (classify-operation (:args opts))
-        response (let [resps @responses]
-                   (if (seq resps)
-                     (do (swap! responses rest)
-                         (first resps))
-                     {:error :no-more-responses
-                      :message "Nullable has no more configured responses"}))]
+        cmd (get-command (:args opts))
+        response
+        (let [resps @responses]
+          (cond
+            ;; Command-keyed responses (map with keyword keys)
+            (and (map? resps) (keyword? (first (keys resps))))
+            (let [cmd-queue (get resps cmd)]
+              (if (seq cmd-queue)
+                (do (swap! responses update cmd rest)
+                    (first cmd-queue))
+                {:error :no-more-responses
+                 :message (str "Nullable has no more responses for command: " cmd)
+                 :command cmd
+                 :available-commands (keys resps)}))
+
+            ;; Simple queue (vector)
+            (sequential? resps)
+            (if (seq resps)
+              (do (swap! responses rest)
+                  (first resps))
+              {:error :no-more-responses
+               :message "Nullable has no more configured responses"})
+
+            ;; Invalid format
+            :else
+            {:error :invalid-nullable-config
+             :message "Nullable :responses must be a vector or command-keyed map"}))]
+    (when debug?
+      (println "[mcp-tasks-nullable]" cmd (:args opts) "->" response))
     (swap! operations update (if (= op-type :query) :queries :mutations)
-           conj {:opts opts :timestamp (java.time.Instant/now)})
+           conj {:opts opts :timestamp (java.time.Instant/now) :response response})
     response))
 
 (defn- safe-read-string

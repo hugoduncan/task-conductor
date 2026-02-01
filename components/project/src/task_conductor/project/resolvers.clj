@@ -59,89 +59,28 @@
   {::pco/output [:project/result]}
   {:project/result (registry/unregister! path)})
 
-;;; Nullable Task Fetcher Support
-
-(def ^:dynamic *task-fetcher*
-  "When bound to a nullable config, fetch-task and fetch-children use
-  configured responses instead of making EQL queries. Used for testing."
-  nil)
-
-(defn make-nullable-task-fetcher
-  "Create a Nullable task fetcher for testing.
-
-  Returns a nullable instance that can be used with `with-nullable-task-fetcher`.
-  When bound, fetch-task and fetch-children return configured responses.
-
-  Config options:
-    :task-fn     - (fn [project-dir task-id]) -> task map
-    :children-fn - (fn [project-dir parent-id]) -> vector of child maps
-
-  Access tracked calls via `task-fetcher-calls` function.
-
-  Example:
-    (let [nullable (make-nullable-task-fetcher
-                     {:task-fn (fn [_ _] {:task/type :task :task/status :open})
-                      :children-fn (fn [_ _] [])})]
-      (with-nullable-task-fetcher nullable
-        (work-on! ...))
-      (task-fetcher-calls nullable))"
-  [config]
-  {:config config
-   :calls (atom {:fetch-task [] :fetch-children []})})
-
-(defn task-fetcher-calls
-  "Get calls recorded by a nullable task fetcher.
-
-  Returns map with:
-    :fetch-task     - Vector of {:project-dir dir :task-id id :timestamp inst}
-    :fetch-children - Vector of {:project-dir dir :parent-id id :timestamp inst}"
-  [nullable]
-  @(:calls nullable))
-
-(defmacro with-nullable-task-fetcher
-  "Execute body with nullable task fetcher bound.
-
-  All calls to fetch-task and fetch-children within body use the nullable
-  instead of making EQL queries. Calls are tracked and can be retrieved
-  via `task-fetcher-calls`."
-  [nullable & body]
-  `(binding [*task-fetcher* ~nullable]
-     ~@body))
-
 ;;; Work-on Mutation
 
 (defn- fetch-task
   "Fetch task data via EQL query.
-   Returns task map with :task/type, :task/status, etc. or :task/error.
-   When *task-fetcher* is bound, uses configured response instead."
+   Returns task map with :task/type, :task/status, etc.
+   On error, the result may contain :task/error from the resolver."
   [project-dir task-id]
-  (if *task-fetcher*
-    (let [{:keys [config calls]} *task-fetcher*
-          {:keys [task-fn]} config]
-      (swap! calls update :fetch-task conj
-             {:project-dir project-dir :task-id task-id
-              :timestamp (java.time.Instant/now)})
-      (task-fn project-dir task-id))
-    (graph/query {:task/id task-id :task/project-dir project-dir}
-                 [:task/type :task/status :task/meta :task/pr-num
-                  :task/code-reviewed :task/error])))
+  ;; Note: Don't request :task/error explicitly - it causes Pathom to try
+  ;; multiple resolvers that declare (pco/? :task/error) as optional output.
+  ;; The resolver will include :task/error in results if there's an error.
+  (graph/query {:task/id task-id :task/project-dir project-dir}
+               [:task/type :task/status :task/meta :task/pr-num
+                :task/code-reviewed]))
 
 (defn- fetch-children
   "Fetch children for a story via EQL query.
-   Returns vector of child task maps.
-   When *task-fetcher* is bound, uses configured response instead."
+   Returns vector of child task maps."
   [project-dir parent-id]
-  (if *task-fetcher*
-    (let [{:keys [config calls]} *task-fetcher*
-          {:keys [children-fn]} config]
-      (swap! calls update :fetch-children conj
-             {:project-dir project-dir :parent-id parent-id
-              :timestamp (java.time.Instant/now)})
-      (children-fn project-dir parent-id))
-    (let [result (graph/query {:task/project-dir project-dir
-                               :task/filters {:parent-id parent-id}}
-                              [:task/all])]
-      (:task/all result))))
+  (let [result (graph/query {:task/project-dir project-dir
+                             :task/filters {:parent-id parent-id}}
+                            [:task/all])]
+    (:task/all result)))
 
 (defn- story?
   "Check if task is a story type.
