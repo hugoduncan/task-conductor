@@ -36,7 +36,8 @@
    ::pco/output [:task/title :task/description :task/status :task/category
                  :task/type :task/parent-id :task/relations :task/meta
                  :task/design :task/shared-context :task/blocking-task-ids
-                 :task/is-blocked :task/error]}
+                 :task/is-blocked :task/pr-num :task/code-reviewed
+                 (pco/? :task/error)]}
   (let [result (interface/show-task {:project-dir project-dir :task-id id})]
     (if (:error result)
       {:task/error result}
@@ -48,7 +49,7 @@
    :status, :category, :type, :parent-id, :blocked, :limit, :title-pattern"
   [{:task/keys [project-dir filters]}]
   {::pco/input [:task/project-dir (pco/? :task/filters)]
-   ::pco/output [:task/all :task/metadata :task/error]}
+   ::pco/output [:task/all :task/metadata (pco/? :task/error)]}
   (let [opts (merge {:project-dir project-dir} filters)
         result (interface/list-tasks opts)]
     (if (:error result)
@@ -60,7 +61,7 @@
   "Get blocking information for a task. Requires :task/id and :task/project-dir."
   [{:task/keys [id project-dir]}]
   {::pco/input [:task/id :task/project-dir]
-   ::pco/output [:task/blocked-by :task/blocking-reason :task/error]}
+   ::pco/output [:task/blocked-by :task/blocking-reason (pco/? :task/error)]}
   (let [result (interface/why-blocked {:project-dir project-dir :task-id id})]
     (if (:error result)
       {:task/error result}
