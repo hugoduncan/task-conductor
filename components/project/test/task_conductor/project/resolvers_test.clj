@@ -9,6 +9,8 @@
    [task-conductor.dev-env.protocol :as dev-env-protocol]
    [task-conductor.dev-env.registry :as dev-env-registry]
    [task-conductor.dev-env.resolvers :as dev-env-resolvers]
+   [task-conductor.mcp-tasks.interface :as mcp-tasks]
+   [task-conductor.mcp-tasks.resolvers :as mcp-tasks-resolvers]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
    [task-conductor.project.resolvers :as resolvers]
@@ -179,24 +181,52 @@
             (is (nil? deleted))))))))
 
 ;;; Work-on Test Helpers
+;;; Builds responses in mcp-tasks CLI format (unnamespaced keys).
+;;; The mcp-tasks resolvers add :task/ namespace via prefix-keys.
 
-(defn make-task
-  "Create task data with sensible defaults.
-   Accepts overrides for :type, :status, :meta, :pr-num, :code-reviewed, :error."
-  ([] (make-task {}))
+(defn make-task-response
+  "Build a show-task CLI response map with sensible defaults.
+   Returns {:task {...} :metadata {...}} matching CLI output format."
+  ([] (make-task-response {}))
   ([overrides]
-   (merge {:task/type :task
-           :task/status :open
-           :task/meta nil
-           :task/pr-num nil
-           :task/code-reviewed nil}
+   {:task (merge {:type :task
+                  :status :open
+                  :meta nil
+                  :pr-num nil
+                  :code-reviewed nil}
+                 overrides)
+    :metadata {}}))
+
+(defn make-blocking-response
+  "Build a why-blocked CLI response map."
+  ([] (make-blocking-response {}))
+  ([overrides]
+   (merge {:blocked-by []
+           :blocking-reason nil}
           overrides)))
 
-(defn make-child
-  "Create child task data with defaults."
-  ([] (make-child {}))
-  ([overrides]
-   (merge {:task/status :open} overrides)))
+(defn make-children-response
+  "Build a list-tasks CLI response for story children."
+  ([] (make-children-response []))
+  ([children]
+   {:tasks (mapv (fn [c] (merge {:status :open} c)) children)
+    :metadata {:total (count children)}}))
+
+(defn task-responses
+  "Build command-keyed responses for a task in mcp-tasks Nullable.
+   Returns {:show [...] :why-blocked [...]} for mcp-tasks Nullable :responses."
+  ([] (task-responses {}))
+  ([task-overrides]
+   {:show [(make-task-response task-overrides)]
+    :why-blocked [(make-blocking-response)]}))
+
+(defn story-responses
+  "Build command-keyed responses for a story with children.
+   Returns {:show [...] :why-blocked [...] :list [...]}."
+  [story-overrides children]
+  {:show [(make-task-response (merge {:type :story} story-overrides))]
+   :why-blocked [(make-blocking-response)]
+   :list [(make-children-response children)]})
 
 (defmacro with-work-on-state
   "Execute body with clean state for work-on! tests.
@@ -215,6 +245,7 @@
      ;; Register all resolvers
      (engine-resolvers/register-resolvers!)
      (dev-env-resolvers/register-resolvers!)
+     (mcp-tasks-resolvers/register-resolvers!)
      (resolvers/register-resolvers!)
      (try
        ~@body
@@ -228,15 +259,6 @@
          (dev-env-registry/clear!)
          (engine-resolvers/reset-dev-env-hooks!)))))
 
-(defmacro with-mock-fetchers
-  "Execute body with mocked fetch-task and fetch-children.
-   task-fn: (fn [dir id] task-map)
-   children-fn: (fn [dir parent-id] [child-maps])"
-  [task-fn children-fn & body]
-  `(with-redefs [resolvers/fetch-task ~task-fn
-                 resolvers/fetch-children ~children-fn]
-     ~@body))
-
 ;;; Work-on Mutation Tests
 
 (deftest work-on-test
@@ -245,119 +267,126 @@
   (testing "work-on!"
     (testing "starts statechart session for a task"
       (with-work-on-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
-          (fn [_dir _id] [])
-          (let [result (graph/query [`(resolvers/work-on!
-                                       {:task/project-dir "/test"
-                                        :task/id 123})])
-                work-on-result (get result `resolvers/work-on!)]
-            (is (string? (:work-on/session-id work-on-result)))
-            (is (= :refined (:work-on/initial-state work-on-result)))
-            (is (nil? (:work-on/error work-on-result)))))))
+        (let [nullable (mcp-tasks/make-nullable
+                        {:responses (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 123})])
+                    work-on-result (get result `resolvers/work-on!)]
+                (is (string? (:work-on/session-id work-on-result)))
+                (is (= :refined (:work-on/initial-state work-on-result)))
+                (is (nil? (:work-on/error work-on-result)))))))))
 
     (testing "uses task-statechart for non-story types"
       (with-work-on-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/type :bug}))
-          (fn [_dir _id] [])
-          (let [result (graph/query [`(resolvers/work-on!
-                                       {:task/project-dir "/test"
-                                        :task/id 456})])
-                work-on-result (get result `resolvers/work-on!)
-                session-id (:work-on/session-id work-on-result)]
-            (is (= :unrefined (:work-on/initial-state work-on-result)))
-            ;; Verify session is using task-statechart (starts in :idle)
-            (is (contains? (sc/current-state session-id) :idle))))))
+        (let [nullable (mcp-tasks/make-nullable
+                        {:responses (task-responses {:type :bug})})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 456})])
+                    work-on-result (get result `resolvers/work-on!)
+                    session-id (:work-on/session-id work-on-result)]
+                (is (= :unrefined (:work-on/initial-state work-on-result)))
+                ;; Verify session is using task-statechart (starts in :idle)
+                (is (contains? (sc/current-state session-id) :idle))))))))
 
     (testing "starts statechart session for a story"
       (with-work-on-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/type :story
-                                     :task/meta {:refined "true"}}))
-          (fn [_dir _id] [(make-child) (make-child {:task/status :closed})])
-          (let [result (graph/query [`(resolvers/work-on!
-                                       {:task/project-dir "/test"
-                                        :task/id 789})])
-                work-on-result (get result `resolvers/work-on!)]
-            (is (string? (:work-on/session-id work-on-result)))
-            ;; Has incomplete children, so state is :has-tasks
-            (is (= :has-tasks (:work-on/initial-state work-on-result)))))))
+        (let [nullable (mcp-tasks/make-nullable
+                        {:responses (story-responses
+                                     {:meta {:refined "true"}}
+                                     [{:status :open} {:status :closed}])})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 789})])
+                    work-on-result (get result `resolvers/work-on!)]
+                (is (string? (:work-on/session-id work-on-result)))
+                ;; Has incomplete children, so state is :has-tasks
+                (is (= :has-tasks (:work-on/initial-state work-on-result)))))))))
 
     (testing "derives :awaiting-review for story with all children complete"
       (with-work-on-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/type :story
-                                     :task/meta {:refined "true"}}))
-          (fn [_dir _id] [(make-child {:task/status :closed})
-                          (make-child {:task/status :closed})])
-          (let [result (graph/query [`(resolvers/work-on!
-                                       {:task/project-dir "/test"
-                                        :task/id 999})])
-                work-on-result (get result `resolvers/work-on!)]
-            (is (= :awaiting-review (:work-on/initial-state work-on-result)))))))
+        (let [nullable (mcp-tasks/make-nullable
+                        {:responses (story-responses
+                                     {:meta {:refined "true"}}
+                                     [{:status :closed} {:status :closed}])})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 999})])
+                    work-on-result (get result `resolvers/work-on!)]
+                (is (= :awaiting-review (:work-on/initial-state work-on-result)))))))))
 
     (testing "returns error when task not found"
       (with-work-on-state
-        (with-mock-fetchers
-          (fn [_dir _id] {:task/error {:error :not-found :message "Not found"}})
-          (fn [_dir _id] [])
-          (let [result (graph/query [`(resolvers/work-on!
-                                       {:task/project-dir "/test"
-                                        :task/id 404})])
-                work-on-result (get result `resolvers/work-on!)]
-            (is (= :not-found (:error (:work-on/error work-on-result))))
-            (is (nil? (:work-on/session-id work-on-result)))))))
+        (let [nullable (mcp-tasks/make-nullable
+                        {:responses {:show [{:error :not-found
+                                             :message "Not found"}]}})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 404})])
+                    work-on-result (get result `resolvers/work-on!)]
+                (is (= :not-found (:error (:work-on/error work-on-result))))
+                (is (nil? (:work-on/session-id work-on-result)))))))))
 
     (testing "registers dev-env hook when dev-env available"
       (with-work-on-state
         (let [dev-env (dev-env-protocol/make-noop-dev-env)
-              _dev-env-id (dev-env-registry/register! dev-env :test)]
-          (with-mock-fetchers
-            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
-            (fn [_dir _id] [])
-            (let [result (graph/query [`(resolvers/work-on!
-                                         {:task/project-dir "/test"
-                                          :task/id 123})])
-                  work-on-result (get result `resolvers/work-on!)
-                  session-id (:work-on/session-id work-on-result)]
-              (is (string? session-id))
-              ;; Verify hook was registered by checking the dev-env's hooks atom
-              (is (= 1 (count @(:hooks dev-env)))))))))
+              _dev-env-id (dev-env-registry/register! dev-env :test)
+              nullable (mcp-tasks/make-nullable
+                        {:responses (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 123})])
+                    work-on-result (get result `resolvers/work-on!)
+                    session-id (:work-on/session-id work-on-result)]
+                (is (string? session-id))
+                ;; Verify hook was registered by checking the dev-env's hooks atom
+                (is (= 1 (count @(:hooks dev-env))))))))))
 
     (testing "stores session data including task context"
       (with-work-on-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/type :story
-                                     :task/meta {:refined "true"}}))
-          (fn [_dir _id] [(make-child)])
-          (let [result (graph/query [`(resolvers/work-on!
-                                       {:task/project-dir "/my/project"
-                                        :task/id 555})])
-                work-on-result (get result `resolvers/work-on!)
-                session-id (:work-on/session-id work-on-result)
-                data (sc/get-data session-id)]
-            (is (= "/my/project" (:project-dir data)))
-            (is (= 555 (:task-id data)))
-            (is (= :story (:task-type data)))
-            (is (= session-id (:session-id data)))))))))
+        (let [nullable (mcp-tasks/make-nullable
+                        {:responses (story-responses
+                                     {:meta {:refined "true"}}
+                                     [{:status :open}])})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/my/project"
+                                            :task/id 555})])
+                    work-on-result (get result `resolvers/work-on!)
+                    session-id (:work-on/session-id work-on-result)
+                    data (sc/get-data session-id)]
+                (is (= "/my/project" (:project-dir data)))
+                (is (= 555 (:task-id data)))
+                (is (= :story (:task-type data)))
+                (is (= session-id (:session-id data)))))))))))
 
 ;;; Invoke Skill Tests
 
 (deftest invoke-skill-test
   ;; Verify invoke-skill! starts claude-cli and returns immediately.
-  ;; Uses virtual thread to wait for completion.
+  ;; Uses claude-cli Nullable to track invocations.
   (testing "invoke-skill!"
     (testing "invokes claude-cli with skill prompt"
       (with-work-on-state
-        (let [invoked-opts (atom nil)
-              mock-promise (promise)]
-          (with-mock-fetchers
-            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
-            (fn [_dir _id] [])
-            (with-redefs [claude-cli/invoke (fn [opts]
-                                              (reset! invoked-opts opts)
-                                              {:result-promise mock-promise})]
+        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
               ;; Start a work-on session to get valid session-id with data
               (let [work-result (graph/query [`(resolvers/work-on!
                                                 {:task/project-dir "/test/dir"
@@ -369,57 +398,47 @@
                                             :engine/session-id ~session-id})])
                     invoke-result (get result `resolvers/invoke-skill!)]
                 (is (= :started (:invoke-skill/status invoke-result)))
-                (is (= "/mcp-tasks:refine-task" (:prompt @invoked-opts)))
-                (is (= "/test/dir" (:dir @invoked-opts)))
-                ;; Deliver the promise to clean up virtual thread
-                (deliver mock-promise {:exit-code 0 :events []})))))))
+                ;; Wait for skill thread to complete
+                (resolvers/await-skill-threads!)
+                ;; Verify invocation was tracked
+                (let [invs (claude-cli/invocations cli-nullable)]
+                  (is (= 1 (count invs)))
+                  (is (= "/mcp-tasks:refine-task" (:prompt (:opts (first invs)))))
+                  (is (= "/test/dir" (:dir (:opts (first invs))))))))))))
 
-    (testing "sends error event on skill failure"
+    (testing "transitions to :escalated on skill error"
       (with-work-on-state
-        (let [mock-promise (promise)
-              events-sent (atom [])]
-          (with-mock-fetchers
-            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
-            (fn [_dir _id] [])
-            (with-redefs [claude-cli/invoke (fn [_opts]
-                                              {:result-promise mock-promise})
-                          sc/send! (fn [sid event]
-                                     (swap! events-sent conj {:session-id sid :event event})
-                                     #{:escalated})]
+        (let [cli-nullable (claude-cli/make-nullable {:error :timeout})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses {:meta {:refined "true"}})})
+              dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
               (let [work-result (graph/query [`(resolvers/work-on!
                                                 {:task/project-dir "/test"
                                                  :task/id 100})])
                     session-id (:work-on/session-id (get work-result `resolvers/work-on!))
-                    _ (graph/query [`(resolvers/invoke-skill!
-                                      {:skill "mcp-tasks:refine-task"
-                                       :engine/session-id ~session-id})])]
-                ;; Deliver error result
-                (deliver mock-promise {:error :timeout})
-                ;; Wait for skill thread to process
+                    ;; Trigger skill via state event
+                    _ (sc/send! session-id :refined)]
+                ;; Wait for skill thread to process error
                 (resolvers/await-skill-threads!)
-                (is (= 1 (count @events-sent)))
-                (is (= :error (:event (first @events-sent))))))))))))
+                ;; Verify transitioned to :escalated state
+                (is (contains? (sc/current-state session-id) :escalated))))))))))
 
 ;;; Concurrent Skill Invocation Tests
 
 (deftest concurrent-skill-invocation-test
   ;; Verify multiple concurrent skill invocations are handled correctly.
-  ;; Tests thread safety and proper state management.
+  ;; Tests thread safety via claude-cli Nullable invocation tracking.
   (testing "concurrent skill invocations"
     (testing "handles multiple skills invoked in parallel"
       (with-work-on-state
-        (let [invoke-count (atom 0)
-              promises (atom [])
-              invoked-skills (atom [])]
-          (with-mock-fetchers
-            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
-            (fn [_dir _id] [])
-            (with-redefs [claude-cli/invoke (fn [opts]
-                                              (swap! invoke-count inc)
-                                              (swap! invoked-skills conj (:prompt opts))
-                                              (let [p (promise)]
-                                                (swap! promises conj p)
-                                                {:result-promise p}))]
+        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
               ;; Start a work-on session
               (let [work-result (graph/query [`(resolvers/work-on!
                                                 {:task/project-dir "/test"
@@ -430,23 +449,25 @@
                   (graph/query [`(resolvers/invoke-skill!
                                   {:skill ~(str "skill-" i)
                                    :engine/session-id ~session-id})]))
+                ;; Wait for skill threads
+                (resolvers/await-skill-threads!)
                 ;; All three should have been invoked
-                (is (= 3 @invoke-count))
-                (is (= #{"/skill-0" "/skill-1" "/skill-2"} (set @invoked-skills)))
-                ;; Clean up virtual threads
-                (doseq [p @promises]
-                  (deliver p {:exit-code 0 :events []}))))))))
+                (let [invs (claude-cli/invocations cli-nullable)]
+                  (is (= 3 (count invs)))
+                  (is (= #{"/skill-0" "/skill-1" "/skill-2"}
+                         (set (map #(:prompt (:opts %)) invs)))))))))))
 
     (testing "each concurrent invocation gets correct session data"
       (with-work-on-state
-        (let [captured-dirs (atom [])]
-          (with-mock-fetchers
-            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
-            (fn [_dir _id] [])
-            (with-redefs [claude-cli/invoke (fn [opts]
-                                              (swap! captured-dirs conj (:dir opts))
-                                              {:result-promise (doto (promise)
-                                                                 (deliver {:exit-code 0}))})]
+        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
+              ;; Need two task lookups for two work-on! calls
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses {:show [(make-task-response {:meta {:refined "true"}})
+                                                (make-task-response {:meta {:refined "true"}})]
+                                         :why-blocked [(make-blocking-response)
+                                                       (make-blocking-response)]}})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
               ;; Start two sessions with different project dirs
               (let [result1 (graph/query [`(resolvers/work-on!
                                             {:task/project-dir "/project-a"
@@ -463,8 +484,12 @@
                 (graph/query [`(resolvers/invoke-skill!
                                 {:skill "test"
                                  :engine/session-id ~session2})])
+                ;; Wait for skill threads
+                (resolvers/await-skill-threads!)
                 ;; Verify each got the right project dir
-                (is (= #{"/project-a" "/project-b"} (set @captured-dirs)))))))))))
+                (let [invs (claude-cli/invocations cli-nullable)
+                      dirs (set (map #(:dir (:opts %)) invs))]
+                  (is (= #{"/project-a" "/project-b"} dirs)))))))))))
 
 ;;; Escalate to Dev-env Tests
 
@@ -474,36 +499,38 @@
     (testing "starts dev-env session when available"
       (with-work-on-state
         (let [dev-env (dev-env-protocol/make-noop-dev-env)
-              dev-env-id (dev-env-registry/register! dev-env :test)]
-          (with-mock-fetchers
-            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
-            (fn [_dir _id] [])
-            (let [work-result (graph/query [`(resolvers/work-on!
-                                              {:task/project-dir "/test"
-                                               :task/id 200})])
-                  session-id (:work-on/session-id (get work-result `resolvers/work-on!))
-                  result (graph/query [`(resolvers/escalate-to-dev-env!
-                                         {:engine/session-id ~session-id})])
-                  escalate-result (get result `resolvers/escalate-to-dev-env!)
-                  ;; Check that start-session was called via the :calls atom
-                  calls @(:calls dev-env)
-                  start-call (first (filter #(= :start-session (:op %)) calls))]
-              (is (= :escalated (:escalate/status escalate-result)))
-              (is (= dev-env-id (:escalate/dev-env-id escalate-result)))
-              (is (some? start-call) "start-session should have been called")
-              (is (= session-id (:session-id start-call))))))))
+              dev-env-id (dev-env-registry/register! dev-env :test)
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result (graph/query [`(resolvers/work-on!
+                                                {:task/project-dir "/test"
+                                                 :task/id 200})])
+                    session-id (:work-on/session-id (get work-result `resolvers/work-on!))
+                    result (graph/query [`(resolvers/escalate-to-dev-env!
+                                           {:engine/session-id ~session-id})])
+                    escalate-result (get result `resolvers/escalate-to-dev-env!)
+                    ;; Check that start-session was called via the :calls atom
+                    calls @(:calls dev-env)
+                    start-call (first (filter #(= :start-session (:op %)) calls))]
+                (is (= :escalated (:escalate/status escalate-result)))
+                (is (= dev-env-id (:escalate/dev-env-id escalate-result)))
+                (is (some? start-call) "start-session should have been called")
+                (is (= session-id (:session-id start-call)))))))))
 
     (testing "returns error when no dev-env available"
       (with-work-on-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
-          (fn [_dir _id] [])
-          (let [work-result (graph/query [`(resolvers/work-on!
-                                            {:task/project-dir "/test"
-                                             :task/id 201})])
-                session-id (:work-on/session-id (get work-result `resolvers/work-on!))
-                result (graph/query [`(resolvers/escalate-to-dev-env!
-                                       {:engine/session-id ~session-id})])
-                escalate-result (get result `resolvers/escalate-to-dev-env!)]
-            (is (= :no-dev-env (:escalate/status escalate-result)))
-            (is (= :no-dev-env (:error (:escalate/error escalate-result))))))))))
+        (let [mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result (graph/query [`(resolvers/work-on!
+                                                {:task/project-dir "/test"
+                                                 :task/id 201})])
+                    session-id (:work-on/session-id (get work-result `resolvers/work-on!))
+                    result (graph/query [`(resolvers/escalate-to-dev-env!
+                                           {:engine/session-id ~session-id})])
+                    escalate-result (get result `resolvers/escalate-to-dev-env!)]
+                (is (= :no-dev-env (:escalate/status escalate-result)))
+                (is (= :no-dev-env (:error (:escalate/error escalate-result))))))))))))

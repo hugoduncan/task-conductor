@@ -37,11 +37,18 @@
                  :task/type :task/parent-id :task/relations :task/meta
                  :task/design :task/shared-context :task/blocking-task-ids
                  :task/is-blocked :task/pr-num :task/code-reviewed
-                 (pco/? :task/error)]}
+                 :task/error]}
   (let [result (interface/show-task {:project-dir project-dir :task-id id})]
     (if (:error result)
-      {:task/error result}
-      (prefix-keys (:task result)))))
+      ;; Return nil for all declared outputs so Pathom doesn't try other resolvers
+      {:task/error result
+       :task/title nil :task/description nil :task/status nil
+       :task/category nil :task/type nil :task/parent-id nil
+       :task/relations nil :task/meta nil :task/design nil
+       :task/shared-context nil :task/blocking-task-ids nil
+       :task/is-blocked nil :task/pr-num nil :task/code-reviewed nil}
+      ;; Always include :task/error (nil when no error) so Pathom doesn't look elsewhere
+      (assoc (prefix-keys (:task result)) :task/error nil))))
 
 (graph/defresolver tasks-list
   "List tasks with optional filters. Requires :task/project-dir.
@@ -49,11 +56,11 @@
    :status, :category, :type, :parent-id, :blocked, :limit, :title-pattern"
   [{:task/keys [project-dir filters]}]
   {::pco/input [:task/project-dir (pco/? :task/filters)]
-   ::pco/output [:task/all :task/metadata (pco/? :task/error)]}
+   ::pco/output [:task/all :task/metadata (pco/? :task/list-error)]}
   (let [opts (merge {:project-dir project-dir} filters)
         result (interface/list-tasks opts)]
     (if (:error result)
-      {:task/error result}
+      {:task/list-error result :task/all [] :task/metadata {}}
       {:task/all (mapv prefix-keys (:tasks result))
        :task/metadata (:metadata result)})))
 
@@ -61,10 +68,10 @@
   "Get blocking information for a task. Requires :task/id and :task/project-dir."
   [{:task/keys [id project-dir]}]
   {::pco/input [:task/id :task/project-dir]
-   ::pco/output [:task/blocked-by :task/blocking-reason (pco/? :task/error)]}
+   ::pco/output [:task/blocked-by :task/blocking-reason (pco/? :task/blocking-error)]}
   (let [result (interface/why-blocked {:project-dir project-dir :task-id id})]
     (if (:error result)
-      {:task/error result}
+      {:task/blocking-error result :task/blocked-by nil :task/blocking-reason nil}
       (prefix-keys result))))
 
 ;;; Mutations

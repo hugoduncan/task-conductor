@@ -64,14 +64,11 @@
 (defn- fetch-task
   "Fetch task data via EQL query.
    Returns task map with :task/type, :task/status, etc.
-   On error, the result may contain :task/error from the resolver."
+   On error, the result contains :task/error from the resolver."
   [project-dir task-id]
-  ;; Note: Don't request :task/error explicitly - it causes Pathom to try
-  ;; multiple resolvers that declare (pco/? :task/error) as optional output.
-  ;; The resolver will include :task/error in results if there's an error.
   (graph/query {:task/id task-id :task/project-dir project-dir}
                [:task/type :task/status :task/meta :task/pr-num
-                :task/code-reviewed]))
+                :task/code-reviewed :task/error]))
 
 (defn- fetch-children
   "Fetch children for a story via EQL query.
