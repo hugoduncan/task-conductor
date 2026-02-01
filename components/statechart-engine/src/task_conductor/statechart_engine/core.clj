@@ -13,9 +13,11 @@
 ;;; EQL Executor
 
 (defn- inject-session-id
-  "Inject :engine/session-id into mutation params."
+  "Inject :engine/session-id into mutation params.
+  Handles mutations with or without params."
   [expression session-id]
-  (let [[mutation-sym params] [(first expression) (second expression)]]
+  (let [mutation-sym (first expression)
+        params (or (second expression) {})]
     (list mutation-sym (assoc params :engine/session-id session-id))))
 
 (defrecord EQLExecutionModel []
