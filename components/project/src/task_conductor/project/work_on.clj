@@ -243,3 +243,15 @@
                  (sc/state {:id :escalated}
                            (sc/on-entry {}
                                         (sc/action {:expr `(escalate-to-dev-env! {})})))))
+
+;;; Statechart Registration
+;; Register statecharts on namespace load for use by work-on! mutation.
+
+(defn register-statecharts!
+  "Register task and story statecharts with the engine.
+   Called automatically on namespace load."
+  []
+  (sc/register! :work-on/task task-statechart)
+  (sc/register! :work-on/story story-statechart))
+
+(register-statecharts!)

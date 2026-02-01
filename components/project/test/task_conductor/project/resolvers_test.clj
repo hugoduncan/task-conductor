@@ -5,9 +5,15 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
+   [task-conductor.dev-env.protocol :as dev-env-protocol]
+   [task-conductor.dev-env.registry :as dev-env-registry]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
-   [task-conductor.project.resolvers :as resolvers]))
+   [task-conductor.project.resolvers :as resolvers]
+   [task-conductor.project.work-on :as work-on]
+   [task-conductor.statechart-engine.core :as engine]
+   [task-conductor.statechart-engine.interface :as sc]
+   [task-conductor.statechart-engine.resolvers :as engine-resolvers]))
 
 (defmacro with-clean-state
   "Execute body with clean registry and graph state."
@@ -169,3 +175,164 @@
                                        {:project/path ~dir})])
                 deleted (get-in result [`resolvers/project-delete! :project/result])]
             (is (nil? deleted))))))))
+
+;;; Work-on Mutation Tests
+
+(defmacro with-work-on-state
+  "Execute body with clean state for work-on! tests.
+   Resets engine, graph, registries, and registers required resolvers."
+  [& body]
+  `(do
+     (engine/reset-engine!)
+     (graph/reset-graph!)
+     (registry/clear!)
+     (dev-env-registry/clear!)
+     (engine-resolvers/reset-dev-env-hooks!)
+     ;; Register statecharts
+     (work-on/register-statecharts!)
+     ;; Register engine resolvers for hook registration
+     (engine-resolvers/register-resolvers!)
+     ;; Register project resolvers
+     (resolvers/register-resolvers!)
+     (try
+       ~@body
+       (finally
+         (engine/reset-engine!)
+         (graph/reset-graph!)
+         (registry/clear!)
+         (dev-env-registry/clear!)
+         (engine-resolvers/reset-dev-env-hooks!)))))
+
+(deftest work-on-test
+  ;; Verify work-on! mutation correctly starts statechart sessions for tasks
+  ;; and stories, derives initial state, and registers dev-env hooks.
+  (testing "work-on!"
+    (testing "starts statechart session for a task"
+      (with-work-on-state
+        (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                             {:task/type :task
+                                              :task/status :open
+                                              :task/meta {:refined "true"}})
+                      resolvers/fetch-children (fn [_dir _id] [])
+                      graph/query (let [orig graph/query]
+                                    (fn
+                                      ([q] (if (= [:dev-env/selected] q)
+                                             {:dev-env/selected nil}
+                                             (orig q)))
+                                      ([e q] (orig e q))))]
+          (let [result (graph/query [`(resolvers/work-on!
+                                       {:task/project-dir "/test"
+                                        :task/id 123})])
+                work-on-result (get result `resolvers/work-on!)]
+            (is (string? (:work-on/session-id work-on-result)))
+            (is (= :refined (:work-on/initial-state work-on-result)))
+            (is (nil? (:work-on/error work-on-result)))))))
+
+    (testing "uses task-statechart for non-story types"
+      (with-work-on-state
+        (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                             {:task/type :bug
+                                              :task/status :open
+                                              :task/meta nil})
+                      resolvers/fetch-children (fn [_dir _id] [])
+                      graph/query (let [orig graph/query]
+                                    (fn
+                                      ([q] (if (= [:dev-env/selected] q)
+                                             {:dev-env/selected nil}
+                                             (orig q)))
+                                      ([e q] (orig e q))))]
+          (let [result (graph/query [`(resolvers/work-on!
+                                       {:task/project-dir "/test"
+                                        :task/id 456})])
+                work-on-result (get result `resolvers/work-on!)
+                session-id (:work-on/session-id work-on-result)]
+            (is (= :unrefined (:work-on/initial-state work-on-result)))
+            ;; Verify session is using task-statechart (starts in :idle)
+            (is (contains? (sc/current-state session-id) :idle))))))
+
+    (testing "starts statechart session for a story"
+      (with-work-on-state
+        (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                             {:task/type :story
+                                              :task/status :open
+                                              :task/meta {:refined "true"}})
+                      resolvers/fetch-children (fn [_dir _id]
+                                                 [{:task/status :open}
+                                                  {:task/status :closed}])
+                      graph/query (let [orig graph/query]
+                                    (fn
+                                      ([q] (if (= [:dev-env/selected] q)
+                                             {:dev-env/selected nil}
+                                             (orig q)))
+                                      ([e q] (orig e q))))]
+          (let [result (graph/query [`(resolvers/work-on!
+                                       {:task/project-dir "/test"
+                                        :task/id 789})])
+                work-on-result (get result `resolvers/work-on!)]
+            (is (string? (:work-on/session-id work-on-result)))
+            ;; Has incomplete children, so state is :has-tasks
+            (is (= :has-tasks (:work-on/initial-state work-on-result)))))))
+
+    (testing "derives :awaiting-review for story with all children complete"
+      (with-work-on-state
+        (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                             {:task/type :story
+                                              :task/status :open
+                                              :task/meta {:refined "true"}})
+                      resolvers/fetch-children (fn [_dir _id]
+                                                 [{:task/status :closed}
+                                                  {:task/status :closed}])
+                      graph/query (let [orig graph/query]
+                                    (fn
+                                      ([q] (if (= [:dev-env/selected] q)
+                                             {:dev-env/selected nil}
+                                             (orig q)))
+                                      ([e q] (orig e q))))]
+          (let [result (graph/query [`(resolvers/work-on!
+                                       {:task/project-dir "/test"
+                                        :task/id 999})])
+                work-on-result (get result `resolvers/work-on!)]
+            (is (= :awaiting-review (:work-on/initial-state work-on-result)))))))
+
+    (testing "returns error when task not found"
+      (with-work-on-state
+        (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                             {:task/error {:error :not-found
+                                                           :message "Not found"}})
+                      graph/query (let [orig graph/query]
+                                    (fn
+                                      ([q] (if (= [:dev-env/selected] q)
+                                             {:dev-env/selected nil}
+                                             (orig q)))
+                                      ([e q] (orig e q))))]
+          (let [result (graph/query [`(resolvers/work-on!
+                                       {:task/project-dir "/test"
+                                        :task/id 404})])
+                work-on-result (get result `resolvers/work-on!)]
+            (is (= :not-found (:error (:work-on/error work-on-result))))
+            (is (nil? (:work-on/session-id work-on-result)))))))
+
+    (testing "registers dev-env hook when dev-env available"
+      (with-work-on-state
+        (let [dev-env (dev-env-protocol/make-noop-dev-env)
+              dev-env-id (dev-env-registry/register! dev-env :test)]
+          (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                               {:task/type :task
+                                                :task/status :open
+                                                :task/meta {:refined "true"}})
+                        resolvers/fetch-children (fn [_dir _id] [])
+                        graph/query (let [orig graph/query]
+                                      (fn
+                                        ([q]
+                                         (if (= [:dev-env/selected] q)
+                                           {:dev-env/selected {:dev-env/id dev-env-id}}
+                                           (orig q)))
+                                        ([e q] (orig e q))))]
+            (let [result (graph/query [`(resolvers/work-on!
+                                         {:task/project-dir "/test"
+                                          :task/id 123})])
+                  work-on-result (get result `resolvers/work-on!)
+                  session-id (:work-on/session-id work-on-result)]
+              (is (string? session-id))
+              ;; Verify hook was registered by checking the dev-env's hooks atom
+              (is (= 1 (count @(:hooks dev-env)))))))))))
