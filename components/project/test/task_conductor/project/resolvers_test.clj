@@ -209,6 +209,7 @@
      (registry/clear!)
      (dev-env-registry/clear!)
      (engine-resolvers/reset-dev-env-hooks!)
+     (resolvers/reset-skill-threads!)
      ;; Register statecharts
      (work-on/register-statecharts!)
      ;; Register all resolvers
@@ -218,8 +219,9 @@
      (try
        ~@body
        (finally
-         ;; Allow virtual threads to complete before cleanup
-         (Thread/sleep 50)
+         ;; Wait for all skill threads to complete before cleanup
+         (resolvers/await-skill-threads!)
+         (resolvers/reset-skill-threads!)
          (engine/reset-engine!)
          (graph/reset-graph!)
          (registry/clear!)
@@ -393,8 +395,8 @@
                                        :engine/session-id ~session-id})])]
                 ;; Deliver error result
                 (deliver mock-promise {:error :timeout})
-                ;; Wait for virtual thread to process
-                (Thread/sleep 100)
+                ;; Wait for skill thread to process
+                (resolvers/await-skill-threads!)
                 (is (= 1 (count @events-sent)))
                 (is (= :error (:event (first @events-sent))))))))))))
 

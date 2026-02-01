@@ -140,6 +140,25 @@
 
 ;;; Skill Invocation
 
+(def ^:private active-skill-threads
+  "Atom tracking virtual threads spawned by invoke-skill!.
+   Used by tests to synchronize cleanup."
+  (atom #{}))
+
+(defn await-skill-threads!
+  "Wait for all active skill threads to complete.
+   Returns when all threads spawned by invoke-skill! have finished.
+   Primarily used by tests for proper synchronization."
+  []
+  (doseq [^Thread thread @active-skill-threads]
+    (.join thread)))
+
+(defn reset-skill-threads!
+  "Reset the skill threads tracking atom.
+   Should be called during test cleanup."
+  []
+  (reset! active-skill-threads #{}))
+
 (defn- on-skill-complete
   "Handle skill completion. Re-derives state and sends event to statechart.
    Called from virtual thread when claude-cli promise delivers.
@@ -182,12 +201,15 @@
   (let [data (sc/get-data session-id)
         {:keys [project-dir]} data
         prompt (str "/" skill)
-        handle (claude-cli/invoke {:prompt prompt :dir project-dir})]
-    ;; Spawn virtual thread to wait for completion
-    (Thread/startVirtualThread
-     (fn []
-       (let [result @(:result-promise handle)]
-         (on-skill-complete session-id result))))
+        handle (claude-cli/invoke {:prompt prompt :dir project-dir})
+        thread (Thread/startVirtualThread
+                (fn []
+                  (try
+                    (let [result @(:result-promise handle)]
+                      (on-skill-complete session-id result))
+                    (finally
+                      (swap! active-skill-threads disj (Thread/currentThread))))))]
+    (swap! active-skill-threads conj thread)
     {:invoke-skill/status :started}))
 
 (graph/defmutation escalate-to-dev-env!
