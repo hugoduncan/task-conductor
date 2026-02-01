@@ -3,7 +3,7 @@
 
   These tests exercise the statechart lifecycle without subprocess execution:
   - Uses claude-cli Nullable for skill invocations (no real CLI processes)
-  - Uses mock fetchers for task data (following existing test patterns)
+  - Uses nullable task fetcher for task data (no EQL resolver calls)
   - Uses NoOpDevEnv for dev-env escalation
   - Asserts on statechart states via current-state, not interaction counts
 
@@ -42,7 +42,7 @@
      (resolvers/reset-skill-threads!)
      ;; Register statecharts
      (work-on/register-statecharts!)
-     ;; Register all resolvers
+     ;; Register resolvers (project resolvers include work-on! mutation)
      (engine-resolvers/register-resolvers!)
      (dev-env-resolvers/register-resolvers!)
      (resolvers/register-resolvers!)
@@ -57,10 +57,12 @@
          (dev-env-registry/clear!)
          (engine-resolvers/reset-dev-env-hooks!)))))
 
-;;; Test Data Builders (following existing patterns from resolvers_test.clj)
+;;; Test Data Builders
+;;; Uses namespaced keys (:task/...) as returned by EQL resolvers.
 
 (defn make-task
-  "Create task data with sensible defaults."
+  "Create task data with sensible defaults.
+  Uses namespaced keys as returned by EQL resolvers."
   ([] (make-task {}))
   ([overrides]
    (merge {:task/type :task
@@ -76,66 +78,60 @@
   ([overrides]
    (merge {:task/status :open} overrides)))
 
-(defmacro with-mock-fetchers
-  "Execute body with mocked fetch-task and fetch-children.
-  task-fn: (fn [dir id] task-map)
-  children-fn: (fn [dir parent-id] [child-maps])"
-  [task-fn children-fn & body]
-  `(with-redefs [resolvers/fetch-task ~task-fn
-                 resolvers/fetch-children ~children-fn]
-     ~@body))
-
 ;;; Session Startup Tests
 
 (deftest session-startup-test
   ;; Verify work-on! correctly starts a statechart session and derives
-  ;; initial state. Uses mock fetchers for task data.
+  ;; initial state. Uses nullable task fetcher for task data.
   (testing "session startup"
     (testing "starts session for unrefined task"
       (with-integration-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task))
-          (fn [_dir _id] [])
-          (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-            (let [result (graph/query [`(resolvers/work-on!
-                                         {:task/project-dir "/test"
-                                          :task/id 100})])
-                  work-on-result (get result `resolvers/work-on!)]
+        (let [fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task))
+                        :children-fn (fn [_ _] [])})]
+          (resolvers/with-nullable-task-fetcher fetcher
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 100})])
+                    work-on-result (get result `resolvers/work-on!)]
 
-              (is (string? (:work-on/session-id work-on-result)))
-              (is (= :unrefined (:work-on/initial-state work-on-result)))
-              (is (nil? (:work-on/error work-on-result)))
+                (is (string? (:work-on/session-id work-on-result)))
+                (is (= :unrefined (:work-on/initial-state work-on-result)))
+                (is (nil? (:work-on/error work-on-result)))
 
-              ;; Verify session is in :idle state
-              (is (contains? (sc/current-state (:work-on/session-id work-on-result))
-                             :idle)))))))
+                ;; Verify session is in :idle state
+                (is (contains? (sc/current-state (:work-on/session-id work-on-result))
+                               :idle))))))))
 
     (testing "starts session for refined task"
       (with-integration-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
-          (fn [_dir _id] [])
-          (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-            (let [result (graph/query [`(resolvers/work-on!
-                                         {:task/project-dir "/test"
-                                          :task/id 101})])
-                  work-on-result (get result `resolvers/work-on!)]
+        (let [fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task {:task/meta {:refined "true"}}))
+                        :children-fn (fn [_ _] [])})]
+          (resolvers/with-nullable-task-fetcher fetcher
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 101})])
+                    work-on-result (get result `resolvers/work-on!)]
 
-              (is (= :refined (:work-on/initial-state work-on-result))))))))
+                (is (= :refined (:work-on/initial-state work-on-result)))))))))
 
     (testing "starts session for task with PR"
       (with-integration-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/meta {:refined "true"}
-                                     :task/pr-num 42}))
-          (fn [_dir _id] [])
-          (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-            (let [result (graph/query [`(resolvers/work-on!
-                                         {:task/project-dir "/test"
-                                          :task/id 102})])
-                  work-on-result (get result `resolvers/work-on!)]
+        (let [fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task {:task/meta {:refined "true"}
+                                                       :task/pr-num 42}))
+                        :children-fn (fn [_ _] [])})]
+          (resolvers/with-nullable-task-fetcher fetcher
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 102})])
+                    work-on-result (get result `resolvers/work-on!)]
 
-              (is (= :wait-pr-merge (:work-on/initial-state work-on-result))))))))))
+                (is (= :wait-pr-merge (:work-on/initial-state work-on-result)))))))))))
 
 ;;; Skill Invocation Tests
 
@@ -146,13 +142,13 @@
     (testing "invokes skill when entering :unrefined state"
       (with-integration-state
         (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
+              fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task))
+                        :children-fn (fn [_ _] [])})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
 
-          (with-mock-fetchers
-            ;; Initial task is unrefined
-            (fn [_dir _id] (make-task))
-            (fn [_dir _id] [])
+          (resolvers/with-nullable-task-fetcher fetcher
             (claude-cli/with-nullable-claude-cli cli-nullable
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -181,12 +177,13 @@
       (with-integration-state
         (let [;; Configure cli to return error
               cli-nullable (claude-cli/make-nullable {:error :timeout})
+              fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task))
+                        :children-fn (fn [_ _] [])})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
 
-          (with-mock-fetchers
-            (fn [_dir _id] (make-task))
-            (fn [_dir _id] [])
+          (resolvers/with-nullable-task-fetcher fetcher
             (claude-cli/with-nullable-claude-cli cli-nullable
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -212,12 +209,13 @@
     (testing "error from :refined state goes to :escalated"
       (with-integration-state
         (let [cli-nullable (claude-cli/make-nullable {:error :interrupted})
+              fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task {:task/meta {:refined "true"}}))
+                        :children-fn (fn [_ _] [])})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
 
-          (with-mock-fetchers
-            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
-            (fn [_dir _id] [])
+          (resolvers/with-nullable-task-fetcher fetcher
             (claude-cli/with-nullable-claude-cli cli-nullable
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/test"
@@ -242,32 +240,35 @@
   (testing "story session"
     (testing "derives :has-tasks for story with incomplete children"
       (with-integration-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/type :story
-                                     :task/meta {:refined "true"}}))
-          (fn [_dir _id] [(make-child) (make-child {:task/status :closed})])
-          (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-            (let [result (graph/query [`(resolvers/work-on!
-                                         {:task/project-dir "/test"
-                                          :task/id 400})])
-                  work-on-result (get result `resolvers/work-on!)]
+        (let [fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task {:task/type :story
+                                                       :task/meta {:refined "true"}}))
+                        :children-fn (fn [_ _] [(make-child)
+                                                (make-child {:task/status :closed})])})]
+          (resolvers/with-nullable-task-fetcher fetcher
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 400})])
+                    work-on-result (get result `resolvers/work-on!)]
 
-              (is (= :has-tasks (:work-on/initial-state work-on-result))))))))
+                (is (= :has-tasks (:work-on/initial-state work-on-result)))))))))
 
     (testing "derives :awaiting-review for story with all children complete"
       (with-integration-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/type :story
-                                     :task/meta {:refined "true"}}))
-          (fn [_dir _id] [(make-child {:task/status :closed})
-                          (make-child {:task/status :closed})])
-          (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-            (let [result (graph/query [`(resolvers/work-on!
-                                         {:task/project-dir "/test"
-                                          :task/id 410})])
-                  work-on-result (get result `resolvers/work-on!)]
+        (let [fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task {:task/type :story
+                                                       :task/meta {:refined "true"}}))
+                        :children-fn (fn [_ _] [(make-child {:task/status :closed})
+                                                (make-child {:task/status :closed})])})]
+          (resolvers/with-nullable-task-fetcher fetcher
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 410})])
+                    work-on-result (get result `resolvers/work-on!)]
 
-              (is (= :awaiting-review (:work-on/initial-state work-on-result))))))))))
+                (is (= :awaiting-review (:work-on/initial-state work-on-result)))))))))))
 
 ;;; State Transition Tests
 
@@ -276,44 +277,46 @@
   (testing "state transitions"
     (testing "task can transition directly to :complete from :idle"
       (with-integration-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task))
-          (fn [_dir _id] [])
-          (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-            (let [result (graph/query [`(resolvers/work-on!
-                                         {:task/project-dir "/test"
-                                          :task/id 500})])
-                  session-id (:work-on/session-id (get result `resolvers/work-on!))]
+        (let [fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task))
+                        :children-fn (fn [_ _] [])})]
+          (resolvers/with-nullable-task-fetcher fetcher
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 500})])
+                    session-id (:work-on/session-id (get result `resolvers/work-on!))]
 
-              ;; Starts in :idle
-              (is (contains? (sc/current-state session-id) :idle))
+                ;; Starts in :idle
+                (is (contains? (sc/current-state session-id) :idle))
 
-              ;; Can transition directly to complete from idle
-              (sc/send! session-id :complete)
-              (is (= #{} (sc/current-state session-id))))))))
+                ;; Can transition directly to complete from idle
+                (sc/send! session-id :complete)
+                (is (= #{} (sc/current-state session-id)))))))))
 
     (testing "story transitions through :has-tasks loop"
       (with-integration-state
-        (with-mock-fetchers
-          (fn [_dir _id] (make-task {:task/type :story
-                                     :task/meta {:refined "true"}}))
-          (fn [_dir _id] [(make-child)])
-          (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-            (let [result (graph/query [`(resolvers/work-on!
-                                         {:task/project-dir "/test"
-                                          :task/id 510})])
-                  session-id (:work-on/session-id (get result `resolvers/work-on!))]
+        (let [fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task {:task/type :story
+                                                       :task/meta {:refined "true"}}))
+                        :children-fn (fn [_ _] [(make-child)])})]
+          (resolvers/with-nullable-task-fetcher fetcher
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/work-on!
+                                           {:task/project-dir "/test"
+                                            :task/id 510})])
+                    session-id (:work-on/session-id (get result `resolvers/work-on!))]
 
-              ;; Send has-tasks multiple times (simulating multiple children)
-              (sc/send! session-id :has-tasks)
-              (is (contains? (sc/current-state session-id) :has-tasks))
+                ;; Send has-tasks multiple times (simulating multiple children)
+                (sc/send! session-id :has-tasks)
+                (is (contains? (sc/current-state session-id) :has-tasks))
 
-              (sc/send! session-id :has-tasks)
-              (is (contains? (sc/current-state session-id) :has-tasks))
+                (sc/send! session-id :has-tasks)
+                (is (contains? (sc/current-state session-id) :has-tasks))
 
-              ;; Transition to awaiting-review
-              (sc/send! session-id :awaiting-review)
-              (is (contains? (sc/current-state session-id) :awaiting-review)))))))))
+                ;; Transition to awaiting-review
+                (sc/send! session-id :awaiting-review)
+                (is (contains? (sc/current-state session-id) :awaiting-review))))))))))
 
 ;;; Nullable Infrastructure Verification
 
@@ -322,11 +325,12 @@
   (testing "Nullable infrastructure"
     (testing "tracks claude-cli invocations during skill execution"
       (with-integration-state
-        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})]
+        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
+              fetcher (resolvers/make-nullable-task-fetcher
+                       {:task-fn (fn [_ _] (make-task))
+                        :children-fn (fn [_ _] [])})]
 
-          (with-mock-fetchers
-            (fn [_dir _id] (make-task))
-            (fn [_dir _id] [])
+          (resolvers/with-nullable-task-fetcher fetcher
             (claude-cli/with-nullable-claude-cli cli-nullable
               (let [result (graph/query [`(resolvers/work-on!
                                            {:task/project-dir "/my/project"
