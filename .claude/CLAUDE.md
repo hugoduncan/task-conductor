@@ -32,8 +32,6 @@ Decide  = 刀 ⊣ ψ (collapse together)
 Act     = → 🐍 (persist to system)
 ```
 
-
-
 # Vocabulary
 
 Use the vocabulary to mark things in commit messages. User types labels, AI renders labels and symbols. This vocabulary embeds symbols for tracking into your memory. Vocabulary + git = efficient memory search. Add new vocabulary sparingly, with user direction.
@@ -155,6 +153,78 @@ Polylith-style monorepo:
 
 Top-level deps.edn references bases/components via `:local/root`. Each
 base/component has its own deps.edn.
+
+### Key Components
+
+#### statechart-engine (`components/statechart-engine/`)
+
+Uses `com.fulcrologic/statecharts` with custom EQL execution model.
+
+**Core API** (via `task-conductor.statechart-engine.interface`):
+- `register!(chart-name, chart-def)` - Register a statechart
+- `start!(chart-name, opts)` - Start session, returns session-id
+- `send!(session-id, event)` - Trigger transition
+- `stop!(session-id)` - Stop session
+- `current-state(session-id)` - Get active states (set of keywords)
+- `history(session-id)` - Get transition history with timestamps
+
+**DSL**: `statechart`, `state`, `transition`, `on-entry`, `on-exit`, `action`
+
+**EQL Integration**: Actions execute EQL expressions:
+- Vector → query: `[:user/name]`
+- List with symbol → mutation: `(my.ns/do-thing! {:arg 1})`
+
+#### claude-cli (`components/claude-cli/`)
+
+Process management for Claude CLI via `babashka/process`.
+
+**Interface**:
+- `invoke(opts)` - Start CLI, returns `{:process p :result-promise promise}`
+- `cancel!(handle)` - Kill running process
+
+**Options**: `:prompt`, `:dir`, `:timeout`, `:model`, `:allowed-tools`, `:max-turns`, `:on-event`
+
+**Result**: `{:exit-code n :events [...] :session-id "uuid"}`
+
+**EQL Mutations**: `invoke!`, `cancel!`, resolver `invocation-result`
+
+#### dev-env (`components/dev-env/`, `components/emacs-dev-env/`)
+
+Protocol for hosting interactive Claude sessions outside JVM.
+
+**DevEnv Protocol**:
+- `start-session(dev-env, session-id, opts)` - Resume Claude session
+- `register-hook(dev-env, hook-type, callback)` - Lifecycle callbacks
+- `query-transcript(dev-env, session-id)` - Get conversation
+- `connected?(dev-env)` - Health check
+
+**Hook types**: `:on-close`, `:on-idle`
+
+**Handoff flow**:
+1. Statechart enters running state → calls `dev-env-start-session!`
+2. Registers `:on-close` hook to send event back to statechart
+3. Dev-env (Emacs) controls interactive session
+4. On close, hook fires → statechart transitions
+
+#### mcp-tasks (`components/mcp-tasks/`)
+
+CLI wrapper for mcp-tasks task management.
+
+**Interface**: `list-tasks`, `show-task`, `add-task`, `complete-task`, `update-task`, `delete-task`, `reopen-task`, `why-blocked`
+
+**EQL Resolvers**: `task-by-id`, `tasks-list`, `task-blocking-info`
+
+**EQL Mutations**: `task-create!`, `task-complete!`, `task-update!`, `task-delete!`, `task-reopen!`
+
+**Namespace**: All attributes use `:task/` prefix
+
+#### pathom-graph (`components/pathom-graph/`)
+
+Shared Pathom3 graph for EQL queries.
+
+**Macros**: `defresolver`, `defmutation` (auto-register on load)
+
+**API**: `query(eql)`, `register!(operations)`, `reset!`
 
 ## Error Handling
 
