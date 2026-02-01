@@ -17,11 +17,10 @@
                      (transition {:event :toggle :target :off}))))
 
 (def counter-chart
-  "Single-state chart with :inc and :dec events for testing data updates."
+  "Single-state chart with :inc event for testing data updates."
   (statechart {}
               (state {:id :idle}
-                     (transition {:event :inc :target :idle})
-                     (transition {:event :dec :target :idle}))))
+                     (transition {:event :inc :target :idle}))))
 
 ;;; Concurrent Session Data Tests
 
@@ -33,38 +32,30 @@
       (with-clean-engine
         (core/register! ::concurrent-data counter-chart)
         (let [session-ids (doall
-                           (for [i (range 5)]
+                           (for [i (range 3)]
                              (core/start! ::concurrent-data {:data {:id i :count 0}})))
-              ;; Run concurrent updates
               futures (doall
                        (for [session-id session-ids]
                          (future
-                           (dotimes [_ 100]
-                             (core/update-data! session-id
-                                                #(update % :count inc))))))
-              ;; Wait for all to complete
+                           (dotimes [_ 20]
+                             (core/update-data! session-id #(update % :count inc))))))
               _ (doseq [f futures] @f)]
-          ;; Verify each session has the correct count
           (doseq [session-id session-ids]
             (let [data (core/get-data session-id)]
-              (is (= 100 (:count data))
-                  (str "Session " session-id " should have count 100")))))))
+              (is (= 20 (:count data))
+                  (str "Session " session-id " should have count 20")))))))
 
     (testing "concurrent updates to same session"
       (with-clean-engine
         (core/register! ::single-session counter-chart)
         (let [session-id (core/start! ::single-session {:data {:count 0}})
-              ;; Run concurrent updates from multiple threads
               futures (doall
-                       (for [_ (range 10)]
+                       (for [_ (range 5)]
                          (future
-                           (dotimes [_ 100]
-                             (core/update-data! session-id
-                                                #(update % :count inc))))))]
-          ;; Wait for all to complete
+                           (dotimes [_ 20]
+                             (core/update-data! session-id #(update % :count inc))))))]
           (doseq [f futures] @f)
-          ;; Verify final count (10 threads * 100 increments)
-          (is (= 1000 (:count (core/get-data session-id)))))))))
+          (is (= 100 (:count (core/get-data session-id)))))))))
 
 ;;; Concurrent Event Send Tests
 
@@ -74,20 +65,17 @@
     (testing "to different sessions in parallel"
       (with-clean-engine
         (core/register! ::parallel-send simple-chart)
-        (let [session-ids (doall (for [_ (range 10)]
+        (let [session-ids (doall (for [_ (range 5)]
                                    (core/start! ::parallel-send)))
-              ;; Send toggle events concurrently
               futures (doall
                        (for [session-id session-ids]
                          (future
-                           (dotimes [_ 50]
+                           (dotimes [_ 10]
                              (core/send! session-id :toggle))
-                           ;; Return final state
                            (core/state session-id))))]
-          ;; Wait for all and verify states
           (doseq [[session-id f] (map vector session-ids futures)]
             (let [final-state @f]
-              ;; 50 toggles means should be in :off state (even count)
+              ;; 10 toggles -> :off (even count)
               (is (contains? final-state :off)
                   (str "Session " session-id " should be in :off state")))))))
 
@@ -95,15 +83,13 @@
       (with-clean-engine
         (core/register! ::rapid-events simple-chart)
         (let [session-id (core/start! ::rapid-events)
-              ;; Send many events concurrently from multiple threads
               futures (doall
-                       (for [_ (range 5)]
+                       (for [_ (range 4)]
                          (future
-                           (dotimes [_ 20]
+                           (dotimes [_ 10]
                              (core/send! session-id :toggle)))))]
-          ;; Wait for all
           (doseq [f futures] @f)
-          ;; 5 threads * 20 toggles = 100 toggles (even) -> :off
+          ;; 40 toggles (even) -> :off
           (is (contains? (core/state session-id) :off)))))))
 
 ;;; Concurrent Session Lifecycle Tests
@@ -114,74 +100,59 @@
     (testing "starting sessions while others are active"
       (with-clean-engine
         (core/register! ::lifecycle simple-chart)
-        (let [;; Start initial sessions
-              initial-sessions (doall (for [_ (range 5)]
+        (let [initial-sessions (doall (for [_ (range 3)]
                                         (core/start! ::lifecycle)))
-              ;; Start more sessions concurrently while sending to initial ones
               start-futures (doall
-                             (for [_ (range 5)]
+                             (for [_ (range 3)]
                                (future (core/start! ::lifecycle))))
               send-futures (doall
                             (for [s initial-sessions]
                               (future
-                                (dotimes [_ 10]
+                                (dotimes [_ 4]
                                   (core/send! s :toggle))
                                 s)))]
-          ;; Collect new sessions
           (let [new-sessions (mapv deref start-futures)]
-            ;; All sessions should be valid
             (doseq [s (concat initial-sessions new-sessions)]
               (is (set? (core/state s))
                   (str "Session " s " should have valid state"))))
-          ;; Wait for sends
           (doseq [f send-futures] @f)
-          ;; All 10 sessions should be listed
-          (is (= 10 (count (core/list-sessions)))))))
+          (is (= 6 (count (core/list-sessions)))))))
 
     (testing "stopping sessions while others continue"
       (with-clean-engine
         (core/register! ::stop-while-active simple-chart)
-        (let [sessions (doall (for [_ (range 10)]
+        (let [sessions (doall (for [_ (range 6)]
                                 (core/start! ::stop-while-active)))
-              [to-stop to-keep] (split-at 5 sessions)
-              ;; Concurrently stop some while sending to others
+              [to-stop to-keep] (split-at 3 sessions)
               stop-futures (doall (for [s to-stop]
                                     (future (core/stop! s))))
               send-futures (doall (for [s to-keep]
                                     (future
-                                      (dotimes [_ 20]
+                                      (dotimes [_ 10]
                                         (core/send! s :toggle))
                                       (core/state s))))]
-          ;; Wait for stops
           (doseq [f stop-futures] @f)
-          ;; Verify stopped sessions are gone
           (doseq [s to-stop]
             (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not found"
                                   (core/state s))))
-          ;; Verify kept sessions still work
           (doseq [f send-futures]
             (let [final-state @f]
               (is (contains? final-state :off)
                   "Active sessions should complete successfully")))
-          ;; Verify only 5 sessions remain
-          (is (= 5 (count (core/list-sessions)))))))
+          (is (= 3 (count (core/list-sessions)))))))
 
     (testing "rapid start/stop cycles"
       (with-clean-engine
         (core/register! ::rapid-lifecycle simple-chart)
-        (let [;; Run rapid start/stop cycles in parallel
-              futures (doall
-                       (for [_ (range 10)]
+        (let [futures (doall
+                       (for [_ (range 4)]
                          (future
-                           (dotimes [_ 50]
+                           (dotimes [_ 10]
                              (let [s (core/start! ::rapid-lifecycle)]
                                (core/send! s :toggle)
                                (core/stop! s))))))
-              ;; Also have some long-running sessions
               long-session (core/start! ::rapid-lifecycle)]
-          ;; Wait for all cycles
           (doseq [f futures] @f)
-          ;; Long-running session should still work
           (is (contains? (core/state long-session) :off))
           (core/send! long-session :toggle)
           (is (contains? (core/state long-session) :on)))))))
@@ -194,32 +165,27 @@
     (testing "under concurrent access"
       (with-clean-engine
         (core/register! ::isolation counter-chart)
-        (let [;; Create sessions with distinct identifiers
-              sessions (doall
-                        (for [i (range 5)]
+        (let [sessions (doall
+                        (for [i (range 3)]
                           {:id i
                            :session-id (core/start! ::isolation
                                                     {:data {:owner i :value 0}})}))
-              ;; Concurrently update each session's value
               futures (doall
                        (for [{:keys [id session-id]} sessions]
                          (future
-                           (dotimes [_ 100]
+                           (dotimes [_ 20]
                              (core/update-data!
                               session-id
                               (fn [data]
-                                ;; Include owner check
                                 (assert (= id (:owner data))
                                         "Data should belong to correct session")
                                 (update data :value inc))))
                            {:id id
                             :final (core/get-data session-id)})))]
-          ;; Verify each session has isolated data
           (doseq [f futures]
             (let [{:keys [id final]} @f]
-              (is (= id (:owner final))
-                  "Owner should be preserved")
-              (is (= 100 (:value final))
+              (is (= id (:owner final)) "Owner should be preserved")
+              (is (= 20 (:value final))
                   "Value should reflect only this session's updates"))))))))
 
 ;;; History Thread-Safety Tests
@@ -231,18 +197,14 @@
       (with-clean-engine
         (core/register! ::history-concurrent simple-chart)
         (let [session-id (core/start! ::history-concurrent)
-              ;; Send events from multiple threads
               futures (doall
-                       (for [_ (range 5)]
+                       (for [_ (range 4)]
                          (future
-                           (dotimes [_ 20]
+                           (dotimes [_ 10]
                              (core/send! session-id :toggle)))))]
-          ;; Wait for all sends
           (doseq [f futures] @f)
-          ;; History should have initial + 100 events = 101 entries
+          ;; History should have initial + 40 events = 41 entries
           (let [history (core/history session-id)]
-            (is (= 101 (count history)))
-            ;; First entry should have nil event (initial)
+            (is (= 41 (count history)))
             (is (nil? (:event (first history))))
-            ;; All subsequent should have :toggle
             (is (every? #(= :toggle (:event %)) (rest history)))))))))

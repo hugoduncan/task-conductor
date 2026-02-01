@@ -76,6 +76,9 @@
 (defonce ^{:doc "Map of session-id to max history size (nil = unlimited)."} history-limits
   (atom {}))
 
+(defonce ^{:doc "Map of session-id to lock object for serializing sends."} session-locks
+  (atom {}))
+
 ;;; Internal Helpers
 
 (defn- generate-session-id []
@@ -153,6 +156,7 @@
      (swap! sessions assoc session-id wmem)
      (swap! histories assoc session-id [init-entry])
      (swap! session-data assoc session-id init-data)
+     (swap! session-locks assoc session-id (Object.))
      (when max-size
        (swap! history-limits assoc session-id max-size))
      session-id)))
@@ -167,18 +171,24 @@
 (defn send!
   "Send an event to a session.
   Returns state-config (set of active states) on success.
-  Throws if session doesn't exist."
+  Throws if session doesn't exist.
+  Thread-safe: concurrent sends to the same session are serialized."
   [session-id event]
-  (if-let [wmem (get @sessions session-id)]
-    (let [processor  (::sc/processor env)
-          new-wmem   (sp/process-event! processor env wmem (evts/new-event event))
-          new-state  (::sc/configuration new-wmem)
-          new-entry  {:state new-state :event event :timestamp (java.time.Instant/now)}
-          max-size   (get @history-limits session-id)]
-      (swap! sessions assoc session-id new-wmem)
-      (swap! histories update session-id
-             (fn [entries] (trim-history (conj entries new-entry) max-size)))
-      new-state)
+  (if-let [lock (get @session-locks session-id)]
+    (locking lock
+      (if-let [wmem (get @sessions session-id)]
+        (let [processor  (::sc/processor env)
+              new-wmem   (sp/process-event! processor env wmem (evts/new-event event))
+              new-state  (::sc/configuration new-wmem)
+              new-entry  {:state new-state :event event :timestamp (java.time.Instant/now)}
+              max-size   (get @history-limits session-id)]
+          (swap! sessions assoc session-id new-wmem)
+          (swap! histories update session-id
+                 (fn [entries] (trim-history (conj entries new-entry) max-size)))
+          new-state)
+        ;; Session was stopped while we held the lock
+        (throw (ex-info "Session not found"
+                        {:error :session-not-found :session-id session-id}))))
     (throw (ex-info "Session not found"
                     {:error :session-not-found :session-id session-id}))))
 
@@ -192,6 +202,7 @@
       (swap! histories dissoc session-id)
       (swap! history-limits dissoc session-id)
       (swap! session-data dissoc session-id)
+      (swap! session-locks dissoc session-id)
       session-id)
     (throw (ex-info "Session not found"
                     {:error :session-not-found :session-id session-id}))))
@@ -203,7 +214,8 @@
   (reset! sessions {})
   (reset! histories {})
   (reset! history-limits {})
-  (reset! session-data {}))
+  (reset! session-data {})
+  (reset! session-locks {}))
 
 ;;; Introspection API
 

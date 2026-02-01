@@ -390,7 +390,7 @@
       :connected? true/false}]"
   []
   (vec
-   (for [{:keys [id type]} (generic-registry/list-dev-envs)
+   (for [{:keys [dev-env/id type]} (generic-registry/list-dev-envs)
          :when (= :emacs type)
          :let [dev-env (generic-registry/get-dev-env id)]]
      {:dev-env-id id
@@ -414,7 +414,7 @@
    (list-healthy-dev-envs default-ping-timeout-ms))
   ([timeout-ms]
    (vec
-    (for [{:keys [id type]} (generic-registry/list-dev-envs)
+    (for [{:keys [dev-env/id type]} (generic-registry/list-dev-envs)
           :when (= :emacs type)
           :let [dev-env (generic-registry/get-dev-env id)]
           :when (connected? dev-env)
