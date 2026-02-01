@@ -141,24 +141,30 @@
 
 (defn- on-skill-complete
   "Handle skill completion. Re-derives state and sends event to statechart.
-   Called from virtual thread when claude-cli promise delivers."
+   Called from virtual thread when claude-cli promise delivers.
+   Guards against session being stopped during skill execution."
   [session-id result]
-  (let [data (sc/get-data session-id)
-        {:keys [project-dir task-id task-type]} data]
-    (if (:error result)
-      ;; Skill failed - send error event
-      (sc/send! session-id :error)
-      ;; Skill succeeded - re-derive state and send as event
-      (let [task (fetch-task project-dir task-id)
-            children (when (= :story task-type)
-                       (fetch-children project-dir task-id))
-            new-state (if (= :story task-type)
-                        (work-on/derive-story-state
-                         (task->work-on-map task)
-                         (mapv task->work-on-map children))
-                        (work-on/derive-task-state
-                         (task->work-on-map task)))]
-        (sc/send! session-id new-state)))))
+  (try
+    (let [data (sc/get-data session-id)
+          {:keys [project-dir task-id task-type]} data]
+      (if (:error result)
+        ;; Skill failed - send error event
+        (sc/send! session-id :error)
+        ;; Skill succeeded - re-derive state and send as event
+        (let [task (fetch-task project-dir task-id)
+              children (when (= :story task-type)
+                         (fetch-children project-dir task-id))
+              new-state (if (= :story task-type)
+                          (work-on/derive-story-state
+                           (task->work-on-map task)
+                           (mapv task->work-on-map children))
+                          (work-on/derive-task-state
+                           (task->work-on-map task)))]
+          (sc/send! session-id new-state))))
+    (catch clojure.lang.ExceptionInfo e
+      ;; Session was stopped during skill execution - ignore
+      (when-not (= :session-not-found (:error (ex-data e)))
+        (throw e)))))
 
 (graph/defmutation invoke-skill!
   "Invoke a skill via claude-cli based on current statechart state.
