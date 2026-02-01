@@ -100,7 +100,7 @@
    containing .mcp-tasks.edn when tests are run."
   (System/getProperty "user.dir"))
 
-(deftest list-tasks-integration-test
+(deftest ^:integration list-tasks-integration-test
   (testing "list-tasks"
     (testing "with valid project-dir"
       (testing "returns parsed EDN with :tasks key"
@@ -132,7 +132,7 @@
           (is (= :io-error (:error result)))
           (is (string? (:message result))))))))
 
-(deftest show-task-integration-test
+(deftest ^:integration show-task-integration-test
   (testing "show-task"
     (testing "with valid task-id"
       (testing "returns parsed EDN with :task key"
@@ -153,7 +153,7 @@
 ;; Tests the low-level CLI execution function.
 ;; Contracts: returns parsed EDN on success, error map on failure.
 
-(deftest run-cli-test
+(deftest ^:integration run-cli-test
   (testing "run-cli"
     (testing "with valid command"
       (testing "returns parsed EDN"
@@ -313,7 +313,7 @@
 ;; Tests the full lifecycle of task mutations: add -> complete -> reopen -> delete.
 ;; Creates a temporary task and cleans up after.
 
-(deftest mutation-lifecycle-integration-test
+(deftest ^:integration mutation-lifecycle-integration-test
   ;; Full lifecycle test: add -> update -> complete -> reopen -> delete
   ;; Uses a unique title to avoid conflicts with real tasks.
   (testing "task mutation lifecycle"
@@ -358,7 +358,7 @@
                                                          :task-id task-id})]
                     (is (not (:error delete-result)))))))))))))
 
-(deftest why-blocked-integration-test
+(deftest ^:integration why-blocked-integration-test
   (testing "why-blocked"
     (testing "with unblocked task"
       (testing "returns blocking info"
