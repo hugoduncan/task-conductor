@@ -4,6 +4,7 @@
    Registered on namespace load."
   (:require
    [com.wsscode.pathom3.connect.operation :as pco]
+   [task-conductor.claude-cli.interface :as claude-cli]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
    [task-conductor.project.work-on :as work-on]
@@ -119,7 +120,10 @@
       (let [is-story (story? task)
             children (when is-story (fetch-children project-dir id))
             chart-id (if is-story :work-on/story :work-on/task)
-            session-id (sc/start! chart-id)
+            initial-data {:project-dir project-dir
+                          :task-id id
+                          :task-type (if is-story :story :task)}
+            session-id (sc/start! chart-id {:data initial-data})
             initial-state (derive-initial-state task children)
             ;; Register dev-env hook for PR merge notification
             selected (graph/query [:dev-env/selected])
@@ -133,6 +137,80 @@
         {:work-on/session-id session-id
          :work-on/initial-state initial-state}))))
 
+;;; Skill Invocation
+
+(defn- on-skill-complete
+  "Handle skill completion. Re-derives state and sends event to statechart.
+   Called from virtual thread when claude-cli promise delivers."
+  [session-id result]
+  (let [data (sc/get-data session-id)
+        {:keys [project-dir task-id task-type]} data]
+    (if (:error result)
+      ;; Skill failed - send error event
+      (sc/send! session-id :error)
+      ;; Skill succeeded - re-derive state and send as event
+      (let [task (fetch-task project-dir task-id)
+            children (when (= :story task-type)
+                       (fetch-children project-dir task-id))
+            new-state (if (= :story task-type)
+                        (work-on/derive-story-state
+                         (task->work-on-map task)
+                         (mapv task->work-on-map children))
+                        (work-on/derive-task-state
+                         (task->work-on-map task)))]
+        (sc/send! session-id new-state)))))
+
+(graph/defmutation invoke-skill!
+  "Invoke a skill via claude-cli based on current statechart state.
+   Called from statechart entry actions. Spawns virtual thread to
+   wait for completion and trigger next transition.
+
+   Input (injected by statechart engine):
+     :engine/session-id - statechart session ID
+     :skill             - skill name to invoke
+
+   Returns immediately with invocation status."
+  [{:keys [skill] :engine/keys [session-id]}]
+  {::pco/output [:invoke-skill/status :invoke-skill/error]}
+  (let [data (sc/get-data session-id)
+        {:keys [project-dir]} data
+        prompt (str "/" skill)
+        handle (claude-cli/invoke {:prompt prompt :dir project-dir})]
+    ;; Spawn virtual thread to wait for completion
+    (Thread/startVirtualThread
+     (fn []
+       (let [result @(:result-promise handle)]
+         (on-skill-complete session-id result))))
+    {:invoke-skill/status :started}))
+
+(graph/defmutation escalate-to-dev-env!
+  "Escalate to dev-env for human intervention.
+   Called from statechart :escalated state entry action.
+
+   Input (injected by statechart engine):
+     :engine/session-id - statechart session ID
+
+   Notifies the selected dev-env of the failure."
+  [{:engine/keys [session-id]}]
+  {::pco/output [:escalate/status :escalate/error]}
+  (let [data (sc/get-data session-id)
+        {:keys [project-dir task-id]} data
+        selected (graph/query [:dev-env/selected])
+        dev-env-id (:dev-env/id (:dev-env/selected selected))]
+    (if dev-env-id
+      ;; Start an interactive session in the dev-env for human intervention
+      (do
+        (graph/query [`(task-conductor.dev-env.resolvers/dev-env-start-session!
+                        {:dev-env/id ~dev-env-id
+                         :dev-env/session-id ~session-id
+                         :dev-env/opts {:dir ~project-dir
+                                        :task-id ~task-id}})])
+        {:escalate/status :escalated
+         :escalate/dev-env-id dev-env-id})
+      {:escalate/status :no-dev-env
+       :escalate/error {:error :no-dev-env
+                        :message "No dev-env available for escalation"}})))
+
 ;;; Registration
 
 (def all-operations
@@ -143,7 +221,9 @@
    project-create!
    project-update!
    project-delete!
-   work-on!])
+   work-on!
+   invoke-skill!
+   escalate-to-dev-env!])
 
 (defn register-resolvers!
   "Register all project resolvers and mutations with pathom-graph.

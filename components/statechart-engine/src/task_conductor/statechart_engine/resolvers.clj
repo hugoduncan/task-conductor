@@ -28,6 +28,11 @@
    ::pco/output [:engine/session-history]}
   {:engine/session-history (core/history session-id)})
 
+(graph/defresolver engine-session-data [{:engine/keys [session-id]}]
+  {::pco/input [:engine/session-id]
+   ::pco/output [:engine/session-data]}
+  {:engine/session-data (core/get-data session-id)})
+
 ;;; Mutations
 
 (graph/defmutation engine-start! [{:engine/keys [chart-id]}]
@@ -96,6 +101,7 @@
    engine-charts
    engine-session-state
    engine-session-history
+   engine-session-data
    engine-start!
    engine-send!
    engine-stop!

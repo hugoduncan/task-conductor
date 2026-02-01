@@ -273,3 +273,66 @@
           (dotimes [_ 10] (core/send! session-id :toggle))
           (let [entries (core/history session-id)]
             (is (= 11 (count entries)))))))))
+
+;;; Session Data Tests
+
+(deftest get-data-test
+  ;; Tests session data storage and retrieval.
+  (testing "get-data"
+    (testing "returns empty map when no initial data provided"
+      (with-clean-engine
+        (core/register! ::data-empty simple-chart)
+        (let [session-id (core/start! ::data-empty)
+              data (core/get-data session-id)]
+          ;; Only session-id is auto-added
+          (is (= {:session-id session-id} data)))))
+
+    (testing "returns initial data when provided"
+      (with-clean-engine
+        (core/register! ::data-init simple-chart)
+        (let [session-id (core/start! ::data-init {:data {:foo "bar" :count 42}})
+              data (core/get-data session-id)]
+          (is (= "bar" (:foo data)))
+          (is (= 42 (:count data)))
+          (is (= session-id (:session-id data))))))
+
+    (testing "throws when session not found"
+      (with-clean-engine
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not found"
+                              (core/get-data "no-such-session")))))))
+
+(deftest update-data!-test
+  ;; Tests session data updates.
+  (testing "update-data!"
+    (testing "updates data using provided function"
+      (with-clean-engine
+        (core/register! ::data-update simple-chart)
+        (let [session-id (core/start! ::data-update {:data {:count 0}})
+              result (core/update-data! session-id #(update % :count inc))]
+          (is (= 1 (:count result)))
+          (is (= 1 (:count (core/get-data session-id)))))))
+
+    (testing "adds new keys"
+      (with-clean-engine
+        (core/register! ::data-add simple-chart)
+        (let [session-id (core/start! ::data-add {:data {:a 1}})
+              result (core/update-data! session-id #(assoc % :b 2))]
+          (is (= 1 (:a result)))
+          (is (= 2 (:b result))))))
+
+    (testing "throws when session not found"
+      (with-clean-engine
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not found"
+                              (core/update-data! "no-such-session" identity)))))))
+
+(deftest session-data-cleanup-test
+  ;; Tests that session data is cleaned up when session stops.
+  (testing "session data cleanup"
+    (testing "clears data when session stopped"
+      (with-clean-engine
+        (core/register! ::data-stop simple-chart)
+        (let [session-id (core/start! ::data-stop {:data {:keep "me"}})]
+          (is (= "me" (:keep (core/get-data session-id))))
+          (core/stop! session-id)
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not found"
+                                (core/get-data session-id))))))))

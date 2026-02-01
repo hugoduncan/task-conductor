@@ -5,6 +5,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
+   [task-conductor.claude-cli.interface :as claude-cli]
    [task-conductor.dev-env.protocol :as dev-env-protocol]
    [task-conductor.dev-env.registry :as dev-env-registry]
    [task-conductor.pathom-graph.interface :as graph]
@@ -335,4 +336,171 @@
                   session-id (:work-on/session-id work-on-result)]
               (is (string? session-id))
               ;; Verify hook was registered by checking the dev-env's hooks atom
-              (is (= 1 (count @(:hooks dev-env)))))))))))
+              (is (= 1 (count @(:hooks dev-env)))))))))
+
+    (testing "stores session data including task context"
+      (with-work-on-state
+        (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                             {:task/type :story
+                                              :task/status :open
+                                              :task/meta {:refined "true"}})
+                      resolvers/fetch-children (fn [_dir _id]
+                                                 [{:task/status :open}])
+                      graph/query (let [orig graph/query]
+                                    (fn
+                                      ([q] (if (= [:dev-env/selected] q)
+                                             {:dev-env/selected nil}
+                                             (orig q)))
+                                      ([e q] (orig e q))))]
+          (let [result (graph/query [`(resolvers/work-on!
+                                       {:task/project-dir "/my/project"
+                                        :task/id 555})])
+                work-on-result (get result `resolvers/work-on!)
+                session-id (:work-on/session-id work-on-result)
+                data (sc/get-data session-id)]
+            (is (= "/my/project" (:project-dir data)))
+            (is (= 555 (:task-id data)))
+            (is (= :story (:task-type data)))
+            (is (= session-id (:session-id data)))))))))
+
+;;; Invoke Skill Tests
+
+(deftest invoke-skill-test
+  ;; Verify invoke-skill! starts claude-cli and returns immediately.
+  ;; Uses virtual thread to wait for completion.
+  (testing "invoke-skill!"
+    (testing "invokes claude-cli with skill prompt"
+      (with-work-on-state
+        (let [invoked-opts (atom nil)
+              mock-promise (promise)]
+          (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                               {:task/type :task
+                                                :task/status :open
+                                                :task/meta {:refined "true"}})
+                        resolvers/fetch-children (fn [_dir _id] [])
+                        claude-cli/invoke (fn [opts]
+                                            (reset! invoked-opts opts)
+                                            {:result-promise mock-promise})
+                        graph/query (let [orig graph/query]
+                                      (fn
+                                        ([q] (if (= [:dev-env/selected] q)
+                                               {:dev-env/selected nil}
+                                               (orig q)))
+                                        ([e q] (orig e q))))]
+            ;; Start a work-on session to get valid session-id with data
+            (let [work-result (graph/query [`(resolvers/work-on!
+                                              {:task/project-dir "/test/dir"
+                                               :task/id 99})])
+                  session-id (:work-on/session-id (get work-result `resolvers/work-on!))
+                  ;; Now invoke skill
+                  result (graph/query [`(resolvers/invoke-skill!
+                                         {:skill "mcp-tasks:refine-task"
+                                          :engine/session-id ~session-id})])
+                  invoke-result (get result `resolvers/invoke-skill!)]
+              (is (= :started (:invoke-skill/status invoke-result)))
+              (is (= "/mcp-tasks:refine-task" (:prompt @invoked-opts)))
+              (is (= "/test/dir" (:dir @invoked-opts)))
+              ;; Deliver the promise to clean up virtual thread
+              (deliver mock-promise {:exit-code 0 :events []}))))))
+
+    (testing "sends error event on skill failure"
+      (with-work-on-state
+        (let [mock-promise (promise)
+              events-sent (atom [])]
+          (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                               {:task/type :task
+                                                :task/status :open
+                                                :task/meta {:refined "true"}})
+                        resolvers/fetch-children (fn [_dir _id] [])
+                        claude-cli/invoke (fn [_opts]
+                                            {:result-promise mock-promise})
+                        sc/send! (fn [sid event]
+                                   (swap! events-sent conj {:session-id sid :event event})
+                                   #{:escalated})
+                        graph/query (let [orig graph/query]
+                                      (fn
+                                        ([q] (if (= [:dev-env/selected] q)
+                                               {:dev-env/selected nil}
+                                               (orig q)))
+                                        ([e q] (orig e q))))]
+            (let [work-result (graph/query [`(resolvers/work-on!
+                                              {:task/project-dir "/test"
+                                               :task/id 100})])
+                  session-id (:work-on/session-id (get work-result `resolvers/work-on!))
+                  _ (graph/query [`(resolvers/invoke-skill!
+                                    {:skill "mcp-tasks:refine-task"
+                                     :engine/session-id ~session-id})])]
+              ;; Deliver error result
+              (deliver mock-promise {:error :timeout})
+              ;; Wait for virtual thread to process
+              (Thread/sleep 100)
+              (is (= 1 (count @events-sent)))
+              (is (= :error (:event (first @events-sent)))))))))))
+
+;;; Escalate to Dev-env Tests
+
+(deftest escalate-to-dev-env-test
+  ;; Verify escalate-to-dev-env! starts a dev-env session for human intervention.
+  (testing "escalate-to-dev-env!"
+    (testing "starts dev-env session when available"
+      (with-work-on-state
+        (let [dev-env (dev-env-protocol/make-noop-dev-env)
+              dev-env-id (dev-env-registry/register! dev-env :test)
+              session-started (atom nil)]
+          (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                               {:task/type :task
+                                                :task/status :open
+                                                :task/meta {:refined "true"}})
+                        resolvers/fetch-children (fn [_dir _id] [])
+                        graph/query (let [orig graph/query]
+                                      (fn
+                                        ([q]
+                                         (cond
+                                           (= [:dev-env/selected] q)
+                                           {:dev-env/selected {:dev-env/id dev-env-id}}
+
+                                           ;; Handle dev-env-start-session! call
+                                           (and (vector? q)
+                                                (seq? (first q))
+                                                (= 'task-conductor.dev-env.resolvers/dev-env-start-session!
+                                                   (first (first q))))
+                                           (do
+                                             (reset! session-started (second (first q)))
+                                             {:dev-env/session-result {:started true}})
+
+                                           :else
+                                           (orig q)))
+                                        ([e q] (orig e q))))]
+            (let [work-result (graph/query [`(resolvers/work-on!
+                                              {:task/project-dir "/test"
+                                               :task/id 200})])
+                  session-id (:work-on/session-id (get work-result `resolvers/work-on!))
+                  result (graph/query [`(resolvers/escalate-to-dev-env!
+                                         {:engine/session-id ~session-id})])
+                  escalate-result (get result `resolvers/escalate-to-dev-env!)]
+              (is (= :escalated (:escalate/status escalate-result)))
+              (is (= dev-env-id (:escalate/dev-env-id escalate-result)))
+              (is (some? @session-started)))))))
+
+    (testing "returns error when no dev-env available"
+      (with-work-on-state
+        (with-redefs [resolvers/fetch-task (fn [_dir _id]
+                                             {:task/type :task
+                                              :task/status :open
+                                              :task/meta {:refined "true"}})
+                      resolvers/fetch-children (fn [_dir _id] [])
+                      graph/query (let [orig graph/query]
+                                    (fn
+                                      ([q] (if (= [:dev-env/selected] q)
+                                             {:dev-env/selected nil}
+                                             (orig q)))
+                                      ([e q] (orig e q))))]
+          (let [work-result (graph/query [`(resolvers/work-on!
+                                            {:task/project-dir "/test"
+                                             :task/id 201})])
+                session-id (:work-on/session-id (get work-result `resolvers/work-on!))
+                result (graph/query [`(resolvers/escalate-to-dev-env!
+                                       {:engine/session-id ~session-id})])
+                escalate-result (get result `resolvers/escalate-to-dev-env!)]
+            (is (= :no-dev-env (:escalate/status escalate-result)))
+            (is (= :no-dev-env (:error (:escalate/error escalate-result))))))))))

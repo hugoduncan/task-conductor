@@ -139,21 +139,24 @@
     ;; Unrefined - needs task refinement
                  (sc/state {:id :unrefined}
                            (sc/on-entry {}
-                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:refine-task"})}))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "mcp-tasks:refine-task"})}))
                            (sc/transition {:event :refined :target :refined})
                            (sc/transition {:event :error :target :escalated}))
 
     ;; Refined - ready for execution
                  (sc/state {:id :refined}
                            (sc/on-entry {}
-                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:execute-task"})}))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "mcp-tasks:execute-task"})}))
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
                            (sc/transition {:event :error :target :escalated}))
 
     ;; Awaiting PR - task executed, needs PR creation
                  (sc/state {:id :awaiting-pr}
                            (sc/on-entry {}
-                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:create-task-pr"})}))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "mcp-tasks:create-task-pr"})}))
                            (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
                            (sc/transition {:event :error :target :escalated}))
 
@@ -169,7 +172,7 @@
     ;; Escalated - error occurred, notify dev-env for human intervention
                  (sc/state {:id :escalated}
                            (sc/on-entry {}
-                                        (sc/action {:expr `(escalate-to-dev-env! {})})))))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/escalate-to-dev-env! {})})))))
 
 (def story-statechart
   "Statechart for story execution.
@@ -194,21 +197,24 @@
     ;; Unrefined - needs story refinement
                  (sc/state {:id :unrefined}
                            (sc/on-entry {}
-                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:refine-task"})}))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "mcp-tasks:refine-task"})}))
                            (sc/transition {:event :refined :target :refined})
                            (sc/transition {:event :error :target :escalated}))
 
     ;; Refined - needs task creation
                  (sc/state {:id :refined}
                            (sc/on-entry {}
-                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:create-story-tasks"})}))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "mcp-tasks:create-story-tasks"})}))
                            (sc/transition {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :error :target :escalated}))
 
     ;; Has tasks - execute next incomplete child task
                  (sc/state {:id :has-tasks}
                            (sc/on-entry {}
-                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:execute-story-child"})}))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "mcp-tasks:execute-story-child"})}))
       ;; Can stay in has-tasks (more children) or move to review
                            (sc/transition {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :awaiting-review :target :awaiting-review})
@@ -217,7 +223,8 @@
     ;; Awaiting review - all children complete, needs code review
                  (sc/state {:id :awaiting-review}
                            (sc/on-entry {}
-                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:review-story-implementation"})}))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "mcp-tasks:review-story-implementation"})}))
       ;; Review may find issues requiring more work
                            (sc/transition {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
@@ -226,7 +233,8 @@
     ;; Awaiting PR - reviewed, needs PR creation
                  (sc/state {:id :awaiting-pr}
                            (sc/on-entry {}
-                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:create-story-pr"})}))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "mcp-tasks:create-story-pr"})}))
                            (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
                            (sc/transition {:event :error :target :escalated}))
 
@@ -242,7 +250,7 @@
     ;; Escalated - error occurred, notify dev-env for human intervention
                  (sc/state {:id :escalated}
                            (sc/on-entry {}
-                                        (sc/action {:expr `(escalate-to-dev-env! {})})))))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/escalate-to-dev-env! {})})))))
 
 ;;; Statechart Registration
 ;; Register statecharts on namespace load for use by work-on! mutation.
