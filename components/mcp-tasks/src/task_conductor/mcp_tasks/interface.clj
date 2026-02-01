@@ -148,9 +148,9 @@
     :category       - New category (string)
     :type           - New type: :task, :bug, :feature, :story, :chore
     :parent-id      - New parent task ID (integer, nil to remove)
-    :meta           - Metadata map (map, serialized as JSON)
-    :relations      - Relations vector (vector, serialized as JSON)
-    :session-events - Session events (serialized as JSON)
+    :meta           - Metadata map (JSON-serialized via cheshire)
+    :relations      - Relations vector (JSON-serialized via cheshire)
+    :session-events - Session events (JSON-serialized via cheshire)
     :shared-context - String to append to shared context
     :code-reviewed  - ISO-8601 timestamp (string)
     :pr-num         - GitHub PR number (integer)
