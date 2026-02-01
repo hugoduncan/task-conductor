@@ -161,3 +161,16 @@
   With optional n parameter, returns only the last n entries.
   Throws if session doesn't exist."
   core/history)
+
+;;; Session Data Functions
+
+(def get-data
+  "Get the data model for a session.
+  Returns the data map. Throws if session doesn't exist."
+  core/get-data)
+
+(def update-data!
+  "Update the data model for a session.
+  f is a function that takes the current data and returns new data.
+  Returns the new data. Throws if session doesn't exist."
+  core/update-data!)

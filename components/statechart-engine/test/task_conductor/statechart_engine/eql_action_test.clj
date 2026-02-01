@@ -41,10 +41,21 @@
   (swap! call-log conj [:mutation :test/mutate! data])
   {:test/result (str "processed:" data)})
 
+(graph/defmutation test-capture-session! [{:engine/keys [session-id] :test/keys [data]}]
+  {::pco/output [:test/result]}
+  (swap! call-log conj [:mutation :test/capture-session! session-id data])
+  {:test/result {:session-id session-id :data data}})
+
+(graph/defmutation test-no-params! [{:engine/keys [session-id]}]
+  {::pco/output [:test/result]}
+  (swap! call-log conj [:mutation :test/no-params! session-id])
+  {:test/result :success})
+
 (defn register-test-ops!
   "Register test resolvers and mutations."
   []
-  (graph/register! [test-value test-parameterized test-error test-mutate!]))
+  (graph/register! [test-value test-parameterized test-error test-mutate!
+                    test-capture-session! test-no-params!]))
 
 (defn reset-call-log! []
   (reset! call-log []))
@@ -115,6 +126,31 @@
                  (sc/state {:id :active}
                            (sc/on-entry {}
                                         (sc/action {:expr [:test/error]})))))
+
+(defn session-id-injection-chart
+  "Chart with action that captures injected session-id."
+  []
+  (sc/statechart {}
+                 (sc/initial {}
+                             (sc/transition {:target :idle}))
+                 (sc/state {:id :idle}
+                           (sc/transition {:event :go :target :active}))
+                 (sc/state {:id :active}
+                           (sc/on-entry {}
+                                        (sc/action {:expr '(task-conductor.statechart-engine.eql-action-test/test-capture-session!
+                                                            {:test/data "injected"})})))))
+
+(defn no-params-chart
+  "Chart with action that calls mutation without params."
+  []
+  (sc/statechart {}
+                 (sc/initial {}
+                             (sc/transition {:target :idle}))
+                 (sc/state {:id :idle}
+                           (sc/transition {:event :go :target :active}))
+                 (sc/state {:id :active}
+                           (sc/on-entry {}
+                                        (sc/action {:expr '(task-conductor.statechart-engine.eql-action-test/test-no-params!)})))))
 
 ;;; Tests
 
@@ -288,6 +324,33 @@
                  (sc/state {:id :bad}
                            (sc/on-entry {}
                                         (sc/action {:expr "unsupported-string"})))))
+
+(deftest session-id-injection-test
+  ;; Verifies that mutations executed from statechart actions receive
+  ;; the session-id automatically injected into their params.
+  (testing "session-id injection"
+    (testing "injects session-id into mutation params"
+      (with-clean-state
+        (register-test-ops!)
+        (reset-call-log!)
+        (sc/register! ::inject-chart (session-id-injection-chart))
+        (let [sid (sc/start! ::inject-chart)]
+          (sc/send! sid :go)
+          (is (= 1 (count @call-log)))
+          (let [[_type _name session-id data] (first @call-log)]
+            (is (= sid session-id) "Session ID matches statechart session")
+            (is (= "injected" data))))))
+
+    (testing "handles mutations without params"
+      (with-clean-state
+        (register-test-ops!)
+        (reset-call-log!)
+        (sc/register! ::no-params-chart (no-params-chart))
+        (let [sid (sc/start! ::no-params-chart)]
+          (sc/send! sid :go)
+          (is (= 1 (count @call-log)))
+          (let [[_type _name session-id] (first @call-log)]
+            (is (= sid session-id) "Session ID injected for param-less mutation")))))))
 
 (deftest unknown-expression-type-test
   ;; Verifies EQLExecutionModel throws on unsupported expression types.

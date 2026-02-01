@@ -26,11 +26,11 @@
               id2 (registry/register! dev-env2 :terminal)
               result (graph/query [:dev-env/available])
               available (:dev-env/available result)
-              by-id (into {} (map (juxt :id identity)) available)]
+              by-id (into {} (map (juxt :dev-env/id identity)) available)]
           (is (= 2 (count available)))
-          (is (= {:id id1 :type :emacs :meta {:name "e1"}}
+          (is (= {:dev-env/id id1 :type :emacs :meta {:name "e1"}}
                  (get by-id id1)))
-          (is (= {:id id2 :type :terminal :meta {}}
+          (is (= {:dev-env/id id2 :type :terminal :meta {}}
                  (get by-id id2))))))))
 
 (deftest dev-env-selected-test
@@ -45,7 +45,7 @@
               id (registry/register! dev-env :emacs {:host "local"})
               result (graph/query [:dev-env/selected])
               selected (:dev-env/selected result)]
-          (is (= id (:id selected)))
+          (is (= id (:dev-env/id selected)))
           (is (= :emacs (:type selected)))
           (is (= {:host "local"} (:meta selected)))
           (is (some? (:dev-env selected))))))))

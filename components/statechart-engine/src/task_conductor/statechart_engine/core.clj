@@ -12,34 +12,45 @@
 
 ;;; EQL Executor
 
+(defn- inject-session-id
+  "Inject :engine/session-id into mutation params.
+  Handles mutations with or without params."
+  [expression session-id]
+  (let [mutation-sym (first expression)
+        params (or (second expression) {})]
+    (list mutation-sym (assoc params :engine/session-id session-id))))
+
 (defrecord EQLExecutionModel []
   sp/ExecutionModel
   (run-expression! [_this env expression]
     ;; expression is the :expr from action/assign elements
     ;; env contains statechart context including data-model
     (when expression
-      (cond
-        ;; EQL vector - run as query
-        (vector? expression)
-        (graph/query expression)
+      ;; Session-id is stored in working memory, not directly in env
+      (let [vwmem (::sc/vwmem env)
+            session-id (when vwmem (::sc/session-id @vwmem))]
+        (cond
+          ;; EQL vector - run as query
+          (vector? expression)
+          (graph/query expression)
 
-        ;; Function - call with env and data (for assign compatibility)
-        ;; Assign expressions expect (fn [env data] ...) signature
-        (fn? expression)
-        (let [data-model (::sc/data-model env)
-              wmem       (::sc/vwmem env)
-              data       (sp/get-at data-model wmem [])]
-          (expression env data))
+          ;; Function - call with env and data (for assign compatibility)
+          ;; Assign expressions expect (fn [env data] ...) signature
+          (fn? expression)
+          (let [data-model (::sc/data-model env)
+                data       (sp/get-at data-model vwmem [])]
+            (expression env data))
 
-        ;; Symbol list (mutation call) - wrap and run
-        ;; Use seq? to handle both lists and Cons (from syntax-quote)
-        (and (seq? expression) (symbol? (first expression)))
-        (graph/query [expression])
+          ;; Symbol list (mutation call) - wrap and run
+          ;; Inject session-id into params for context access
+          ;; Use seq? to handle both lists and Cons (from syntax-quote)
+          (and (seq? expression) (symbol? (first expression)))
+          (graph/query [(inject-session-id expression session-id)])
 
-        :else
-        (throw (ex-info "Unknown action expression type"
-                        {:expression expression
-                         :type (type expression)}))))))
+          :else
+          (throw (ex-info "Unknown action expression type"
+                          {:expression expression
+                           :type (type expression)})))))))
 
 (defn- eql-env
   "Create statechart env with EQL execution model."
@@ -65,10 +76,16 @@
 (defonce ^{:doc "Map of session-id to max history size (nil = unlimited)."} history-limits
   (atom {}))
 
+(defonce ^{:doc "Map of session-id to lock object for serializing sends."} session-locks
+  (atom {}))
+
 ;;; Internal Helpers
 
 (defn- generate-session-id []
   (str (java.util.UUID/randomUUID)))
+
+(defonce ^{:doc "Map of session-id to data model values."} session-data
+  (atom {}))
 
 (defn- valid-chart-def?
   "Returns true if chart-def is a valid statechart definition."
@@ -121,6 +138,7 @@
   "Start a new session of the registered chart.
   Options:
     :max-history-size - limit history entries (nil = unlimited, default)
+    :data             - initial data model map (stored for introspection)
   Returns session-id on success. Throws if chart not registered."
   ([chart-name] (start! chart-name nil))
   ([chart-name opts]
@@ -133,9 +151,12 @@
                                {::sc/session-id session-id})
          init-state (::sc/configuration wmem)
          init-entry {:state init-state :event nil :timestamp (java.time.Instant/now)}
-         max-size   (:max-history-size opts)]
+         max-size   (:max-history-size opts)
+         init-data  (assoc (:data opts) :session-id session-id)]
      (swap! sessions assoc session-id wmem)
      (swap! histories assoc session-id [init-entry])
+     (swap! session-data assoc session-id init-data)
+     (swap! session-locks assoc session-id (Object.))
      (when max-size
        (swap! history-limits assoc session-id max-size))
      session-id)))
@@ -150,18 +171,24 @@
 (defn send!
   "Send an event to a session.
   Returns state-config (set of active states) on success.
-  Throws if session doesn't exist."
+  Throws if session doesn't exist.
+  Thread-safe: concurrent sends to the same session are serialized."
   [session-id event]
-  (if-let [wmem (get @sessions session-id)]
-    (let [processor  (::sc/processor env)
-          new-wmem   (sp/process-event! processor env wmem (evts/new-event event))
-          new-state  (::sc/configuration new-wmem)
-          new-entry  {:state new-state :event event :timestamp (java.time.Instant/now)}
-          max-size   (get @history-limits session-id)]
-      (swap! sessions assoc session-id new-wmem)
-      (swap! histories update session-id
-             (fn [entries] (trim-history (conj entries new-entry) max-size)))
-      new-state)
+  (if-let [lock (get @session-locks session-id)]
+    (locking lock
+      (if-let [wmem (get @sessions session-id)]
+        (let [processor  (::sc/processor env)
+              new-wmem   (sp/process-event! processor env wmem (evts/new-event event))
+              new-state  (::sc/configuration new-wmem)
+              new-entry  {:state new-state :event event :timestamp (java.time.Instant/now)}
+              max-size   (get @history-limits session-id)]
+          (swap! sessions assoc session-id new-wmem)
+          (swap! histories update session-id
+                 (fn [entries] (trim-history (conj entries new-entry) max-size)))
+          new-state)
+        ;; Session was stopped while we held the lock
+        (throw (ex-info "Session not found"
+                        {:error :session-not-found :session-id session-id}))))
     (throw (ex-info "Session not found"
                     {:error :session-not-found :session-id session-id}))))
 
@@ -174,6 +201,8 @@
       (swap! sessions dissoc session-id)
       (swap! histories dissoc session-id)
       (swap! history-limits dissoc session-id)
+      (swap! session-data dissoc session-id)
+      (swap! session-locks dissoc session-id)
       session-id)
     (throw (ex-info "Session not found"
                     {:error :session-not-found :session-id session-id}))))
@@ -184,7 +213,9 @@
   (reset! charts #{})
   (reset! sessions {})
   (reset! histories {})
-  (reset! history-limits {}))
+  (reset! history-limits {})
+  (reset! session-data {})
+  (reset! session-locks {}))
 
 ;;; Introspection API
 
@@ -259,3 +290,24 @@
      (vec (take-last n entries))
      (throw (ex-info "Session not found"
                      {:error :session-not-found :session-id session-id})))))
+
+;;; Session Data API
+
+(defn get-data
+  "Get the data model for a session.
+  Returns the data map. Throws if session doesn't exist."
+  [session-id]
+  (if (contains? @sessions session-id)
+    (get @session-data session-id)
+    (throw (ex-info "Session not found"
+                    {:error :session-not-found :session-id session-id}))))
+
+(defn update-data!
+  "Update the data model for a session.
+  f is a function that takes the current data and returns new data.
+  Returns the new data. Throws if session doesn't exist."
+  [session-id f]
+  (if (contains? @sessions session-id)
+    (get (swap! session-data update session-id f) session-id)
+    (throw (ex-info "Session not found"
+                    {:error :session-not-found :session-id session-id}))))
