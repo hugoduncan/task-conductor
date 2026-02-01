@@ -79,7 +79,8 @@
     (:task/all result)))
 
 (defn- story?
-  "Check if task is a story type."
+  "Check if task is a story type.
+  Assumes :task/type is a keyword from EDN parsing (e.g., :story, :task)."
   [task]
   (= :story (:task/type task)))
 
