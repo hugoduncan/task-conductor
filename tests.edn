@@ -7,6 +7,7 @@
                           "components/claude-cli/src"
                           "components/dev-env/src"
                           "components/emacs-dev-env/src"
+                          "components/mcp-tasks/src"
                           "components/pathom-graph/src"
                           "components/project/src"
                           "components/statechart-engine/src"]
@@ -14,6 +15,7 @@
                           "components/claude-cli/test"
                           "components/dev-env/test"
                           "components/emacs-dev-env/test"
+                          "components/mcp-tasks/test"
                           "components/pathom-graph/test"
                           "components/project/test"
                           "components/statechart-engine/test"]

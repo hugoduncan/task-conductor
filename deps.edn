@@ -3,6 +3,7 @@
         task-conductor/claude-cli {:local/root "components/claude-cli"}
         task-conductor/dev-env {:local/root "components/dev-env"}
         task-conductor/emacs-dev-env {:local/root "components/emacs-dev-env"}
+        task-conductor/mcp-tasks {:local/root "components/mcp-tasks"}
         task-conductor/pathom-graph {:local/root "components/pathom-graph"}
         task-conductor/statechart-engine {:local/root "components/statechart-engine"}
         task-conductor/project {:local/root "components/project"}}

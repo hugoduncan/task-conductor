@@ -1,0 +1,6 @@
+{:paths ["src" "resources"]
+ :deps {babashka/process {:mvn/version "0.5.22"}
+        cheshire/cheshire {:mvn/version "5.11.0"}
+        com.wsscode/pathom3 {:mvn/version "2025.01.16-alpha"}}
+ :aliases
+ {:test {:extra-paths ["test"]}}}
