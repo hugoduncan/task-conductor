@@ -111,6 +111,9 @@
 ;; sending the derived state keyword as an event (e.g., :refined, :has-tasks).
 ;; Entry actions invoke skills via work-on mutations (implemented in later tasks).
 
+;; State sets serve as reference documentation for valid statechart states.
+;; Verified by tests to match the actual statechart definitions.
+
 (def task-states
   "Valid states for standalone task execution."
   #{:idle :unrefined :refined :awaiting-pr :wait-pr-merge :complete :escalated})
