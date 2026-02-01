@@ -60,11 +60,11 @@
 (defn list-dev-envs
   "List all registered dev-envs.
 
-  Returns a seq of maps with :id, :type, and :meta for each registered dev-env.
+  Returns a seq of maps with :dev-env/id, :type, and :meta for each registered dev-env.
   The dev-env instances themselves are not included to avoid leaking impl details."
   []
   (mapv (fn [[id entry]]
-          {:id id
+          {:dev-env/id id
            :type (:type entry)
            :meta (:meta entry)})
         @registry))
@@ -72,13 +72,13 @@
 (defn select-dev-env
   "Select a dev-env from the registry.
 
-  Returns the first available dev-env entry as {:id :dev-env :type :meta},
+  Returns the first available dev-env entry as {:dev-env/id ... :dev-env :type :meta},
   or nil if registry is empty.
 
   Future implementations may add selection criteria (e.g., by type, health check)."
   []
   (when-let [[id entry] (first @registry)]
-    {:id id
+    {:dev-env/id id
      :dev-env (:dev-env entry)
      :type (:type entry)
      :meta (:meta entry)}))

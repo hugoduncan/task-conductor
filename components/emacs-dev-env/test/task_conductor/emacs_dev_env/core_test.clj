@@ -548,7 +548,7 @@
       (testing "list-dev-envs shows emacs dev-env in generic registry"
         (let [dev-env-id (core/register-emacs-dev-env)
               listed (generic-registry/list-dev-envs)
-              entry (first (filter #(= dev-env-id (:id %)) listed))]
+              entry (first (filter #(= dev-env-id (:dev-env/id %)) listed))]
           (is (some? entry)
               "emacs dev-env should appear in list")
           (is (= :emacs (:type entry)))

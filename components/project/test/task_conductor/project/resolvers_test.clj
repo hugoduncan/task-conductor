@@ -8,6 +8,7 @@
    [task-conductor.claude-cli.interface :as claude-cli]
    [task-conductor.dev-env.protocol :as dev-env-protocol]
    [task-conductor.dev-env.registry :as dev-env-registry]
+   [task-conductor.dev-env.resolvers :as dev-env-resolvers]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
    [task-conductor.project.resolvers :as resolvers]
@@ -177,11 +178,30 @@
                 deleted (get-in result [`resolvers/project-delete! :project/result])]
             (is (nil? deleted))))))))
 
-;;; Work-on Mutation Tests
+;;; Work-on Test Helpers
+
+(defn make-task
+  "Create task data with sensible defaults.
+   Accepts overrides for :type, :status, :meta, :pr-num, :code-reviewed, :error."
+  ([] (make-task {}))
+  ([overrides]
+   (merge {:task/type :task
+           :task/status :open
+           :task/meta nil
+           :task/pr-num nil
+           :task/code-reviewed nil}
+          overrides)))
+
+(defn make-child
+  "Create child task data with defaults."
+  ([] (make-child {}))
+  ([overrides]
+   (merge {:task/status :open} overrides)))
 
 (defmacro with-work-on-state
   "Execute body with clean state for work-on! tests.
-   Resets engine, graph, registries, and registers required resolvers."
+   Resets engine, graph, registries, and registers required resolvers
+   including dev-env resolvers for proper dev-env selection."
   [& body]
   `(do
      (engine/reset-engine!)
@@ -191,18 +211,31 @@
      (engine-resolvers/reset-dev-env-hooks!)
      ;; Register statecharts
      (work-on/register-statecharts!)
-     ;; Register engine resolvers for hook registration
+     ;; Register all resolvers
      (engine-resolvers/register-resolvers!)
-     ;; Register project resolvers
+     (dev-env-resolvers/register-resolvers!)
      (resolvers/register-resolvers!)
      (try
        ~@body
        (finally
+         ;; Allow virtual threads to complete before cleanup
+         (Thread/sleep 50)
          (engine/reset-engine!)
          (graph/reset-graph!)
          (registry/clear!)
          (dev-env-registry/clear!)
          (engine-resolvers/reset-dev-env-hooks!)))))
+
+(defmacro with-mock-fetchers
+  "Execute body with mocked fetch-task and fetch-children.
+   task-fn: (fn [dir id] task-map)
+   children-fn: (fn [dir parent-id] [child-maps])"
+  [task-fn children-fn & body]
+  `(with-redefs [resolvers/fetch-task ~task-fn
+                 resolvers/fetch-children ~children-fn]
+     ~@body))
+
+;;; Work-on Mutation Tests
 
 (deftest work-on-test
   ;; Verify work-on! mutation correctly starts statechart sessions for tasks
@@ -210,17 +243,9 @@
   (testing "work-on!"
     (testing "starts statechart session for a task"
       (with-work-on-state
-        (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                             {:task/type :task
-                                              :task/status :open
-                                              :task/meta {:refined "true"}})
-                      resolvers/fetch-children (fn [_dir _id] [])
-                      graph/query (let [orig graph/query]
-                                    (fn
-                                      ([q] (if (= [:dev-env/selected] q)
-                                             {:dev-env/selected nil}
-                                             (orig q)))
-                                      ([e q] (orig e q))))]
+        (with-mock-fetchers
+          (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
+          (fn [_dir _id] [])
           (let [result (graph/query [`(resolvers/work-on!
                                        {:task/project-dir "/test"
                                         :task/id 123})])
@@ -231,17 +256,9 @@
 
     (testing "uses task-statechart for non-story types"
       (with-work-on-state
-        (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                             {:task/type :bug
-                                              :task/status :open
-                                              :task/meta nil})
-                      resolvers/fetch-children (fn [_dir _id] [])
-                      graph/query (let [orig graph/query]
-                                    (fn
-                                      ([q] (if (= [:dev-env/selected] q)
-                                             {:dev-env/selected nil}
-                                             (orig q)))
-                                      ([e q] (orig e q))))]
+        (with-mock-fetchers
+          (fn [_dir _id] (make-task {:task/type :bug}))
+          (fn [_dir _id] [])
           (let [result (graph/query [`(resolvers/work-on!
                                        {:task/project-dir "/test"
                                         :task/id 456})])
@@ -253,19 +270,10 @@
 
     (testing "starts statechart session for a story"
       (with-work-on-state
-        (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                             {:task/type :story
-                                              :task/status :open
-                                              :task/meta {:refined "true"}})
-                      resolvers/fetch-children (fn [_dir _id]
-                                                 [{:task/status :open}
-                                                  {:task/status :closed}])
-                      graph/query (let [orig graph/query]
-                                    (fn
-                                      ([q] (if (= [:dev-env/selected] q)
-                                             {:dev-env/selected nil}
-                                             (orig q)))
-                                      ([e q] (orig e q))))]
+        (with-mock-fetchers
+          (fn [_dir _id] (make-task {:task/type :story
+                                     :task/meta {:refined "true"}}))
+          (fn [_dir _id] [(make-child) (make-child {:task/status :closed})])
           (let [result (graph/query [`(resolvers/work-on!
                                        {:task/project-dir "/test"
                                         :task/id 789})])
@@ -276,19 +284,11 @@
 
     (testing "derives :awaiting-review for story with all children complete"
       (with-work-on-state
-        (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                             {:task/type :story
-                                              :task/status :open
-                                              :task/meta {:refined "true"}})
-                      resolvers/fetch-children (fn [_dir _id]
-                                                 [{:task/status :closed}
-                                                  {:task/status :closed}])
-                      graph/query (let [orig graph/query]
-                                    (fn
-                                      ([q] (if (= [:dev-env/selected] q)
-                                             {:dev-env/selected nil}
-                                             (orig q)))
-                                      ([e q] (orig e q))))]
+        (with-mock-fetchers
+          (fn [_dir _id] (make-task {:task/type :story
+                                     :task/meta {:refined "true"}}))
+          (fn [_dir _id] [(make-child {:task/status :closed})
+                          (make-child {:task/status :closed})])
           (let [result (graph/query [`(resolvers/work-on!
                                        {:task/project-dir "/test"
                                         :task/id 999})])
@@ -297,15 +297,9 @@
 
     (testing "returns error when task not found"
       (with-work-on-state
-        (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                             {:task/error {:error :not-found
-                                                           :message "Not found"}})
-                      graph/query (let [orig graph/query]
-                                    (fn
-                                      ([q] (if (= [:dev-env/selected] q)
-                                             {:dev-env/selected nil}
-                                             (orig q)))
-                                      ([e q] (orig e q))))]
+        (with-mock-fetchers
+          (fn [_dir _id] {:task/error {:error :not-found :message "Not found"}})
+          (fn [_dir _id] [])
           (let [result (graph/query [`(resolvers/work-on!
                                        {:task/project-dir "/test"
                                         :task/id 404})])
@@ -316,19 +310,10 @@
     (testing "registers dev-env hook when dev-env available"
       (with-work-on-state
         (let [dev-env (dev-env-protocol/make-noop-dev-env)
-              dev-env-id (dev-env-registry/register! dev-env :test)]
-          (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                               {:task/type :task
-                                                :task/status :open
-                                                :task/meta {:refined "true"}})
-                        resolvers/fetch-children (fn [_dir _id] [])
-                        graph/query (let [orig graph/query]
-                                      (fn
-                                        ([q]
-                                         (if (= [:dev-env/selected] q)
-                                           {:dev-env/selected {:dev-env/id dev-env-id}}
-                                           (orig q)))
-                                        ([e q] (orig e q))))]
+              _dev-env-id (dev-env-registry/register! dev-env :test)]
+          (with-mock-fetchers
+            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
+            (fn [_dir _id] [])
             (let [result (graph/query [`(resolvers/work-on!
                                          {:task/project-dir "/test"
                                           :task/id 123})])
@@ -340,18 +325,10 @@
 
     (testing "stores session data including task context"
       (with-work-on-state
-        (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                             {:task/type :story
-                                              :task/status :open
-                                              :task/meta {:refined "true"}})
-                      resolvers/fetch-children (fn [_dir _id]
-                                                 [{:task/status :open}])
-                      graph/query (let [orig graph/query]
-                                    (fn
-                                      ([q] (if (= [:dev-env/selected] q)
-                                             {:dev-env/selected nil}
-                                             (orig q)))
-                                      ([e q] (orig e q))))]
+        (with-mock-fetchers
+          (fn [_dir _id] (make-task {:task/type :story
+                                     :task/meta {:refined "true"}}))
+          (fn [_dir _id] [(make-child)])
           (let [result (graph/query [`(resolvers/work-on!
                                        {:task/project-dir "/my/project"
                                         :task/id 555})])
@@ -373,69 +350,119 @@
       (with-work-on-state
         (let [invoked-opts (atom nil)
               mock-promise (promise)]
-          (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                               {:task/type :task
-                                                :task/status :open
-                                                :task/meta {:refined "true"}})
-                        resolvers/fetch-children (fn [_dir _id] [])
-                        claude-cli/invoke (fn [opts]
-                                            (reset! invoked-opts opts)
-                                            {:result-promise mock-promise})
-                        graph/query (let [orig graph/query]
-                                      (fn
-                                        ([q] (if (= [:dev-env/selected] q)
-                                               {:dev-env/selected nil}
-                                               (orig q)))
-                                        ([e q] (orig e q))))]
-            ;; Start a work-on session to get valid session-id with data
-            (let [work-result (graph/query [`(resolvers/work-on!
-                                              {:task/project-dir "/test/dir"
-                                               :task/id 99})])
-                  session-id (:work-on/session-id (get work-result `resolvers/work-on!))
-                  ;; Now invoke skill
-                  result (graph/query [`(resolvers/invoke-skill!
-                                         {:skill "mcp-tasks:refine-task"
-                                          :engine/session-id ~session-id})])
-                  invoke-result (get result `resolvers/invoke-skill!)]
-              (is (= :started (:invoke-skill/status invoke-result)))
-              (is (= "/mcp-tasks:refine-task" (:prompt @invoked-opts)))
-              (is (= "/test/dir" (:dir @invoked-opts)))
-              ;; Deliver the promise to clean up virtual thread
-              (deliver mock-promise {:exit-code 0 :events []}))))))
+          (with-mock-fetchers
+            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
+            (fn [_dir _id] [])
+            (with-redefs [claude-cli/invoke (fn [opts]
+                                              (reset! invoked-opts opts)
+                                              {:result-promise mock-promise})]
+              ;; Start a work-on session to get valid session-id with data
+              (let [work-result (graph/query [`(resolvers/work-on!
+                                                {:task/project-dir "/test/dir"
+                                                 :task/id 99})])
+                    session-id (:work-on/session-id (get work-result `resolvers/work-on!))
+                    ;; Now invoke skill
+                    result (graph/query [`(resolvers/invoke-skill!
+                                           {:skill "mcp-tasks:refine-task"
+                                            :engine/session-id ~session-id})])
+                    invoke-result (get result `resolvers/invoke-skill!)]
+                (is (= :started (:invoke-skill/status invoke-result)))
+                (is (= "/mcp-tasks:refine-task" (:prompt @invoked-opts)))
+                (is (= "/test/dir" (:dir @invoked-opts)))
+                ;; Deliver the promise to clean up virtual thread
+                (deliver mock-promise {:exit-code 0 :events []})))))))
 
     (testing "sends error event on skill failure"
       (with-work-on-state
         (let [mock-promise (promise)
               events-sent (atom [])]
-          (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                               {:task/type :task
-                                                :task/status :open
-                                                :task/meta {:refined "true"}})
-                        resolvers/fetch-children (fn [_dir _id] [])
-                        claude-cli/invoke (fn [_opts]
-                                            {:result-promise mock-promise})
-                        sc/send! (fn [sid event]
-                                   (swap! events-sent conj {:session-id sid :event event})
-                                   #{:escalated})
-                        graph/query (let [orig graph/query]
-                                      (fn
-                                        ([q] (if (= [:dev-env/selected] q)
-                                               {:dev-env/selected nil}
-                                               (orig q)))
-                                        ([e q] (orig e q))))]
-            (let [work-result (graph/query [`(resolvers/work-on!
-                                              {:task/project-dir "/test"
-                                               :task/id 100})])
-                  session-id (:work-on/session-id (get work-result `resolvers/work-on!))
-                  _ (graph/query [`(resolvers/invoke-skill!
-                                    {:skill "mcp-tasks:refine-task"
-                                     :engine/session-id ~session-id})])]
-              ;; Deliver error result
-              (deliver mock-promise {:error :timeout})
-              ;; Wait for virtual thread to process
-              (Thread/sleep 100)
-              (is (= 1 (count @events-sent)))
-              (is (= :error (:event (first @events-sent)))))))))))
+          (with-mock-fetchers
+            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
+            (fn [_dir _id] [])
+            (with-redefs [claude-cli/invoke (fn [_opts]
+                                              {:result-promise mock-promise})
+                          sc/send! (fn [sid event]
+                                     (swap! events-sent conj {:session-id sid :event event})
+                                     #{:escalated})]
+              (let [work-result (graph/query [`(resolvers/work-on!
+                                                {:task/project-dir "/test"
+                                                 :task/id 100})])
+                    session-id (:work-on/session-id (get work-result `resolvers/work-on!))
+                    _ (graph/query [`(resolvers/invoke-skill!
+                                      {:skill "mcp-tasks:refine-task"
+                                       :engine/session-id ~session-id})])]
+                ;; Deliver error result
+                (deliver mock-promise {:error :timeout})
+                ;; Wait for virtual thread to process
+                (Thread/sleep 100)
+                (is (= 1 (count @events-sent)))
+                (is (= :error (:event (first @events-sent))))))))))))
+
+;;; Concurrent Skill Invocation Tests
+
+(deftest concurrent-skill-invocation-test
+  ;; Verify multiple concurrent skill invocations are handled correctly.
+  ;; Tests thread safety and proper state management.
+  (testing "concurrent skill invocations"
+    (testing "handles multiple skills invoked in parallel"
+      (with-work-on-state
+        (let [invoke-count (atom 0)
+              promises (atom [])
+              invoked-skills (atom [])]
+          (with-mock-fetchers
+            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
+            (fn [_dir _id] [])
+            (with-redefs [claude-cli/invoke (fn [opts]
+                                              (swap! invoke-count inc)
+                                              (swap! invoked-skills conj (:prompt opts))
+                                              (let [p (promise)]
+                                                (swap! promises conj p)
+                                                {:result-promise p}))]
+              ;; Start a work-on session
+              (let [work-result (graph/query [`(resolvers/work-on!
+                                                {:task/project-dir "/test"
+                                                 :task/id 200})])
+                    session-id (:work-on/session-id (get work-result `resolvers/work-on!))]
+                ;; Invoke multiple skills concurrently
+                (dotimes [i 3]
+                  (graph/query [`(resolvers/invoke-skill!
+                                  {:skill ~(str "skill-" i)
+                                   :engine/session-id ~session-id})]))
+                ;; All three should have been invoked
+                (is (= 3 @invoke-count))
+                (is (= #{"/skill-0" "/skill-1" "/skill-2"} (set @invoked-skills)))
+                ;; Clean up virtual threads
+                (doseq [p @promises]
+                  (deliver p {:exit-code 0 :events []}))))))))
+
+    (testing "each concurrent invocation gets correct session data"
+      (with-work-on-state
+        (let [captured-dirs (atom [])]
+          (with-mock-fetchers
+            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
+            (fn [_dir _id] [])
+            (with-redefs [claude-cli/invoke (fn [opts]
+                                              (swap! captured-dirs conj (:dir opts))
+                                              {:result-promise (doto (promise)
+                                                                 (deliver {:exit-code 0}))})]
+              ;; Start two sessions with different project dirs
+              (let [result1 (graph/query [`(resolvers/work-on!
+                                            {:task/project-dir "/project-a"
+                                             :task/id 301})])
+                    session1 (:work-on/session-id (get result1 `resolvers/work-on!))
+                    result2 (graph/query [`(resolvers/work-on!
+                                            {:task/project-dir "/project-b"
+                                             :task/id 302})])
+                    session2 (:work-on/session-id (get result2 `resolvers/work-on!))]
+                ;; Invoke skills on both sessions
+                (graph/query [`(resolvers/invoke-skill!
+                                {:skill "test"
+                                 :engine/session-id ~session1})])
+                (graph/query [`(resolvers/invoke-skill!
+                                {:skill "test"
+                                 :engine/session-id ~session2})])
+                ;; Verify each got the right project dir
+                (is (= #{"/project-a" "/project-b"} (set @captured-dirs)))))))))))
 
 ;;; Escalate to Dev-env Tests
 
@@ -445,56 +472,30 @@
     (testing "starts dev-env session when available"
       (with-work-on-state
         (let [dev-env (dev-env-protocol/make-noop-dev-env)
-              dev-env-id (dev-env-registry/register! dev-env :test)
-              session-started (atom nil)]
-          (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                               {:task/type :task
-                                                :task/status :open
-                                                :task/meta {:refined "true"}})
-                        resolvers/fetch-children (fn [_dir _id] [])
-                        graph/query (let [orig graph/query]
-                                      (fn
-                                        ([q]
-                                         (cond
-                                           (= [:dev-env/selected] q)
-                                           {:dev-env/selected {:dev-env/id dev-env-id}}
-
-                                           ;; Handle dev-env-start-session! call
-                                           (and (vector? q)
-                                                (seq? (first q))
-                                                (= 'task-conductor.dev-env.resolvers/dev-env-start-session!
-                                                   (first (first q))))
-                                           (do
-                                             (reset! session-started (second (first q)))
-                                             {:dev-env/session-result {:started true}})
-
-                                           :else
-                                           (orig q)))
-                                        ([e q] (orig e q))))]
+              dev-env-id (dev-env-registry/register! dev-env :test)]
+          (with-mock-fetchers
+            (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
+            (fn [_dir _id] [])
             (let [work-result (graph/query [`(resolvers/work-on!
                                               {:task/project-dir "/test"
                                                :task/id 200})])
                   session-id (:work-on/session-id (get work-result `resolvers/work-on!))
                   result (graph/query [`(resolvers/escalate-to-dev-env!
                                          {:engine/session-id ~session-id})])
-                  escalate-result (get result `resolvers/escalate-to-dev-env!)]
+                  escalate-result (get result `resolvers/escalate-to-dev-env!)
+                  ;; Check that start-session was called via the :calls atom
+                  calls @(:calls dev-env)
+                  start-call (first (filter #(= :start-session (:op %)) calls))]
               (is (= :escalated (:escalate/status escalate-result)))
               (is (= dev-env-id (:escalate/dev-env-id escalate-result)))
-              (is (some? @session-started)))))))
+              (is (some? start-call) "start-session should have been called")
+              (is (= session-id (:session-id start-call))))))))
 
     (testing "returns error when no dev-env available"
       (with-work-on-state
-        (with-redefs [resolvers/fetch-task (fn [_dir _id]
-                                             {:task/type :task
-                                              :task/status :open
-                                              :task/meta {:refined "true"}})
-                      resolvers/fetch-children (fn [_dir _id] [])
-                      graph/query (let [orig graph/query]
-                                    (fn
-                                      ([q] (if (= [:dev-env/selected] q)
-                                             {:dev-env/selected nil}
-                                             (orig q)))
-                                      ([e q] (orig e q))))]
+        (with-mock-fetchers
+          (fn [_dir _id] (make-task {:task/meta {:refined "true"}}))
+          (fn [_dir _id] [])
           (let [work-result (graph/query [`(resolvers/work-on!
                                             {:task/project-dir "/test"
                                              :task/id 201})])

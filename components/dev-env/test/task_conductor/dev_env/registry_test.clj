@@ -83,17 +83,17 @@
       (testing "returns empty vector when registry is empty"
         (is (= [] (registry/list-dev-envs))))
 
-      (testing "returns all registered dev-envs with id, type, and meta"
+      (testing "returns all registered dev-envs with dev-env/id, type, and meta"
         (let [dev-env1 (protocol/make-noop-dev-env)
               dev-env2 (protocol/make-noop-dev-env)
               id1 (registry/register! dev-env1 :emacs {:name "emacs1"})
               id2 (registry/register! dev-env2 :terminal {})
               listed (registry/list-dev-envs)
-              by-id (into {} (map (juxt :id identity)) listed)]
+              by-id (into {} (map (juxt :dev-env/id identity)) listed)]
           (is (= 2 (count listed)))
-          (is (= {:id id1 :type :emacs :meta {:name "emacs1"}}
+          (is (= {:dev-env/id id1 :type :emacs :meta {:name "emacs1"}}
                  (get by-id id1)))
-          (is (= {:id id2 :type :terminal :meta {}}
+          (is (= {:dev-env/id id2 :type :terminal :meta {}}
                  (get by-id id2)))))
 
       (testing "does not include dev-env instances"
@@ -112,7 +112,7 @@
         (let [dev-env (protocol/make-noop-dev-env)
               id (registry/register! dev-env :emacs {:host "localhost"})
               selected (registry/select-dev-env)]
-          (is (= id (:id selected)))
+          (is (= id (:dev-env/id selected)))
           (is (= dev-env (:dev-env selected)))
           (is (= :emacs (:type selected)))
           (is (= {:host "localhost"} (:meta selected)))))
@@ -123,7 +123,7 @@
               _ (registry/register! dev-env1 :emacs)
               _ (registry/register! dev-env2 :terminal)
               selected (registry/select-dev-env)]
-          (is (some? (:id selected)))
+          (is (some? (:dev-env/id selected)))
           (is (some? (:dev-env selected))))))))
 
 (deftest clear-test
