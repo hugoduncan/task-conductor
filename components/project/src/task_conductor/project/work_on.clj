@@ -1,7 +1,9 @@
 (ns task-conductor.project.work-on
-  "State derivation functions for task and story execution.
-   These pure functions derive execution state from mcp-tasks data,
-   enabling statechart-driven automation.")
+  "State derivation and statechart definitions for task/story execution.
+   Pure functions derive execution state from mcp-tasks data.
+   Statecharts orchestrate state-driven automation with skill invocation."
+  (:require
+   [task-conductor.statechart-engine.interface :as sc]))
 
 ;;; Task State Derivation
 
@@ -102,3 +104,142 @@
 
     :else
     :unrefined))
+
+;;; Statechart Definitions
+;; Statecharts orchestrate task/story execution through state-driven automation.
+;; States match derive-*-state return values. Transitions are triggered by
+;; sending the derived state keyword as an event (e.g., :refined, :has-tasks).
+;; Entry actions invoke skills via work-on mutations (implemented in later tasks).
+
+(def task-states
+  "Valid states for standalone task execution."
+  #{:idle :unrefined :refined :awaiting-pr :wait-pr-merge :complete :escalated})
+
+(def story-states
+  "Valid states for story execution."
+  #{:idle :unrefined :refined :has-tasks :awaiting-review
+    :awaiting-pr :wait-pr-merge :complete :escalated})
+
+(def task-statechart
+  "Statechart for standalone task execution.
+   States correspond to derive-task-state return values.
+   Transitions are triggered by sending the derived state as an event.
+
+   Flow: idle → unrefined → refined → awaiting-pr → wait-pr-merge → complete
+   Any state can transition to :escalated on :error event."
+  (sc/statechart {:initial :idle}
+    ;; Idle - waiting for initial state check after session start
+                 (sc/state {:id :idle}
+                           (sc/transition {:event :unrefined :target :unrefined})
+                           (sc/transition {:event :refined :target :refined})
+                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition {:event :complete :target :complete}))
+
+    ;; Unrefined - needs task refinement
+                 (sc/state {:id :unrefined}
+                           (sc/on-entry {}
+                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:refine-task"})}))
+                           (sc/transition {:event :refined :target :refined})
+                           (sc/transition {:event :error :target :escalated}))
+
+    ;; Refined - ready for execution
+                 (sc/state {:id :refined}
+                           (sc/on-entry {}
+                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:execute-task"})}))
+                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition {:event :error :target :escalated}))
+
+    ;; Awaiting PR - task executed, needs PR creation
+                 (sc/state {:id :awaiting-pr}
+                           (sc/on-entry {}
+                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:create-task-pr"})}))
+                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition {:event :error :target :escalated}))
+
+    ;; Wait for PR merge - PR created, awaiting merge notification from dev-env
+                 (sc/state {:id :wait-pr-merge}
+      ;; No entry action - waiting for external PR merge event
+                           (sc/transition {:event :complete :target :complete})
+                           (sc/transition {:event :error :target :escalated}))
+
+    ;; Complete - task finished
+                 (sc/final {:id :complete})
+
+    ;; Escalated - error occurred, notify dev-env for human intervention
+                 (sc/state {:id :escalated}
+                           (sc/on-entry {}
+                                        (sc/action {:expr `(escalate-to-dev-env! {})})))))
+
+(def story-statechart
+  "Statechart for story execution.
+   States correspond to derive-story-state return values.
+   Transitions are triggered by sending the derived state as an event.
+
+   Flow: idle → unrefined → refined → has-tasks → awaiting-review →
+         awaiting-pr → wait-pr-merge → complete
+   Note: has-tasks can loop (multiple children) or return from awaiting-review.
+   Any state can transition to :escalated on :error event."
+  (sc/statechart {:initial :idle}
+    ;; Idle - waiting for initial state check after session start
+                 (sc/state {:id :idle}
+                           (sc/transition {:event :unrefined :target :unrefined})
+                           (sc/transition {:event :refined :target :refined})
+                           (sc/transition {:event :has-tasks :target :has-tasks})
+                           (sc/transition {:event :awaiting-review :target :awaiting-review})
+                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition {:event :complete :target :complete}))
+
+    ;; Unrefined - needs story refinement
+                 (sc/state {:id :unrefined}
+                           (sc/on-entry {}
+                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:refine-task"})}))
+                           (sc/transition {:event :refined :target :refined})
+                           (sc/transition {:event :error :target :escalated}))
+
+    ;; Refined - needs task creation
+                 (sc/state {:id :refined}
+                           (sc/on-entry {}
+                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:create-story-tasks"})}))
+                           (sc/transition {:event :has-tasks :target :has-tasks})
+                           (sc/transition {:event :error :target :escalated}))
+
+    ;; Has tasks - execute next incomplete child task
+                 (sc/state {:id :has-tasks}
+                           (sc/on-entry {}
+                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:execute-story-child"})}))
+      ;; Can stay in has-tasks (more children) or move to review
+                           (sc/transition {:event :has-tasks :target :has-tasks})
+                           (sc/transition {:event :awaiting-review :target :awaiting-review})
+                           (sc/transition {:event :error :target :escalated}))
+
+    ;; Awaiting review - all children complete, needs code review
+                 (sc/state {:id :awaiting-review}
+                           (sc/on-entry {}
+                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:review-story-implementation"})}))
+      ;; Review may find issues requiring more work
+                           (sc/transition {:event :has-tasks :target :has-tasks})
+                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition {:event :error :target :escalated}))
+
+    ;; Awaiting PR - reviewed, needs PR creation
+                 (sc/state {:id :awaiting-pr}
+                           (sc/on-entry {}
+                                        (sc/action {:expr `(invoke-skill! {:skill "mcp-tasks:create-story-pr"})}))
+                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition {:event :error :target :escalated}))
+
+    ;; Wait for PR merge - PR created, awaiting merge notification from dev-env
+                 (sc/state {:id :wait-pr-merge}
+      ;; No entry action - waiting for external PR merge event
+                           (sc/transition {:event :complete :target :complete})
+                           (sc/transition {:event :error :target :escalated}))
+
+    ;; Complete - story finished
+                 (sc/final {:id :complete})
+
+    ;; Escalated - error occurred, notify dev-env for human intervention
+                 (sc/state {:id :escalated}
+                           (sc/on-entry {}
+                                        (sc/action {:expr `(escalate-to-dev-env! {})})))))
