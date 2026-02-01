@@ -6,6 +6,32 @@
   (:import [java.io BufferedReader InputStreamReader]
            [java.util.concurrent Executors TimeUnit ScheduledFuture]))
 
+;;; Nullable Support
+
+(def ^:dynamic *nullable*
+  "When bound to a nullable config map, invoke-process returns configured
+  responses instead of spawning real processes. Used for testing."
+  nil)
+
+(defn- nullable-invoke
+  "Handle invocation when *nullable* is bound.
+  Records the invocation and returns configured result."
+  [nullable opts]
+  (let [{:keys [invocations config]} nullable
+        {:keys [exit-code events session-id error]} config
+        result (if error
+                 {:exit-code nil :error error}
+                 {:exit-code (or exit-code 0)
+                  :events (or events [])
+                  :session-id (or session-id "test-session")})
+        result-promise (doto (promise) (deliver result))]
+    (swap! invocations conj {:opts opts :timestamp (java.time.Instant/now)})
+    {:process nil :result-promise result-promise}))
+
+(declare invoke-process*)
+
+;;; CLI Argument Building
+
 (defn build-args
   "Build CLI arguments vector from options map.
   Always includes --output-format stream-json, --verbose, and --print conversation-summary.
@@ -78,7 +104,16 @@
     Plus all options supported by build-args.
 
   Internal (for testing):
-    :_args           - Override args vector (skips build-args)"
+    :_args           - Override args vector (skips build-args)
+
+  When *nullable* is bound, returns configured response without subprocess."
+  [opts]
+  (if *nullable*
+    (nullable-invoke *nullable* opts)
+    (invoke-process* opts)))
+
+(defn- invoke-process*
+  "Real implementation of invoke-process with subprocess."
   [opts]
   (let [{:keys [dir timeout on-line on-event _args]} opts
         args (or _args (build-args opts))
