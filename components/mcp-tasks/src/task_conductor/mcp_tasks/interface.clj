@@ -185,11 +185,11 @@
   Returns reopened task on success, or error map on failure.
 
   Required:
-    :project-dir   - Working directory for .mcp-tasks.edn discovery
+    :project-dir - Working directory for .mcp-tasks.edn discovery
 
   Identification (at least one required):
-    :task-id       - Task ID to reopen (integer)
-    :title-pattern - Title pattern to match (string)
+    :task-id     - Task ID to reopen (integer)
+    :title       - Exact task title to match (string)
 
   Example:
     (reopen-task {:project-dir \"/path/to/project\"

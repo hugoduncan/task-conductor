@@ -267,13 +267,13 @@
   "Construct CLI arguments for the reopen command from options map.
 
   Options (at least one required):
-    :task-id       - Task ID to reopen
-    :title-pattern - Title pattern to match"
+    :task-id - Task ID to reopen
+    :title   - Exact task title to match"
   [opts]
-  (let [{:keys [task-id title-pattern]} opts]
+  (let [{:keys [task-id title]} opts]
     (cond-> ["reopen"]
       task-id (conj "--task-id" (str task-id))
-      title-pattern (conj "--title-pattern" title-pattern))))
+      title (conj "--title" title))))
 
 (defn reopen-task
   "Reopen a closed task.
@@ -281,9 +281,9 @@
   Returns reopened task on success, or error map on failure.
 
   Options:
-    :project-dir   - Working directory (required)
-    :task-id       - Task ID to reopen (or :title-pattern)
-    :title-pattern - Title pattern to match (or :task-id)"
+    :project-dir - Working directory (required)
+    :task-id     - Task ID to reopen (or :title)
+    :title       - Exact task title to match (or :task-id)"
   [{:keys [project-dir] :as opts}]
   (run-cli {:project-dir project-dir
             :args (build-reopen-args (dissoc opts :project-dir))}))

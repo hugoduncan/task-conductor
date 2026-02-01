@@ -303,10 +303,10 @@
         (is (= ["reopen" "--task-id" "42"]
                (core/build-reopen-args {:task-id 42})))))
 
-    (testing "with :title-pattern"
-      (testing "adds --title-pattern flag"
-        (is (= ["reopen" "--title-pattern" "Fix bug"]
-               (core/build-reopen-args {:title-pattern "Fix bug"})))))))
+    (testing "with :title"
+      (testing "adds --title flag"
+        (is (= ["reopen" "--title" "Fix bug"]
+               (core/build-reopen-args {:title "Fix bug"})))))))
 
 ;;; Mutation integration tests
 ;;
