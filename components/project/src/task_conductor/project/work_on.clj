@@ -19,15 +19,17 @@
    Returns one of:
    - :unrefined   - needs refinement (:meta :refined is nil)
    - :refined     - ready for execution
-   - :awaiting-pr - executed, needs PR creation
+   - :done        - executed, awaiting code review
+   - :awaiting-pr - reviewed, needs PR creation
    - :wait-pr-merge - PR created, awaiting merge
    - :complete    - task closed
 
    Task map should contain:
-   - :status      - :open, :closed, :in-progress, :blocked
-   - :meta        - map with :refined key when refined
-   - :pr-num      - GitHub PR number when PR created
-   - :pr-merged?  - true when PR has been merged (external check)"
+   - :status        - :open, :closed, :in-progress, :blocked, :done
+   - :meta          - map with :refined key when refined
+   - :code-reviewed - ISO-8601 timestamp when reviewed
+   - :pr-num        - GitHub PR number when PR created
+   - :pr-merged?    - true when PR has been merged (external check)"
   [task]
   (cond
     (= :closed (:status task))
@@ -38,6 +40,12 @@
 
     (:pr-num task)
     :wait-pr-merge
+
+    (and (= :done (:status task)) (:code-reviewed task))
+    :awaiting-pr
+
+    (= :done (:status task))
+    :done
 
     (refined? task)
     :refined
@@ -130,7 +138,7 @@
 
 (def task-states
   "Valid states for standalone task execution."
-  #{:idle :unrefined :refined :awaiting-pr :wait-pr-merge :complete :escalated})
+  #{:idle :unrefined :refined :done :awaiting-pr :wait-pr-merge :complete :escalated})
 
 (def story-states
   "Valid states for story execution."

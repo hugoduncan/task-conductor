@@ -30,6 +30,25 @@
                                            :pr-num 123
                                            :meta {:refined "true"}})))))
 
+    (testing "returns :awaiting-pr"
+      (testing "when status is :done and code-reviewed is set"
+        (is (= :awaiting-pr
+               (work-on/derive-task-state {:status :done
+                                           :code-reviewed "2024-01-15"
+                                           :meta {:refined "true"}})))))
+
+    (testing "returns :done"
+      (testing "when status is :done without code-reviewed"
+        (is (= :done
+               (work-on/derive-task-state {:status :done
+                                           :meta {:refined "true"}}))))
+
+      (testing "when status is :done with nil code-reviewed"
+        (is (= :done
+               (work-on/derive-task-state {:status :done
+                                           :code-reviewed nil
+                                           :meta {:refined "true"}})))))
+
     (testing "returns :refined"
       (testing "when refined but no PR"
         (is (= :refined
@@ -369,7 +388,7 @@
   ;; Verify task-states matches expected set.
   (testing "task-states"
     (testing "contains all task statechart states"
-      (is (= #{:idle :unrefined :refined :awaiting-pr
+      (is (= #{:idle :unrefined :refined :done :awaiting-pr
                :wait-pr-merge :complete :escalated}
              work-on/task-states)))))
 
