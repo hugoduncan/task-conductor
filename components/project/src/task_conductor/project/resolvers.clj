@@ -63,7 +63,8 @@
 
 (defn- fetch-task
   "Fetch task data via EQL query.
-   Returns task map with :task/type, :task/status, etc. or :task/error."
+   Returns task map with :task/type, :task/status, etc.
+   On error, the result contains :task/error from the resolver."
   [project-dir task-id]
   (graph/query {:task/id task-id :task/project-dir project-dir}
                [:task/type :task/status :task/meta :task/pr-num

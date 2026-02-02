@@ -86,12 +86,12 @@
                         :task/filters {:status :open :limit 5}}
                        [:task/all])))
 
-      (testing "returns :task/error on failure"
+      (testing "returns :task/list-error on failure"
         (with-redefs [interface/list-tasks
                       (fn [_] {:error :io-error :message "no dir"})]
           (let [result (graph/query {:task/project-dir "/bad"}
-                                    [:task/error])]
-            (is (= :io-error (:error (:task/error result))))))))))
+                                    [:task/list-error])]
+            (is (= :io-error (:error (:task/list-error result))))))))))
 
 (deftest task-blocking-info-test
   (with-clean-state
