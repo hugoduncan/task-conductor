@@ -240,6 +240,13 @@
           (is (contains? (sc/current-state sid) :unrefined)))))
 
     (testing "follows task execution flow"
+      (testing "idle → done"
+        (with-clean-engine
+          (sc/register! ::task-flow0 work-on/task-statechart)
+          (let [sid (sc/start! ::task-flow0)]
+            (sc/send! sid :done)
+            (is (contains? (sc/current-state sid) :done)))))
+
       (testing "unrefined → refined"
         (with-clean-engine
           (sc/register! ::task-flow1 work-on/task-statechart)
