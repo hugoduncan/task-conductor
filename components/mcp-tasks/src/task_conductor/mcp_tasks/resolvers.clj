@@ -48,7 +48,9 @@
        :task/shared-context nil :task/blocking-task-ids nil
        :task/is-blocked nil :task/pr-num nil :task/code-reviewed nil}
       ;; Always include :task/error (nil when no error) so Pathom doesn't look elsewhere
-      (assoc (prefix-keys (:task result)) :task/error nil))))
+      ;; Merge with nil defaults for optional fields that CLI may not return
+      (merge {:task/pr-num nil :task/code-reviewed nil :task/error nil}
+             (prefix-keys (:task result))))))
 
 (graph/defresolver tasks-list
   "List tasks with optional filters. Requires :task/project-dir.
