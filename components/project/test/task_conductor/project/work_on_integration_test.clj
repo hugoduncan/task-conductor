@@ -311,7 +311,7 @@
   "Build command-keyed responses for a story with children.
 
   Stories require additional :list response for child task queries.
-  Use to test story-specific states (:has-tasks, :awaiting-review, etc.).
+  Use to test story-specific states (:has-tasks, :done, etc.).
 
   Args:
     story-overrides - map passed to `make-task-response` (type forced to :story)
@@ -342,7 +342,7 @@
 
                 (is (= :has-tasks (:work-on/initial-state work-on-result)))))))))
 
-    (testing "derives :awaiting-review for story with all children complete"
+    (testing "derives :done for story with all children complete"
       (with-integration-state
         (let [mcp-nullable (mcp-tasks/make-nullable
                             {:responses (story-responses
@@ -356,7 +356,7 @@
                                             :task/id 410})])
                     work-on-result (get result `resolvers/work-on!)]
 
-                (is (= :awaiting-review (:work-on/initial-state work-on-result)))))))))))
+                (is (= :done (:work-on/initial-state work-on-result)))))))))))
 
 ;;; State Transition Tests
 
@@ -405,7 +405,7 @@
                                          :list (concat [three-open]           ; work-on!
                                                        [three-open two-open]    ; cycle 1: 3->2 (progress)
                                                        [two-open one-open]      ; cycle 2: 2->1 (progress)
-                                                       [one-open all-closed]    ; cycle 3: 1->0 (->awaiting-review)
+                                                       [one-open all-closed]    ; cycle 3: 1->0 (->done)
                                                        (repeat 10 all-closed))}})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
@@ -422,8 +422,8 @@
                       events (set (map :event hist))]
                   ;; Should have seen :has-tasks events (children executing)
                   (is (contains? events :has-tasks) "Should execute child tasks")
-                  ;; Eventually progressed to awaiting-review or beyond
-                  (is (or (contains? events :awaiting-review)
+                  ;; Eventually progressed to done or beyond
+                  (is (or (contains? events :done)
                           (contains? events :awaiting-pr)
                           (contains? events :no-progress))
                       "Should progress past :has-tasks"))))))))))

@@ -68,30 +68,30 @@
                  (active-children children))))
 
 (defn- children-complete?
-  "Check if all active children are complete (status :closed or \"closed\")."
+  "Check if all active children are complete (status :done, :closed, or string equivalents)."
   [children]
   (let [active (active-children children)]
     (and (seq active)
-         (every? #(#{:closed "closed"} (:status %)) active))))
+         (every? #(#{:closed "closed" :done "done"} (:status %)) active))))
 
 (defn- has-incomplete-children?
   "Check if there are any incomplete active children."
   [children]
   (let [active (active-children children)]
     (and (seq active)
-         (some #(not (#{:closed "closed"} (:status %))) active))))
+         (some #(not (#{:closed "closed" :done "done"} (:status %))) active))))
 
 (defn derive-story-state
   "Derive execution state for a story.
 
    Returns one of:
-   - :unrefined       - needs refinement (:meta :refined is nil)
-   - :refined         - refined but no children created yet
-   - :has-tasks       - has incomplete child tasks to execute
-   - :awaiting-review - all children complete, needs code review
-   - :awaiting-pr     - reviewed, needs PR creation
-   - :wait-pr-merge   - PR created, awaiting merge
-   - :complete        - story closed
+   - :unrefined     - needs refinement (:meta :refined is nil)
+   - :refined       - refined but no children created yet
+   - :has-tasks     - has incomplete child tasks to execute
+   - :done          - all children complete, awaiting code review
+   - :awaiting-pr   - reviewed, needs PR creation
+   - :wait-pr-merge - PR created, awaiting merge
+   - :complete      - story closed
 
    Story map should contain:
    - :status        - :open, :closed, :in-progress, :blocked
@@ -100,7 +100,8 @@
    - :pr-num        - GitHub PR number when PR created
    - :pr-merged?    - true when PR has been merged (external check)
 
-   Children is a seq of child task maps."
+   Children is a seq of child task maps. Children are considered complete
+   when their status is :done or :closed."
   [story children]
   (cond
     (= :closed (:status story))
@@ -116,7 +117,7 @@
     :awaiting-pr
 
     (children-complete? children)
-    :awaiting-review
+    :done
 
     (has-incomplete-children? children)
     :has-tasks
@@ -142,7 +143,7 @@
 
 (def story-states
   "Valid states for story execution."
-  #{:idle :unrefined :refined :has-tasks :awaiting-review
+  #{:idle :unrefined :refined :has-tasks :done
     :awaiting-pr :wait-pr-merge :complete :escalated})
 
 (def task-statechart
@@ -150,13 +151,14 @@
    States correspond to derive-task-state return values.
    Transitions are triggered by sending the derived state as an event.
 
-   Flow: idle → unrefined → refined → awaiting-pr → wait-pr-merge → complete
+   Flow: idle → unrefined → refined → done → awaiting-pr → wait-pr-merge → complete
    Any state can transition to :escalated on :error event."
   (sc/statechart {:initial :idle}
     ;; Idle - waiting for initial state check after session start
                  (sc/state {:id :idle}
                            (sc/transition {:event :unrefined :target :unrefined})
                            (sc/transition {:event :refined :target :refined})
+                           (sc/transition {:event :done :target :done})
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
                            (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
                            (sc/transition {:event :complete :target :complete}))
@@ -175,6 +177,15 @@
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
                                                             {:skill "mcp-tasks:execute-task"})}))
+                           (sc/transition {:event :done :target :done})
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
+
+    ;; Done - executed, awaiting code review
+                 (sc/state {:id :done}
+                           (sc/on-entry {}
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "mcp-tasks:review-task"})}))
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
@@ -207,9 +218,9 @@
    States correspond to derive-story-state return values.
    Transitions are triggered by sending the derived state as an event.
 
-   Flow: idle → unrefined → refined → has-tasks → awaiting-review →
+   Flow: idle → unrefined → refined → has-tasks → done →
          awaiting-pr → wait-pr-merge → complete
-   Note: has-tasks can loop (multiple children) or return from awaiting-review.
+   Note: has-tasks can loop (multiple children) or return from done.
    Any state can transition to :escalated on :error event."
   (sc/statechart {:initial :idle}
     ;; Idle - waiting for initial state check after session start
@@ -217,7 +228,7 @@
                            (sc/transition {:event :unrefined :target :unrefined})
                            (sc/transition {:event :refined :target :refined})
                            (sc/transition {:event :has-tasks :target :has-tasks})
-                           (sc/transition {:event :awaiting-review :target :awaiting-review})
+                           (sc/transition {:event :done :target :done})
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
                            (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
                            (sc/transition {:event :complete :target :complete}))
@@ -245,17 +256,17 @@
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
                                                             {:skill "mcp-tasks:execute-story-child"})}))
-      ;; Can stay in has-tasks (more children) or move to review
+      ;; Can stay in has-tasks (more children) or move to done
                            (sc/transition {:event :has-tasks :target :has-tasks})
-                           (sc/transition {:event :awaiting-review :target :awaiting-review})
+                           (sc/transition {:event :done :target :done})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
 
-    ;; Awaiting review - all children complete, needs code review
-                 (sc/state {:id :awaiting-review}
+    ;; Done - all children complete, awaiting code review
+                 (sc/state {:id :done}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:review-story-implementation"})}))
+                                                            {:skill "mcp-tasks:review-story"})}))
       ;; Review may find issues requiring more work
                            (sc/transition {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})

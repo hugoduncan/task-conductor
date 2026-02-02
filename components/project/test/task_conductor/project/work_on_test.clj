@@ -4,6 +4,7 @@
   ;; Also tests statechart definitions for task and story execution.
   (:require
    [clojure.test :refer [deftest is testing]]
+   [task-conductor.claude-cli.interface :as claude-cli]
    [task-conductor.project.work-on :as work-on]
    [task-conductor.statechart-engine.core :as engine]
    [task-conductor.statechart-engine.interface :as sc]))
@@ -109,16 +110,30 @@
                                            [{:status :closed}
                                             {:status :closed}])))))
 
-    (testing "returns :awaiting-review"
-      (testing "when all children complete but not reviewed"
-        (is (= :awaiting-review
+    (testing "returns :done"
+      (testing "when all children closed but not reviewed"
+        (is (= :done
                (work-on/derive-story-state {:status :open
                                             :meta {:refined "true"}}
                                            [{:status :closed}
                                             {:status :closed}]))))
 
+      (testing "when all children done but not reviewed"
+        (is (= :done
+               (work-on/derive-story-state {:status :open
+                                            :meta {:refined "true"}}
+                                           [{:status :done}
+                                            {:status :done}]))))
+
+      (testing "with mix of done and closed children"
+        (is (= :done
+               (work-on/derive-story-state {:status :open
+                                            :meta {:refined "true"}}
+                                           [{:status :done}
+                                            {:status :closed}]))))
+
       (testing "with single completed child"
-        (is (= :awaiting-review
+        (is (= :done
                (work-on/derive-story-state {:status :open
                                             :meta {:refined "true"}}
                                            [{:status :closed}])))))
@@ -188,12 +203,13 @@
 ;;; Statechart Definition Tests
 
 (defmacro with-clean-engine
-  "Execute body with a fresh engine state."
+  "Execute body with a fresh engine state and nullable Claude CLI."
   [& body]
   `(do
      (engine/reset-engine!)
      (try
-       ~@body
+       (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+         ~@body)
        (finally
          (engine/reset-engine!)))))
 
@@ -232,11 +248,19 @@
             (sc/send! sid :refined)
             (is (contains? (sc/current-state sid) :refined)))))
 
-      (testing "refined → awaiting-pr"
+      (testing "refined → done"
         (with-clean-engine
           (sc/register! ::task-flow2 work-on/task-statechart)
           (let [sid (sc/start! ::task-flow2)]
             (sc/send! sid :refined)
+            (sc/send! sid :done)
+            (is (contains? (sc/current-state sid) :done)))))
+
+      (testing "done → awaiting-pr"
+        (with-clean-engine
+          (sc/register! ::task-flow2b work-on/task-statechart)
+          (let [sid (sc/start! ::task-flow2b)]
+            (sc/send! sid :done)
             (sc/send! sid :awaiting-pr)
             (is (contains? (sc/current-state sid) :awaiting-pr)))))
 
@@ -326,27 +350,27 @@
             (sc/send! sid :has-tasks)
             (is (contains? (sc/current-state sid) :has-tasks)))))
 
-      (testing "has-tasks → awaiting-review"
+      (testing "has-tasks → done"
         (with-clean-engine
           (sc/register! ::story-flow3 work-on/story-statechart)
           (let [sid (sc/start! ::story-flow3)]
             (sc/send! sid :has-tasks)
-            (sc/send! sid :awaiting-review)
-            (is (contains? (sc/current-state sid) :awaiting-review)))))
+            (sc/send! sid :done)
+            (is (contains? (sc/current-state sid) :done)))))
 
-      (testing "awaiting-review → has-tasks (review found issues)"
+      (testing "done → has-tasks (review found issues)"
         (with-clean-engine
           (sc/register! ::story-rework work-on/story-statechart)
           (let [sid (sc/start! ::story-rework)]
-            (sc/send! sid :awaiting-review)
+            (sc/send! sid :done)
             (sc/send! sid :has-tasks)
             (is (contains? (sc/current-state sid) :has-tasks)))))
 
-      (testing "awaiting-review → awaiting-pr"
+      (testing "done → awaiting-pr"
         (with-clean-engine
           (sc/register! ::story-flow4 work-on/story-statechart)
           (let [sid (sc/start! ::story-flow4)]
-            (sc/send! sid :awaiting-review)
+            (sc/send! sid :done)
             (sc/send! sid :awaiting-pr)
             (is (contains? (sc/current-state sid) :awaiting-pr)))))
 
@@ -396,6 +420,6 @@
   ;; Verify story-states matches expected set.
   (testing "story-states"
     (testing "contains all story statechart states"
-      (is (= #{:idle :unrefined :refined :has-tasks :awaiting-review
+      (is (= #{:idle :unrefined :refined :has-tasks :done
                :awaiting-pr :wait-pr-merge :complete :escalated}
              work-on/story-states)))))
