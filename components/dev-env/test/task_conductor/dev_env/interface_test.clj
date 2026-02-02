@@ -22,18 +22,20 @@
     (testing "delegates to protocol/register-hook for :on-close"
       (let [dev-env (protocol/make-noop-dev-env)
             callback (fn [_] :test)
-            result (interface/register-hook dev-env :on-close callback)]
+            result (interface/register-hook dev-env "sess-123" :on-close callback)]
         (is (uuid? result))
         (let [calls @(:calls dev-env)]
-          (is (= :register-hook (:op (first calls)))))))
+          (is (= :register-hook (:op (first calls))))
+          (is (= "sess-123" (:session-id (first calls)))))))
 
     (testing "delegates to protocol/register-hook for :on-idle"
       (let [dev-env (protocol/make-noop-dev-env)
             callback (fn [_] :test)
-            result (interface/register-hook dev-env :on-idle callback)]
+            result (interface/register-hook dev-env "sess-456" :on-idle callback)]
         (is (uuid? result))
         (let [calls @(:calls dev-env)]
-          (is (= :register-hook (:op (first calls)))))))
+          (is (= :register-hook (:op (first calls))))
+          (is (= "sess-456" (:session-id (first calls)))))))
 
     (testing "throws on unsupported hook-type"
       (let [dev-env (protocol/make-noop-dev-env)
@@ -41,9 +43,9 @@
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo
              #"Unsupported hook-type: :on-unknown"
-             (interface/register-hook dev-env :on-unknown callback)))
+             (interface/register-hook dev-env "sess-789" :on-unknown callback)))
         (try
-          (interface/register-hook dev-env :on-unknown callback)
+          (interface/register-hook dev-env "sess-789" :on-unknown callback)
           (catch clojure.lang.ExceptionInfo e
             (is (= :on-unknown (:hook-type (ex-data e))))
             (is (= #{:on-close :on-idle} (:valid-hook-types (ex-data e))))))))))
@@ -79,12 +81,12 @@
 
 (deftest register-hooks-test
   (testing "register-hooks"
-    (testing "registers multiple hooks at once"
+    (testing "registers multiple hooks at once for a session"
       (let [dev-env (protocol/make-noop-dev-env)
             on-close (fn [_] :closed)
             on-idle (fn [_] :idle)
-            result (interface/register-hooks dev-env {:on-close on-close
-                                                      :on-idle on-idle})]
+            result (interface/register-hooks dev-env "sess-multi" {:on-close on-close
+                                                                   :on-idle on-idle})]
         (is (= #{:on-close :on-idle} (set (keys result))))
         (is (uuid? (:on-close result)))
         (is (uuid? (:on-idle result)))
@@ -92,11 +94,12 @@
         (let [calls @(:calls dev-env)]
           (is (= 2 (count calls)))
           (is (= #{:on-close :on-idle}
-                 (set (map :hook-type calls)))))))
+                 (set (map :hook-type calls))))
+          (is (every? #(= "sess-multi" (:session-id %)) calls)))))
 
     (testing "returns empty map for empty hook-map"
       (let [dev-env (protocol/make-noop-dev-env)
-            result (interface/register-hooks dev-env {})]
+            result (interface/register-hooks dev-env "sess-empty" {})]
         (is (= {} result))
         (is (empty? @(:calls dev-env)))))))
 

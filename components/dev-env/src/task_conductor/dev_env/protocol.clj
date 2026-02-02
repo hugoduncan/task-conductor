@@ -41,14 +41,15 @@
     Returns a session handle (implementation-defined).
     The dev-env implementation spawns the Claude CLI process directly.")
 
-  (register-hook [dev-env hook-type callback]
+  (register-hook [dev-env session-id hook-type callback]
     "Register a lifecycle callback for session events.
 
     Parameters:
-      hook-type - Keyword indicating the event type:
-                  :on-close - Session closed (by user, error, or timeout)
-                  :on-idle  - Session waiting for user input
-      callback  - Function (fn [context]) called when event occurs
+      session-id - The session to watch for events (string)
+      hook-type  - Keyword indicating the event type:
+                   :on-close - Session closed (by user, error, or timeout)
+                   :on-idle  - Session waiting for user input
+      callback   - Function (fn [context]) called when event occurs
 
     Returns a hook registration ID.
     Callbacks receive a context map with :session-id, :timestamp, :reason.")
@@ -101,10 +102,11 @@
                        :timestamp (java.time.Instant/now)})
     {:session-id session-id :handle :noop})
 
-  (register-hook [_ hook-type callback]
+  (register-hook [_ session-id hook-type callback]
     (let [hook-id (java.util.UUID/randomUUID)]
-      (swap! hooks assoc hook-id {:type hook-type :callback callback})
+      (swap! hooks assoc hook-id {:type hook-type :callback callback :session-id session-id})
       (swap! calls conj {:op :register-hook
+                         :session-id session-id
                          :hook-type hook-type
                          :hook-id hook-id
                          :timestamp (java.time.Instant/now)})

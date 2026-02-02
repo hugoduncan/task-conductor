@@ -29,28 +29,30 @@
     (testing "records the hook registration"
       (let [dev-env (protocol/make-noop-dev-env)
             callback (fn [_ctx] :called)
-            hook-id (protocol/register-hook dev-env :on-close callback)]
+            hook-id (protocol/register-hook dev-env "sess-123" :on-close callback)]
         (is (uuid? hook-id))
         (let [calls @(:calls dev-env)
               call (first calls)]
           (is (= 1 (count calls)))
           (is (= :register-hook (:op call)))
+          (is (= "sess-123" (:session-id call)))
           (is (= :on-close (:hook-type call)))
           (is (= hook-id (:hook-id call))))))
 
-    (testing "stores hook in hooks atom"
+    (testing "stores hook in hooks atom with session-id"
       (let [dev-env (protocol/make-noop-dev-env)
             callback (fn [_ctx] :called)
-            hook-id (protocol/register-hook dev-env :on-idle callback)
+            hook-id (protocol/register-hook dev-env "sess-456" :on-idle callback)
             hooks @(:hooks dev-env)
             hook (get hooks hook-id)]
         (is (= :on-idle (:type hook)))
+        (is (= "sess-456" (:session-id hook)))
         (is (= callback (:callback hook)))))
 
     (testing "generates unique hook-ids"
       (let [dev-env (protocol/make-noop-dev-env)
-            id1 (protocol/register-hook dev-env :on-close (fn [_] nil))
-            id2 (protocol/register-hook dev-env :on-idle (fn [_] nil))]
+            id1 (protocol/register-hook dev-env "sess-1" :on-close (fn [_] nil))
+            id2 (protocol/register-hook dev-env "sess-2" :on-idle (fn [_] nil))]
         (is (not= id1 id2))))))
 
 (deftest query-transcript-test

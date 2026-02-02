@@ -74,7 +74,8 @@
   (if-let [dev-env (dev-env-registry/get-dev-env id)]
     (let [callback (fn [_context]
                      (core/send! session-id event))
-          hook-id (dev-env/register-hook dev-env hook-type callback)]
+          ;; session-id is used both as the statechart session and dev-env session
+          hook-id (dev-env/register-hook dev-env session-id hook-type callback)]
       (swap! dev-env-hooks assoc [id hook-type]
              {:hook-id hook-id
               :engine-session-id session-id

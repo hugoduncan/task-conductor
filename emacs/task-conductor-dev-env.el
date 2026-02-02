@@ -319,26 +319,51 @@ Returns t on success."
 
 (cl-defun task-conductor-dev-env--handle-start-session (params)
   "Handle :start-session command with PARAMS.
-PARAMS should contain :session-id.  Associates an existing claude-code
-buffer with the session-id.  Returns response plist.
+PARAMS should contain :session-id and :opts.
+OPTS can contain:
+  :dir              - working directory for the session (story workspace)
+  :claude-session-id - Claude session ID to resume with --resume
+  :task-id          - task/story ID being worked on
 
-Note: claude-code--start does not return the buffer, so we find the
-most recent buffer for the project directory."
-  (let ((session-id (plist-get params :session-id)))
+Starts a new Claude session in the specified directory, optionally
+resuming a previous Claude conversation."
+  (let* ((session-id (plist-get params :session-id))
+         (opts (plist-get params :opts))
+         (dir (plist-get opts :dir))
+         (claude-session-id (plist-get opts :claude-session-id))
+         (task-id (plist-get opts :task-id)))
     (unless session-id
       (cl-return-from task-conductor-dev-env--handle-start-session
         '(:status :error :message "Missing :session-id in params")))
     (let ((existing-buffer (gethash session-id task-conductor-dev-env--sessions)))
       (if (and existing-buffer (buffer-live-p existing-buffer))
           `(:status :ok :buffer-name ,(buffer-name existing-buffer))
-        ;; Find existing claude buffer for project
-        (let* ((dir (or task-conductor-dev-env--project-dir default-directory))
-               (bufs (claude-code--find-claude-buffers-for-directory dir)))
-          (if bufs
-              (let ((buf (car bufs)))
-                (puthash session-id buf task-conductor-dev-env--sessions)
-                `(:status :ok :buffer-name ,(buffer-name buf)))
-            '(:status :error :message "No claude-code buffer found for project")))))))
+        ;; Start a new Claude session in the specified directory
+        (let* ((work-dir (expand-file-name (or dir task-conductor-dev-env--project-dir default-directory)))
+               (default-directory work-dir)
+               (resume-args (when claude-session-id
+                              (list "--resume" claude-session-id))))
+          ;; Start claude-code with optional resume
+          (if resume-args
+              (claude-code--start work-dir resume-args)
+            (claude-code--start work-dir))
+          ;; Find the buffer that was just created
+          ;; Try claude-code's function first, then fall back to matching default-directory
+          (let ((bufs (or (claude-code--find-claude-buffers-for-directory work-dir)
+                          (seq-filter (lambda (b)
+                                        (and (string-prefix-p "*claude:" (buffer-name b))
+                                             (string= (expand-file-name
+                                                       (buffer-local-value 'default-directory b))
+                                                      (file-name-as-directory work-dir))))
+                                      (buffer-list)))))
+            (if bufs
+                (let ((buf (car bufs)))
+                  (puthash session-id buf task-conductor-dev-env--sessions)
+                  `(:status :ok
+                    :buffer-name ,(buffer-name buf)
+                    :resumed ,(if claude-session-id t nil)
+                    :task-id ,task-id))
+              '(:status :error :message "Failed to start claude-code session"))))))))
 
 (cl-defun task-conductor-dev-env--handle-register-hook (params)
   "Handle :register-hook command with PARAMS.
