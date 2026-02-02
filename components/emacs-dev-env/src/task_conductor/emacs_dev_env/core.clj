@@ -67,10 +67,18 @@
                              {:session-id session-id :opts opts}
                              default-response-timeout-ms)))
 
-  (register-hook [_ hook-type callback]
-    (let [hook-id (UUID/randomUUID)]
+  (register-hook [_ session-id hook-type callback]
+    (let [{:keys [command-chan]} @state
+          hook-id (UUID/randomUUID)]
+      ;; Store callback locally for when emacs sends hook events
       (swap! state assoc-in [:hooks hook-id] {:type hook-type
-                                              :callback callback})
+                                              :callback callback
+                                              :session-id session-id})
+      ;; Send command to emacs to set up hook detection
+      (send-command-and-wait state command-chan :register-hook
+                             {:session-id session-id
+                              :hook-type hook-type}
+                             default-response-timeout-ms)
       hook-id))
 
   (query-transcript [_ session-id]

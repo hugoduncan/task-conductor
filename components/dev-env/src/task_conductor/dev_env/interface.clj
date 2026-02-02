@@ -28,22 +28,23 @@
   "Register a lifecycle callback for session events.
 
   Parameters:
-    dev-env   - A DevEnv implementation
-    hook-type - Keyword indicating the event type:
-                :on-close - Session closed (by user, error, or timeout)
-                :on-idle  - Session waiting for user input
-    callback  - Function (fn [context]) called when event occurs
+    dev-env    - A DevEnv implementation
+    session-id - The session to watch for events (string)
+    hook-type  - Keyword indicating the event type:
+                 :on-close - Session closed (by user, error, or timeout)
+                 :on-idle  - Session waiting for user input
+    callback   - Function (fn [context]) called when event occurs
 
   Returns a hook registration ID.
 
   Throws ex-info if hook-type is not supported."
-  [dev-env hook-type callback]
+  [dev-env session-id hook-type callback]
   (when-not (contains? valid-hook-types hook-type)
     (throw (ex-info (str "Unsupported hook-type: " hook-type
                          ". Supported types are: " (pr-str valid-hook-types))
                     {:hook-type hook-type
                      :valid-hook-types valid-hook-types})))
-  (protocol/register-hook dev-env hook-type callback))
+  (protocol/register-hook dev-env session-id hook-type callback))
 
 (defn query-transcript
   "Get the conversation transcript for a session.
@@ -94,15 +95,16 @@
   "Register multiple lifecycle hooks at once.
 
   Parameters:
-    dev-env  - A DevEnv implementation
-    hook-map - Map of hook-type to callback function
-               e.g., {:on-close fn1 :on-idle fn2}
+    dev-env    - A DevEnv implementation
+    session-id - The session to watch for events (string)
+    hook-map   - Map of hook-type to callback function
+                 e.g., {:on-close fn1 :on-idle fn2}
 
   Returns a map of hook-type to hook registration."
-  [dev-env hook-map]
+  [dev-env session-id hook-map]
   (reduce-kv
    (fn [acc hook-type callback]
-     (assoc acc hook-type (register-hook dev-env hook-type callback)))
+     (assoc acc hook-type (register-hook dev-env session-id hook-type callback)))
    {}
    hook-map))
 

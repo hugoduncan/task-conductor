@@ -47,23 +47,31 @@
 
 ;;; Story State Derivation
 
+(defn- active-children
+  "Filter out deleted children. Handles both keyword and string status."
+  [children]
+  (remove #(#{:deleted "deleted"} (:status %)) children))
+
 (defn count-open-children
-  "Count the number of open (non-closed) children.
+  "Count the number of open (non-closed, non-deleted) children.
    Used for detecting no-progress in :has-tasks state."
   [children]
-  (count (filter #(not= :closed (:status %)) children)))
+  (count (filter #(not (#{:closed "closed"} (:status %)))
+                 (active-children children))))
 
 (defn- children-complete?
-  "Check if all children are complete (status :closed)."
+  "Check if all active children are complete (status :closed or \"closed\")."
   [children]
-  (and (seq children)
-       (every? #(= :closed (:status %)) children)))
+  (let [active (active-children children)]
+    (and (seq active)
+         (every? #(#{:closed "closed"} (:status %)) active))))
 
 (defn- has-incomplete-children?
-  "Check if there are any incomplete children."
+  "Check if there are any incomplete active children."
   [children]
-  (and (seq children)
-       (some #(not= :closed (:status %)) children)))
+  (let [active (active-children children)]
+    (and (seq active)
+         (some #(not (#{:closed "closed"} (:status %))) active))))
 
 (defn derive-story-state
   "Derive execution state for a story.

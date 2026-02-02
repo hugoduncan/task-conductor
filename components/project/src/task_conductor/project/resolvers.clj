@@ -81,9 +81,10 @@
 
 (defn- story?
   "Check if task is a story type.
-  Assumes :task/type is a keyword from EDN parsing (e.g., :story, :task)."
+  Handles both keyword (:story) and string (\"story\") values."
   [task]
-  (= :story (:task/type task)))
+  (let [t (:task/type task)]
+    (or (= :story t) (= "story" t))))
 
 (defn- task->work-on-map
   "Convert EQL task map to work-on format (unnamespaced keys)."
