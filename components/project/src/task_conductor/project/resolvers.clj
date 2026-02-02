@@ -148,11 +148,17 @@
 
 (defn await-skill-threads!
   "Wait for all active skill threads to complete.
-   Returns when all threads spawned by invoke-skill! have finished.
-   Primarily used by tests for proper synchronization."
+   Returns when no skill threads remain active.
+   Loops to handle cascading invocations where completing one skill
+   may trigger another. Primarily used by tests for synchronization."
   []
-  (doseq [^Thread thread @active-skill-threads]
-    (.join thread)))
+  (loop []
+    (let [threads @active-skill-threads]
+      (when (seq threads)
+        (doseq [^Thread thread threads]
+          (.join thread))
+        ;; Check again for newly spawned threads
+        (recur)))))
 
 (defn reset-skill-threads!
   "Reset the skill threads tracking atom.
@@ -160,32 +166,85 @@
   []
   (reset! active-skill-threads #{}))
 
+(defn- no-progress?
+  "Check if skill made no progress.
+   For most states: new-state == pre-skill-state
+   For :has-tasks: state unchanged AND open children count unchanged"
+  [pre-skill-state new-state pre-open-children new-open-children]
+  (let [was-has-tasks (= :has-tasks pre-skill-state)
+        is-has-tasks (= :has-tasks new-state)]
+    (if (and was-has-tasks is-has-tasks)
+      ;; For :has-tasks state, check open children count
+      (= pre-open-children new-open-children)
+      ;; For other states, check if derived state matches
+      (= pre-skill-state new-state))))
+
 (defn- on-skill-complete
   "Handle skill completion. Re-derives state and sends event to statechart.
    Called from virtual thread when claude-cli promise delivers.
-   Guards against session being stopped during skill execution."
+   Guards against session being stopped during skill execution.
+   Detects no-progress and escalates to dev-env with Claude session-id."
   [session-id result]
   (try
     (let [data (sc/get-data session-id)
-          {:keys [project-dir task-id task-type]} data]
+          {:keys [project-dir task-id task-type
+                  pre-skill-state pre-skill-open-children]} data]
       (if (:error result)
         ;; Skill failed - send error event
         (sc/send! session-id :error)
-        ;; Skill succeeded - re-derive state and send as event
+        ;; Skill succeeded - re-derive state and check for progress
         (let [task (fetch-task project-dir task-id)
               children (when (= :story task-type)
                          (fetch-children project-dir task-id))
+              children-maps (mapv task->work-on-map children)
               new-state (if (= :story task-type)
                           (work-on/derive-story-state
                            (task->work-on-map task)
-                           (mapv task->work-on-map children))
+                           children-maps)
                           (work-on/derive-task-state
-                           (task->work-on-map task)))]
-          (sc/send! session-id new-state))))
+                           (task->work-on-map task)))
+              new-open-children (when (= :story task-type)
+                                  (work-on/count-open-children children-maps))]
+          (if (no-progress? pre-skill-state new-state
+                            pre-skill-open-children new-open-children)
+            ;; No progress - store Claude session-id and escalate
+            (do
+              (sc/update-data! session-id
+                               #(assoc % :last-claude-session-id (:session-id result)))
+              (sc/send! session-id :no-progress))
+            ;; Progress made - send new state as event
+            (sc/send! session-id new-state)))))
     (catch clojure.lang.ExceptionInfo e
       ;; Session was stopped during skill execution - ignore
       (when-not (= :session-not-found (:error (ex-data e)))
         (throw e)))))
+
+(defn- store-pre-skill-state!
+  "Store current derived state and open children count before skill invocation.
+   Used by on-skill-complete to detect no-progress.
+   Derives state from task data rather than sc/current-state because entry
+   actions run before the sessions atom is updated."
+  [session-id]
+  (let [data (sc/get-data session-id)
+        {:keys [project-dir task-id task-type]} data
+        task (fetch-task project-dir task-id)
+        children (when (= :story task-type)
+                   (fetch-children project-dir task-id))
+        children-maps (mapv task->work-on-map children)
+        ;; Derive current state from task data (matches how on-skill-complete works)
+        current-derived-state (if (= :story task-type)
+                                (work-on/derive-story-state
+                                 (task->work-on-map task)
+                                 children-maps)
+                                (work-on/derive-task-state
+                                 (task->work-on-map task)))
+        open-children-count (when (= :story task-type)
+                              (work-on/count-open-children children-maps))]
+    (sc/update-data! session-id
+                     (fn [d]
+                       (cond-> (assoc d :pre-skill-state current-derived-state)
+                         (some? open-children-count)
+                         (assoc :pre-skill-open-children open-children-count))))))
 
 (graph/defmutation invoke-skill!
   "Invoke a skill via claude-cli based on current statechart state.
@@ -199,17 +258,20 @@
    Returns immediately with invocation status."
   [{:keys [skill] :engine/keys [session-id]}]
   {::pco/output [:invoke-skill/status :invoke-skill/error]}
-  (let [data (sc/get-data session-id)
+  (let [_ (store-pre-skill-state! session-id)
+        data (sc/get-data session-id)
         {:keys [project-dir]} data
         prompt (str "/" skill)
         handle (claude-cli/invoke {:prompt prompt :dir project-dir})
-        thread (Thread/startVirtualThread
-                (fn []
-                  (try
-                    (let [result @(:result-promise handle)]
-                      (on-skill-complete session-id result))
-                    (finally
-                      (swap! active-skill-threads disj (Thread/currentThread))))))]
+        ;; Use bound-fn to convey dynamic bindings to virtual thread
+        ;; (needed for nullable testing infrastructure)
+        completion-fn (bound-fn []
+                        (try
+                          (let [result @(:result-promise handle)]
+                            (on-skill-complete session-id result))
+                          (finally
+                            (swap! active-skill-threads disj (Thread/currentThread)))))
+        thread (Thread/startVirtualThread completion-fn)]
     (swap! active-skill-threads conj thread)
     {:invoke-skill/status :started}))
 
@@ -220,11 +282,13 @@
    Input (injected by statechart engine):
      :engine/session-id - statechart session ID
 
-   Notifies the selected dev-env of the failure."
+   Notifies the selected dev-env of the failure.
+   If a Claude session-id is available (from no-progress escalation),
+   passes it to dev-env for conversation resumption."
   [{:engine/keys [session-id]}]
   {::pco/output [:escalate/status :escalate/error]}
   (let [data (sc/get-data session-id)
-        {:keys [project-dir task-id]} data
+        {:keys [project-dir task-id last-claude-session-id]} data
         selected (graph/query [:dev-env/selected])
         dev-env-id (:dev-env/id (:dev-env/selected selected))]
     (if dev-env-id
@@ -233,8 +297,10 @@
         (graph/query [`(task-conductor.dev-env.resolvers/dev-env-start-session!
                         {:dev-env/id ~dev-env-id
                          :dev-env/session-id ~session-id
-                         :dev-env/opts {:dir ~project-dir
-                                        :task-id ~task-id}})])
+                         :dev-env/opts ~(cond-> {:dir project-dir
+                                                 :task-id task-id}
+                                          last-claude-session-id
+                                          (assoc :claude-session-id last-claude-session-id))})])
         {:escalate/status :escalated
          :escalate/dev-env-id dev-env-id})
       {:escalate/status :no-dev-env

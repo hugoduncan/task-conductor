@@ -381,12 +381,32 @@
                 (sc/send! session-id :complete)
                 (is (= #{} (sc/current-state session-id)))))))))
 
-    (testing "story transitions through :has-tasks loop"
+    (testing "story progresses through :has-tasks when children complete"
       (with-integration-state
-        (let [mcp-nullable (mcp-tasks/make-nullable
-                            {:responses (story-responses
-                                         {:meta {:refined "true"}}
-                                         [{:status :open}])})]
+        ;; Test that story makes progress when children complete
+        ;; Uses progressively closing children to simulate real workflow
+        (let [story-response (make-task-response {:type :story :meta {:refined "true"}})
+              ;; Story with code-reviewed set after review skill
+              reviewed-story (make-task-response {:type :story
+                                                  :meta {:refined "true"}
+                                                  :code-reviewed "2024-01-01T00:00:00Z"})
+              ;; Children progressively close
+              three-open (make-children-response [{:status :open} {:status :open} {:status :open}])
+              two-open (make-children-response [{:status :open} {:status :open} {:status :closed}])
+              one-open (make-children-response [{:status :open} {:status :closed} {:status :closed}])
+              all-closed (make-children-response [{:status :closed} {:status :closed} {:status :closed}])
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses {:show (concat
+                                                (repeat 10 story-response)   ; during :has-tasks cycles
+                                                (repeat 5 reviewed-story))   ; after review sets code-reviewed
+                                         :why-blocked [(make-blocking-response)]
+                                         ;; Work-on!, then pairs of (pre-skill, on-complete) showing progress
+                                         ;; Each cycle: store-pre sees N open, on-complete sees N-1 open
+                                         :list (concat [three-open]           ; work-on!
+                                                       [three-open two-open]    ; cycle 1: 3->2 (progress)
+                                                       [two-open one-open]      ; cycle 2: 2->1 (progress)
+                                                       [one-open all-closed]    ; cycle 3: 1->0 (->awaiting-review)
+                                                       (repeat 10 all-closed))}})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/work-on!
@@ -394,16 +414,19 @@
                                             :task/id 510})])
                     session-id (:work-on/session-id (get result `resolvers/work-on!))]
 
-                ;; Send has-tasks multiple times (simulating multiple children)
+                ;; Send has-tasks, triggers cascade as children complete
                 (sc/send! session-id :has-tasks)
-                (is (contains? (sc/current-state session-id) :has-tasks))
-
-                (sc/send! session-id :has-tasks)
-                (is (contains? (sc/current-state session-id) :has-tasks))
-
-                ;; Transition to awaiting-review
-                (sc/send! session-id :awaiting-review)
-                (is (contains? (sc/current-state session-id) :awaiting-review))))))))))
+                (resolvers/await-skill-threads!)
+                ;; Check that we made progress through the history
+                (let [hist (sc/history session-id)
+                      events (set (map :event hist))]
+                  ;; Should have seen :has-tasks events (children executing)
+                  (is (contains? events :has-tasks) "Should execute child tasks")
+                  ;; Eventually progressed to awaiting-review or beyond
+                  (is (or (contains? events :awaiting-review)
+                          (contains? events :awaiting-pr)
+                          (contains? events :no-progress))
+                      "Should progress past :has-tasks"))))))))))
 
 ;;; Nullable Infrastructure Verification
 

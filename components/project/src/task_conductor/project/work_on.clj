@@ -47,6 +47,12 @@
 
 ;;; Story State Derivation
 
+(defn count-open-children
+  "Count the number of open (non-closed) children.
+   Used for detecting no-progress in :has-tasks state."
+  [children]
+  (count (filter #(not= :closed (:status %)) children)))
+
 (defn- children-complete?
   "Check if all children are complete (status :closed)."
   [children]
@@ -145,7 +151,8 @@
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
                                                             {:skill "mcp-tasks:refine-task"})}))
                            (sc/transition {:event :refined :target :refined})
-                           (sc/transition {:event :error :target :escalated}))
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
 
     ;; Refined - ready for execution
                  (sc/state {:id :refined}
@@ -153,7 +160,8 @@
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
                                                             {:skill "mcp-tasks:execute-task"})}))
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition {:event :error :target :escalated}))
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
 
     ;; Awaiting PR - task executed, needs PR creation
                  (sc/state {:id :awaiting-pr}
@@ -161,7 +169,8 @@
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
                                                             {:skill "mcp-tasks:create-task-pr"})}))
                            (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
-                           (sc/transition {:event :error :target :escalated}))
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
 
     ;; Wait for PR merge - PR created, awaiting merge notification from dev-env
                  (sc/state {:id :wait-pr-merge}
@@ -203,7 +212,8 @@
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
                                                             {:skill "mcp-tasks:refine-task"})}))
                            (sc/transition {:event :refined :target :refined})
-                           (sc/transition {:event :error :target :escalated}))
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
 
     ;; Refined - needs task creation
                  (sc/state {:id :refined}
@@ -211,7 +221,8 @@
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
                                                             {:skill "mcp-tasks:create-story-tasks"})}))
                            (sc/transition {:event :has-tasks :target :has-tasks})
-                           (sc/transition {:event :error :target :escalated}))
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
 
     ;; Has tasks - execute next incomplete child task
                  (sc/state {:id :has-tasks}
@@ -221,7 +232,8 @@
       ;; Can stay in has-tasks (more children) or move to review
                            (sc/transition {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :awaiting-review :target :awaiting-review})
-                           (sc/transition {:event :error :target :escalated}))
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
 
     ;; Awaiting review - all children complete, needs code review
                  (sc/state {:id :awaiting-review}
@@ -231,7 +243,8 @@
       ;; Review may find issues requiring more work
                            (sc/transition {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition {:event :error :target :escalated}))
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
 
     ;; Awaiting PR - reviewed, needs PR creation
                  (sc/state {:id :awaiting-pr}
@@ -239,7 +252,8 @@
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
                                                             {:skill "mcp-tasks:create-story-pr"})}))
                            (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
-                           (sc/transition {:event :error :target :escalated}))
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
 
     ;; Wait for PR merge - PR created, awaiting merge notification from dev-env
                  (sc/state {:id :wait-pr-merge}
