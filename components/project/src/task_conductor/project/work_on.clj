@@ -266,7 +266,7 @@
                  (sc/state {:id :done}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:review-story"})}))
+                                                            {:skill "mcp-tasks:review-story-implementation"})}))
       ;; Review may find issues requiring more work
                            (sc/transition {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
