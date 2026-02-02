@@ -104,7 +104,8 @@
   (testing "with-session"
     (testing "starts session, executes body, and closes"
       (let [dev-env (protocol/make-noop-dev-env)
-            body-result (interface/with-session [session dev-env "s1" {:dir "/x"}]
+            body-result (interface/with-session
+                          [session dev-env "s1" {:dir "/x"}]
                           (is (= {:session-id "s1" :handle :noop} session))
                           :body-done)]
         (is (= :body-done body-result))
@@ -118,7 +119,8 @@
     (testing "closes session even when body throws"
       (let [dev-env (protocol/make-noop-dev-env)]
         (is (thrown-with-msg? Exception #"test error"
-                              (interface/with-session [_session dev-env "s2" nil]
+                              (interface/with-session
+                                [_session dev-env "s2" nil]
                                 (throw (Exception. "test error")))))
         (let [calls @(:calls dev-env)
               ops (mapv :op calls)]

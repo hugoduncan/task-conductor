@@ -42,7 +42,9 @@
     (testing "throws when chart-def has wrong :node-type"
       (with-clean-engine
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid chart"
-                              (core/register! ::state-chart (state {:id :foo}))))))))
+                              (core/register!
+                               ::state-chart
+                               (state {:id :foo}))))))))
 
 (deftest unregister!-test
   (testing "unregister!"

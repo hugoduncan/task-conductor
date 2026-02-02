@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Pre-commit hook: format with cljfmt, lint with clj-kondo
+# Pre-commit hook: format with cljfmt, lint with clj-kondo, check line length
 
 # Get staged Clojure files into array
 # grep exits 1 for no matches, 2+ for errors; only suppress exit 1
@@ -32,6 +32,13 @@ fi
 # Block on info+ findings
 if echo "$kondo_output" | grep -qE '(info|warning|error):'; then
   echo "Pre-commit hook: clj-kondo found issues. Please fix before committing."
+  exit 1
+fi
+
+# Check line length on staged files
+if ! bb line-length check "${staged_files[@]}" 2>/dev/null; then
+  echo "Pre-commit hook: line length violations found."
+  echo "Run 'bb line-length fix' to auto-fix, then restage."
   exit 1
 fi
 

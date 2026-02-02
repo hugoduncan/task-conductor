@@ -205,10 +205,13 @@
       status (conj "--status" (name status))
       category (conj "--category" category)
       type (conj "--type" (name type))
-      (some? parent-id) (conj "--parent-id" (if (nil? parent-id) "" (str parent-id)))
+      (some?
+       parent-id) (conj "--parent-id" (if (nil? parent-id) "" (str parent-id)))
       meta (conj "--meta" (json/generate-string meta))
       relations (conj "--relations" (json/generate-string relations))
-      session-events (conj "--session-events" (json/generate-string session-events))
+      session-events (conj
+                      "--session-events"
+                      (json/generate-string session-events))
       shared-context (conj "--shared-context" shared-context)
       code-reviewed (conj "--code-reviewed" code-reviewed)
       pr-num (conj "--pr-num" (str pr-num)))))

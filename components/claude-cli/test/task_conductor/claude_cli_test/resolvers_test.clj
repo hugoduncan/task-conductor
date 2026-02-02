@@ -35,7 +35,9 @@
           (let [result (graph/query
                         [`(resolvers/invoke!
                            {:claude-cli/prompt "test"})])
-                id (get-in result [`resolvers/invoke! :claude-cli/invocation-id])
+                id (get-in
+                    result
+                    [`resolvers/invoke! :claude-cli/invocation-id])
                 entry (registry/get-invocation id)]
             (is (some? entry))
             (is (= :pending (:status entry)))
@@ -132,7 +134,8 @@
           (is (= 0 (:claude-cli/exit-code response)))
           (is (= [{:type "end"}] (:claude-cli/events response))))))
 
-    (testing "returns :error status with error details when result contains error"
+    (testing
+     "returns :error status with error details when result contains error"
       (with-clean-state
         (let [p (promise)
               handle {:process :mock :result-promise p}

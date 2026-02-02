@@ -148,7 +148,8 @@
                          {:engine/session-id ~sid
                           :engine/event :start})])
               new-state (get-in result
-                                [`resolvers/engine-send! :engine/session-state])]
+                                [`resolvers/engine-send!
+                                 :engine/session-state])]
           (is (= #{:running} new-state)))))
 
     (testing "throws for non-existent session"
@@ -193,9 +194,11 @@
                  (sc/initial {}
                              (sc/transition {:target :idle}))
                  (sc/state {:id :idle}
-                           (sc/transition {:event :start-waiting :target :waiting}))
+                           (sc/transition
+                            {:event :start-waiting :target :waiting}))
                  (sc/state {:id :waiting}
-                           (sc/transition {:event :dev-env-closed :target :received}))
+                           (sc/transition
+                            {:event :dev-env-closed :target :received}))
                  (sc/state {:id :received})))
 
 (deftest engine-register-dev-env-hook-test
@@ -251,8 +254,10 @@
                           :dev-env/hook-type :on-close
                           :engine/session-id ~session-id
                           :engine/event :dev-env-closed})])
-              hook-result (get-in result [`resolvers/engine-register-dev-env-hook!
-                                          :engine/hook-id])]
+              hook-result (get-in
+                           result
+                           [`resolvers/engine-register-dev-env-hook!
+                            :engine/hook-id])]
           (is (= :not-found (:error hook-result)))
           (is (string? (:message hook-result))))))))
 
@@ -275,8 +280,10 @@
                       [`(resolvers/engine-unregister-dev-env-hook!
                          {:dev-env/id ~dev-env-id
                           :dev-env/hook-type :on-close})])
-              unregistered? (get-in result [`resolvers/engine-unregister-dev-env-hook!
-                                            :engine/unregistered?])]
+              unregistered? (get-in
+                             result
+                             [`resolvers/engine-unregister-dev-env-hook!
+                              :engine/unregistered?])]
           (is (true? unregistered?)))))
 
     (testing "returns false when hook did not exist"
@@ -285,6 +292,8 @@
                       [`(resolvers/engine-unregister-dev-env-hook!
                          {:dev-env/id "any"
                           :dev-env/hook-type :on-close})])
-              unregistered? (get-in result [`resolvers/engine-unregister-dev-env-hook!
-                                            :engine/unregistered?])]
+              unregistered? (get-in
+                             result
+                             [`resolvers/engine-unregister-dev-env-hook!
+                              :engine/unregistered?])]
           (is (false? unregistered?)))))))

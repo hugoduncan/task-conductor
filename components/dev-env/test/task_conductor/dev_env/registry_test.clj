@@ -37,7 +37,8 @@
         (let [dev-env (protocol/make-noop-dev-env)
               id (registry/register! dev-env :emacs {:host "localhost"})]
           (is (string? id))
-          (is (= {:host "localhost"} (:meta (registry/get-dev-env-entry id)))))))))
+          (is
+           (= {:host "localhost"} (:meta (registry/get-dev-env-entry id)))))))))
 
 (deftest unregister-test
   (with-clear-registry

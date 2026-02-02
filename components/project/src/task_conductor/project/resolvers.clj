@@ -130,11 +130,12 @@
             selected (graph/query [:dev-env/selected])
             dev-env-id (:dev-env/id (:dev-env/selected selected))]
         (when dev-env-id
-          (graph/query [`(task-conductor.statechart-engine.resolvers/engine-register-dev-env-hook!
-                          {:dev-env/id ~dev-env-id
-                           :dev-env/hook-type :on-idle
-                           :engine/session-id ~session-id
-                           :engine/event :complete})]))
+          (graph/query
+           [`(task-conductor.statechart-engine.resolvers/engine-register-dev-env-hook!
+              {:dev-env/id ~dev-env-id
+               :dev-env/hook-type :on-idle
+               :engine/session-id ~session-id
+               :engine/event :complete})]))
         {:work-on/session-id session-id
          :work-on/initial-state initial-state}))))
 
