@@ -128,7 +128,8 @@ and y is one of 8, 9, a, or b."
 ;;; EDN conversion
 
 (defun task-conductor-dev-env--edn-to-plist (edn)
-  "Convert parsed EDN hash-table to plist recursively."
+  "Convert parsed EDN hash-table to plist recursively.
+Handles special parseedn types like (edn-uuid \"...\")."
   (cond
    ((hash-table-p edn)
     (let ((result nil))
@@ -136,6 +137,11 @@ and y is one of 8, 9, a, or b."
                  (setq result (plist-put result k (task-conductor-dev-env--edn-to-plist v))))
                edn)
       result))
+   ;; Handle parseedn UUID representation: (edn-uuid "uuid-string")
+   ((and (listp edn)
+         (eq (car edn) 'edn-uuid)
+         (stringp (cadr edn)))
+    (cadr edn))
    ((listp edn)
     (mapcar #'task-conductor-dev-env--edn-to-plist edn))
    (t edn)))
