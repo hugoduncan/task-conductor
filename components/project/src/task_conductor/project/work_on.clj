@@ -262,7 +262,9 @@
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
 
-    ;; Done - all children complete, awaiting code review
+    ;; Done - all children complete, awaiting code review.
+                 ;; Note: Story :done reviews the *entire* story implementation (all children),
+                 ;; unlike task :done which reviews a single task's implementation.
                  (sc/state {:id :done}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
