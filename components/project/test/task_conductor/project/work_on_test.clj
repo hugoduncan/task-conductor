@@ -289,6 +289,17 @@
             ;; Final state causes termination - configuration becomes empty
             (is (= #{} (sc/current-state sid)))))))
 
+    (testing "guards against :unrefined → :done transition"
+      ;; Tasks must be refined before completion. Sending :done event
+      ;; while in :unrefined state has no effect.
+      (with-clean-test-env
+        (sc/register! ::task-guard work-on/task-statechart)
+        (let [sid (sc/start! ::task-guard)]
+          (sc/send! sid :unrefined)
+          (sc/send! sid :done)
+          (is (contains? (sc/current-state sid) :unrefined)
+              ":done event should be ignored in :unrefined state"))))
+
     (testing "transitions to :escalated on :error"
       (with-clean-test-env
         (sc/register! ::task-error work-on/task-statechart)
