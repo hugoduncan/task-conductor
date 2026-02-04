@@ -4,6 +4,7 @@
   ;; Also tests statechart definitions for task and story execution.
   (:require
    [clojure.test :refer [deftest is testing]]
+   [task-conductor.claude-cli.interface :as claude-cli]
    [task-conductor.project.work-on :as work-on]
    [task-conductor.statechart-engine.core :as engine]
    [task-conductor.statechart-engine.interface :as sc]))
@@ -28,6 +29,25 @@
         (is (= :wait-pr-merge
                (work-on/derive-task-state {:status :open
                                            :pr-num 123
+                                           :meta {:refined "true"}})))))
+
+    (testing "returns :awaiting-pr"
+      (testing "when status is :done and code-reviewed is set"
+        (is (= :awaiting-pr
+               (work-on/derive-task-state {:status :done
+                                           :code-reviewed "2024-01-15"
+                                           :meta {:refined "true"}})))))
+
+    (testing "returns :done"
+      (testing "when status is :done without code-reviewed"
+        (is (= :done
+               (work-on/derive-task-state {:status :done
+                                           :meta {:refined "true"}}))))
+
+      (testing "when status is :done with nil code-reviewed"
+        (is (= :done
+               (work-on/derive-task-state {:status :done
+                                           :code-reviewed nil
                                            :meta {:refined "true"}})))))
 
     (testing "returns :refined"
@@ -90,16 +110,30 @@
                                            [{:status :closed}
                                             {:status :closed}])))))
 
-    (testing "returns :awaiting-review"
-      (testing "when all children complete but not reviewed"
-        (is (= :awaiting-review
+    (testing "returns :done"
+      (testing "when all children closed but not reviewed"
+        (is (= :done
                (work-on/derive-story-state {:status :open
                                             :meta {:refined "true"}}
                                            [{:status :closed}
                                             {:status :closed}]))))
 
+      (testing "when all children done but not reviewed"
+        (is (= :done
+               (work-on/derive-story-state {:status :open
+                                            :meta {:refined "true"}}
+                                           [{:status :done}
+                                            {:status :done}]))))
+
+      (testing "with mix of done and closed children"
+        (is (= :done
+               (work-on/derive-story-state {:status :open
+                                            :meta {:refined "true"}}
+                                           [{:status :done}
+                                            {:status :closed}]))))
+
       (testing "with single completed child"
-        (is (= :awaiting-review
+        (is (= :done
                (work-on/derive-story-state {:status :open
                                             :meta {:refined "true"}}
                                            [{:status :closed}])))))
@@ -168,13 +202,15 @@
 
 ;;; Statechart Definition Tests
 
-(defmacro with-clean-engine
-  "Execute body with a fresh engine state."
+(defmacro with-clean-test-env
+  "Execute body with a fresh engine state and nullable Claude CLI.
+  Resets engine before/after and wraps body in with-nullable-claude-cli."
   [& body]
   `(do
      (engine/reset-engine!)
      (try
-       ~@body
+       (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+         ~@body)
        (finally
          (engine/reset-engine!)))))
 
@@ -187,42 +223,57 @@
       (is (= :statechart (:node-type work-on/task-statechart))))
 
     (testing "can be registered with the engine"
-      (with-clean-engine
+      (with-clean-test-env
         (is (= ::task-chart
                (sc/register! ::task-chart work-on/task-statechart)))))
 
     (testing "starts in :idle state"
-      (with-clean-engine
+      (with-clean-test-env
         (sc/register! ::task-chart work-on/task-statechart)
         (let [sid (sc/start! ::task-chart)]
           (is (contains? (sc/current-state sid) :idle)))))
 
     (testing "transitions from :idle to derived state"
-      (with-clean-engine
+      (with-clean-test-env
         (sc/register! ::task-trans work-on/task-statechart)
         (let [sid (sc/start! ::task-trans)]
           (sc/send! sid :unrefined)
           (is (contains? (sc/current-state sid) :unrefined)))))
 
     (testing "follows task execution flow"
+      (testing "idle → done"
+        (with-clean-test-env
+          (sc/register! ::task-flow0 work-on/task-statechart)
+          (let [sid (sc/start! ::task-flow0)]
+            (sc/send! sid :done)
+            (is (contains? (sc/current-state sid) :done)))))
+
       (testing "unrefined → refined"
-        (with-clean-engine
+        (with-clean-test-env
           (sc/register! ::task-flow1 work-on/task-statechart)
           (let [sid (sc/start! ::task-flow1)]
             (sc/send! sid :unrefined)
             (sc/send! sid :refined)
             (is (contains? (sc/current-state sid) :refined)))))
 
-      (testing "refined → awaiting-pr"
-        (with-clean-engine
+      (testing "refined → done"
+        (with-clean-test-env
           (sc/register! ::task-flow2 work-on/task-statechart)
           (let [sid (sc/start! ::task-flow2)]
             (sc/send! sid :refined)
+            (sc/send! sid :done)
+            (is (contains? (sc/current-state sid) :done)))))
+
+      (testing "done → awaiting-pr"
+        (with-clean-test-env
+          (sc/register! ::task-flow2b work-on/task-statechart)
+          (let [sid (sc/start! ::task-flow2b)]
+            (sc/send! sid :done)
             (sc/send! sid :awaiting-pr)
             (is (contains? (sc/current-state sid) :awaiting-pr)))))
 
       (testing "awaiting-pr → wait-pr-merge"
-        (with-clean-engine
+        (with-clean-test-env
           (sc/register! ::task-flow3 work-on/task-statechart)
           (let [sid (sc/start! ::task-flow3)]
             (sc/send! sid :awaiting-pr)
@@ -230,7 +281,7 @@
             (is (contains? (sc/current-state sid) :wait-pr-merge)))))
 
       (testing "wait-pr-merge → complete"
-        (with-clean-engine
+        (with-clean-test-env
           (sc/register! ::task-flow4 work-on/task-statechart)
           (let [sid (sc/start! ::task-flow4)]
             (sc/send! sid :wait-pr-merge)
@@ -238,8 +289,19 @@
             ;; Final state causes termination - configuration becomes empty
             (is (= #{} (sc/current-state sid)))))))
 
+    (testing "guards against :unrefined → :done transition"
+      ;; Tasks must be refined before completion. Sending :done event
+      ;; while in :unrefined state has no effect.
+      (with-clean-test-env
+        (sc/register! ::task-guard work-on/task-statechart)
+        (let [sid (sc/start! ::task-guard)]
+          (sc/send! sid :unrefined)
+          (sc/send! sid :done)
+          (is (contains? (sc/current-state sid) :unrefined)
+              ":done event should be ignored in :unrefined state"))))
+
     (testing "transitions to :escalated on :error"
-      (with-clean-engine
+      (with-clean-test-env
         (sc/register! ::task-error work-on/task-statechart)
         (let [sid (sc/start! ::task-error)]
           (sc/send! sid :unrefined)
@@ -248,7 +310,7 @@
 
     (testing ":complete is a final state"
       (testing "terminates statechart (empty configuration)"
-        (with-clean-engine
+        (with-clean-test-env
           (sc/register! ::task-final work-on/task-statechart)
           (let [sid (sc/start! ::task-final)]
             (sc/send! sid :complete)
@@ -264,18 +326,18 @@
       (is (= :statechart (:node-type work-on/story-statechart))))
 
     (testing "can be registered with the engine"
-      (with-clean-engine
+      (with-clean-test-env
         (is (= ::story-chart
                (sc/register! ::story-chart work-on/story-statechart)))))
 
     (testing "starts in :idle state"
-      (with-clean-engine
+      (with-clean-test-env
         (sc/register! ::story-chart work-on/story-statechart)
         (let [sid (sc/start! ::story-chart)]
           (is (contains? (sc/current-state sid) :idle)))))
 
     (testing "transitions from :idle to any derived state"
-      (with-clean-engine
+      (with-clean-test-env
         (sc/register! ::story-idle work-on/story-statechart)
         (let [sid (sc/start! ::story-idle)]
           (sc/send! sid :has-tasks)
@@ -283,7 +345,7 @@
 
     (testing "follows story execution flow"
       (testing "unrefined → refined"
-        (with-clean-engine
+        (with-clean-test-env
           (sc/register! ::story-flow1 work-on/story-statechart)
           (let [sid (sc/start! ::story-flow1)]
             (sc/send! sid :unrefined)
@@ -291,7 +353,7 @@
             (is (contains? (sc/current-state sid) :refined)))))
 
       (testing "refined → has-tasks"
-        (with-clean-engine
+        (with-clean-test-env
           (sc/register! ::story-flow2 work-on/story-statechart)
           (let [sid (sc/start! ::story-flow2)]
             (sc/send! sid :refined)
@@ -299,7 +361,7 @@
             (is (contains? (sc/current-state sid) :has-tasks)))))
 
       (testing "has-tasks → has-tasks (loop for multiple children)"
-        (with-clean-engine
+        (with-clean-test-env
           (sc/register! ::story-loop work-on/story-statechart)
           (let [sid (sc/start! ::story-loop)]
             (sc/send! sid :has-tasks)
@@ -307,32 +369,32 @@
             (sc/send! sid :has-tasks)
             (is (contains? (sc/current-state sid) :has-tasks)))))
 
-      (testing "has-tasks → awaiting-review"
-        (with-clean-engine
+      (testing "has-tasks → done"
+        (with-clean-test-env
           (sc/register! ::story-flow3 work-on/story-statechart)
           (let [sid (sc/start! ::story-flow3)]
             (sc/send! sid :has-tasks)
-            (sc/send! sid :awaiting-review)
-            (is (contains? (sc/current-state sid) :awaiting-review)))))
+            (sc/send! sid :done)
+            (is (contains? (sc/current-state sid) :done)))))
 
-      (testing "awaiting-review → has-tasks (review found issues)"
-        (with-clean-engine
+      (testing "done → has-tasks (review found issues)"
+        (with-clean-test-env
           (sc/register! ::story-rework work-on/story-statechart)
           (let [sid (sc/start! ::story-rework)]
-            (sc/send! sid :awaiting-review)
+            (sc/send! sid :done)
             (sc/send! sid :has-tasks)
             (is (contains? (sc/current-state sid) :has-tasks)))))
 
-      (testing "awaiting-review → awaiting-pr"
-        (with-clean-engine
+      (testing "done → awaiting-pr"
+        (with-clean-test-env
           (sc/register! ::story-flow4 work-on/story-statechart)
           (let [sid (sc/start! ::story-flow4)]
-            (sc/send! sid :awaiting-review)
+            (sc/send! sid :done)
             (sc/send! sid :awaiting-pr)
             (is (contains? (sc/current-state sid) :awaiting-pr)))))
 
       (testing "awaiting-pr → wait-pr-merge"
-        (with-clean-engine
+        (with-clean-test-env
           (sc/register! ::story-flow5 work-on/story-statechart)
           (let [sid (sc/start! ::story-flow5)]
             (sc/send! sid :awaiting-pr)
@@ -340,7 +402,7 @@
             (is (contains? (sc/current-state sid) :wait-pr-merge)))))
 
       (testing "wait-pr-merge → complete"
-        (with-clean-engine
+        (with-clean-test-env
           (sc/register! ::story-flow6 work-on/story-statechart)
           (let [sid (sc/start! ::story-flow6)]
             (sc/send! sid :wait-pr-merge)
@@ -349,7 +411,7 @@
             (is (= #{} (sc/current-state sid)))))))
 
     (testing "transitions to :escalated on :error from any state"
-      (with-clean-engine
+      (with-clean-test-env
         (sc/register! ::story-error work-on/story-statechart)
         (let [sid (sc/start! ::story-error)]
           (sc/send! sid :has-tasks)
@@ -358,7 +420,7 @@
 
     (testing ":complete is a final state"
       (testing "terminates statechart (empty configuration)"
-        (with-clean-engine
+        (with-clean-test-env
           (sc/register! ::story-final work-on/story-statechart)
           (let [sid (sc/start! ::story-final)]
             (sc/send! sid :complete)
@@ -369,7 +431,7 @@
   ;; Verify task-states matches expected set.
   (testing "task-states"
     (testing "contains all task statechart states"
-      (is (= #{:idle :unrefined :refined :awaiting-pr
+      (is (= #{:idle :unrefined :refined :done :awaiting-pr
                :wait-pr-merge :complete :escalated}
              work-on/task-states)))))
 
@@ -377,6 +439,6 @@
   ;; Verify story-states matches expected set.
   (testing "story-states"
     (testing "contains all story statechart states"
-      (is (= #{:idle :unrefined :refined :has-tasks :awaiting-review
+      (is (= #{:idle :unrefined :refined :has-tasks :done
                :awaiting-pr :wait-pr-merge :complete :escalated}
              work-on/story-states)))))

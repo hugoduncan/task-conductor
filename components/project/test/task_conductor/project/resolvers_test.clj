@@ -310,7 +310,7 @@
                 ;; Has incomplete children, so state is :has-tasks
                 (is (= :has-tasks (:work-on/initial-state work-on-result)))))))))
 
-    (testing "derives :awaiting-review for story with all children complete"
+    (testing "derives :done for story with all children complete"
       (with-work-on-state
         (let [nullable (mcp-tasks/make-nullable
                         {:responses (story-responses
@@ -322,7 +322,7 @@
                                            {:task/project-dir "/test"
                                             :task/id 999})])
                     work-on-result (get result `resolvers/work-on!)]
-                (is (= :awaiting-review (:work-on/initial-state work-on-result)))))))))
+                (is (= :done (:work-on/initial-state work-on-result)))))))))
 
     (testing "returns error when task not found"
       (with-work-on-state
