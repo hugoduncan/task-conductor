@@ -185,7 +185,7 @@
                  (sc/state {:id :done}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:review-task"})}))
+                                                            {:skill "mcp-tasks:review-task-implementation"})}))
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
