@@ -14,14 +14,21 @@ Past discoveries and learnings.
 - Same for `:status`: `"open"`, `"closed"`, `"deleted"` are strings
 - Resolvers and state derivation must handle both: `(or (= :story t) (= "story" t))`
 
-### Optional Fields in Pathom Resolvers
-- If a resolver declares outputs, Pathom expects them all to be present
+### Optional Fields in Pathom Resolvers and Mutations
+- If a resolver/mutation declares `::pco/output`, Pathom expects all keys present
 - CLI may not return optional fields (`:pr-num`, `:code-reviewed`) when nil
-- Fix: merge nil defaults before prefixing keys:
+- Fix for resolvers: merge nil defaults before prefixing keys:
   ```clojure
   (merge {:task/pr-num nil :task/code-reviewed nil :task/error nil}
          (prefix-keys (:task result)))
   ```
+- Fix for mutations: always return all declared output keys, including `nil` for absent ones
+- Without this, mutation joins fail: Pathom tries to resolve missing keys via non-existent resolvers
+
+### EQL Mutation Calling Convention
+- Mutations in EQL must be **quoted symbols**, not evaluated function calls
+- `(graph/query [{(my-mutation! params) [:key]}])` — WRONG: evaluates mutation as function, result map becomes invalid join key
+- `(graph/query [`{(my-mutation! ~params) [:key]}])` — correct: backtick keeps mutation as symbol list
 
 ### Deleted Tasks in State Derivation
 - `list-tasks` with `:parent-id` filter returns deleted children
