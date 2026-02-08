@@ -8,7 +8,7 @@
    [task-conductor.mcp-tasks.interface :as mcp-tasks]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
-   [task-conductor.project.work-on :as work-on]
+   [task-conductor.project.execute :as execute]
    [task-conductor.statechart-engine.interface :as sc]))
 
 ;;; Resolvers
@@ -60,7 +60,7 @@
   {::pco/output [:project/result]}
   {:project/result (registry/unregister! path)})
 
-;;; Work-on Mutation
+;;; Execute Mutation
 
 (defn- fetch-task
   "Fetch task data via EQL query.
@@ -87,8 +87,8 @@
   (let [t (:task/type task)]
     (or (= :story t) (= "story" t))))
 
-(defn- task->work-on-map
-  "Convert EQL task map to work-on format (unnamespaced keys)."
+(defn- task->execute-map
+  "Convert EQL task map to execute format (unnamespaced keys)."
   [task]
   {:status (keyword (name (or (:task/status task) :open)))
    :meta (:task/meta task)
@@ -98,13 +98,13 @@
 (defn- derive-initial-state
   "Derive initial state based on task type."
   [task children]
-  (let [work-on-task (task->work-on-map task)]
+  (let [execute-task (task->execute-map task)]
     (if (story? task)
-      (work-on/derive-story-state work-on-task
-                                  (mapv task->work-on-map children))
-      (work-on/derive-task-state work-on-task))))
+      (execute/derive-story-state execute-task
+                                  (mapv task->execute-map children))
+      (execute/derive-task-state execute-task))))
 
-(graph/defmutation work-on!
+(graph/defmutation execute!
   "Start automated execution of a task or story.
    Initializes statechart session and registers dev-env hooks.
 
@@ -116,21 +116,21 @@
      :task/id          - task or story ID
 
    Returns:
-     :work-on/session-id    - statechart session UUID
-     :work-on/initial-state - derived initial state keyword
-     :work-on/error         - error map if failed"
+     :execute/session-id    - statechart session UUID
+     :execute/initial-state - derived initial state keyword
+     :execute/error         - error map if failed"
   [{:task/keys [project-dir id]}]
-  {::pco/output [:work-on/session-id :work-on/initial-state :work-on/error]}
+  {::pco/output [:execute/session-id :execute/initial-state :execute/error]}
   (let [worktree-result (mcp-tasks/work-on {:project-dir project-dir :task-id id})]
     (if (:error worktree-result)
-      {:work-on/error worktree-result}
+      {:execute/error worktree-result}
       (let [worktree-path (:worktree-path worktree-result)
             task (fetch-task worktree-path id)]
         (if (:task/error task)
-          {:work-on/error (:task/error task)}
+          {:execute/error (:task/error task)}
           (let [is-story (story? task)
                 children (when is-story (fetch-children worktree-path id))
-                chart-id (if is-story :work-on/story :work-on/task)
+                chart-id (if is-story :execute/story :execute/task)
                 initial-data {:project-dir worktree-path
                               :task-id id
                               :task-type (if is-story :story :task)}
@@ -145,8 +145,8 @@
                                :dev-env/hook-type :on-idle
                                :engine/session-id ~session-id
                                :engine/event :complete})]))
-            {:work-on/session-id session-id
-             :work-on/initial-state initial-state}))))))
+            {:execute/session-id session-id
+             :execute/initial-state initial-state}))))))
 
 ;;; Skill Invocation
 
@@ -205,15 +205,15 @@
         (let [task (fetch-task project-dir task-id)
               children (when (= :story task-type)
                          (fetch-children project-dir task-id))
-              children-maps (mapv task->work-on-map children)
+              children-maps (mapv task->execute-map children)
               new-state (if (= :story task-type)
-                          (work-on/derive-story-state
-                           (task->work-on-map task)
+                          (execute/derive-story-state
+                           (task->execute-map task)
                            children-maps)
-                          (work-on/derive-task-state
-                           (task->work-on-map task)))
+                          (execute/derive-task-state
+                           (task->execute-map task)))
               new-open-children (when (= :story task-type)
-                                  (work-on/count-open-children children-maps))]
+                                  (execute/count-open-children children-maps))]
           (if (no-progress? pre-skill-state new-state
                             pre-skill-open-children new-open-children)
             ;; No progress - store Claude session-id and escalate
@@ -239,16 +239,16 @@
         task (fetch-task project-dir task-id)
         children (when (= :story task-type)
                    (fetch-children project-dir task-id))
-        children-maps (mapv task->work-on-map children)
+        children-maps (mapv task->execute-map children)
         ;; Derive current state from task data (matches how on-skill-complete works)
         current-derived-state (if (= :story task-type)
-                                (work-on/derive-story-state
-                                 (task->work-on-map task)
+                                (execute/derive-story-state
+                                 (task->execute-map task)
                                  children-maps)
-                                (work-on/derive-task-state
-                                 (task->work-on-map task)))
+                                (execute/derive-task-state
+                                 (task->execute-map task)))
         open-children-count (when (= :story task-type)
-                              (work-on/count-open-children children-maps))]
+                              (execute/count-open-children children-maps))]
     (sc/update-data! session-id
                      (fn [d]
                        (cond-> (assoc d :pre-skill-state current-derived-state)
@@ -326,7 +326,7 @@
    project-create!
    project-update!
    project-delete!
-   work-on!
+   execute!
    invoke-skill!
    escalate-to-dev-env!])
 

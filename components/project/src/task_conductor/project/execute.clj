@@ -1,4 +1,4 @@
-(ns task-conductor.project.work-on
+(ns task-conductor.project.execute
   "State derivation and statechart definitions for task/story execution.
    Pure functions derive execution state from mcp-tasks data.
    Statecharts orchestrate state-driven automation with skill invocation."
@@ -132,7 +132,7 @@
 ;; Statecharts orchestrate task/story execution through state-driven automation.
 ;; States match derive-*-state return values. Transitions are triggered by
 ;; sending the derived state keyword as an event (e.g., :refined, :has-tasks).
-;; Entry actions invoke skills via work-on mutations (implemented in later tasks).
+;; Entry actions invoke skills via execute mutations (implemented in later tasks).
 
 ;; State sets serve as reference documentation for valid statechart states.
 ;; Verified by tests to match the actual statechart definitions.
@@ -299,13 +299,13 @@
                                         (sc/action {:expr '(task-conductor.project.resolvers/escalate-to-dev-env! {})})))))
 
 ;;; Statechart Registration
-;; Register statecharts on namespace load for use by work-on! mutation.
+;; Register statecharts on namespace load for use by execute! mutation.
 
 (defn register-statecharts!
   "Register task and story statecharts with the engine.
    Called automatically on namespace load."
   []
-  (sc/register! :work-on/task task-statechart)
-  (sc/register! :work-on/story story-statechart))
+  (sc/register! :execute/task task-statechart)
+  (sc/register! :execute/story story-statechart))
 
 (register-statecharts!)
