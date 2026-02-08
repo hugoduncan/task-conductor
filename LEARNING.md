@@ -65,3 +65,26 @@ Past discoveries and learnings.
 ### Emacs Dev-Env Registration
 - `(emacs-dev-env/register-emacs-dev-env)` - creates and registers default
 - `(emacs-dev-env/list-dev-envs)` - verify registration, shows `{:connected? true}`
+
+## 2026-02-08: nREPL Shell Escaping and Alias Staleness
+
+### Shell Escaping `!` in clj-nrepl-eval
+- Symbols containing `!` get mangled by shell escaping in single-quoted `clj-nrepl-eval` args
+- Use heredoc pattern to avoid escaping issues:
+  ```bash
+  read -r -d '' CODE << 'EoC' || true
+  (let [f @(ns-resolve (the-ns 'task-conductor.dev-env.registry) 'unregister!)]
+    (f "dev-env-34681"))
+  EoC
+  clj-nrepl-eval --port PORT "$CODE"
+  ```
+
+### Stale Namespace Aliases in nREPL
+- `require :reload` reloads namespace code but does NOT update aliases in the user ns if the var didn't exist when the alias was first created
+- Workaround: use `ns-resolve` + `the-ns` to get the var directly
+- Fully qualified calls also cache at compile time, so they fail the same way
+
+### Dev-Env Registry API
+- `unregister!` (not `deregister!`) removes a dev-env by ID, returns true/false
+- `clear!` removes all entries (testing only)
+- `select-dev-env` returns first available entry
