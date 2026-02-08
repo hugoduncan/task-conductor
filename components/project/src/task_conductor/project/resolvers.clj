@@ -5,6 +5,7 @@
   (:require
    [com.wsscode.pathom3.connect.operation :as pco]
    [task-conductor.claude-cli.interface :as claude-cli]
+   [task-conductor.mcp-tasks.interface :as mcp-tasks]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
    [task-conductor.project.work-on :as work-on]
@@ -107,8 +108,11 @@
   "Start automated execution of a task or story.
    Initializes statechart session and registers dev-env hooks.
 
+   Calls mcp-tasks work-on to get the worktree path, then uses that
+   as the project directory for skill invocations and escalation.
+
    Input:
-     :task/project-dir - project directory
+     :task/project-dir - project directory (where .mcp-tasks.edn lives)
      :task/id          - task or story ID
 
    Returns:
@@ -117,28 +121,32 @@
      :work-on/error         - error map if failed"
   [{:task/keys [project-dir id]}]
   {::pco/output [:work-on/session-id :work-on/initial-state :work-on/error]}
-  (let [task (fetch-task project-dir id)]
-    (if (:task/error task)
-      {:work-on/error (:task/error task)}
-      (let [is-story (story? task)
-            children (when is-story (fetch-children project-dir id))
-            chart-id (if is-story :work-on/story :work-on/task)
-            initial-data {:project-dir project-dir
-                          :task-id id
-                          :task-type (if is-story :story :task)}
-            session-id (sc/start! chart-id {:data initial-data})
-            initial-state (derive-initial-state task children)
-            ;; Register dev-env hook for PR merge notification
-            selected (graph/query [:dev-env/selected])
-            dev-env-id (:dev-env/id (:dev-env/selected selected))]
-        (when dev-env-id
-          (graph/query [`(task-conductor.statechart-engine.resolvers/engine-register-dev-env-hook!
-                          {:dev-env/id ~dev-env-id
-                           :dev-env/hook-type :on-idle
-                           :engine/session-id ~session-id
-                           :engine/event :complete})]))
-        {:work-on/session-id session-id
-         :work-on/initial-state initial-state}))))
+  (let [worktree-result (mcp-tasks/work-on {:project-dir project-dir :task-id id})]
+    (if (:error worktree-result)
+      {:work-on/error worktree-result}
+      (let [worktree-path (:worktree-path worktree-result)
+            task (fetch-task worktree-path id)]
+        (if (:task/error task)
+          {:work-on/error (:task/error task)}
+          (let [is-story (story? task)
+                children (when is-story (fetch-children worktree-path id))
+                chart-id (if is-story :work-on/story :work-on/task)
+                initial-data {:project-dir worktree-path
+                              :task-id id
+                              :task-type (if is-story :story :task)}
+                session-id (sc/start! chart-id {:data initial-data})
+                initial-state (derive-initial-state task children)
+                ;; Register dev-env hook for PR merge notification
+                selected (graph/query [:dev-env/selected])
+                dev-env-id (:dev-env/id (:dev-env/selected selected))]
+            (when dev-env-id
+              (graph/query [`(task-conductor.statechart-engine.resolvers/engine-register-dev-env-hook!
+                              {:dev-env/id ~dev-env-id
+                               :dev-env/hook-type :on-idle
+                               :engine/session-id ~session-id
+                               :engine/event :complete})]))
+            {:work-on/session-id session-id
+             :work-on/initial-state initial-state}))))))
 
 ;;; Skill Invocation
 

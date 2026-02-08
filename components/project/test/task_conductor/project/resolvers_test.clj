@@ -212,19 +212,31 @@
    {:tasks (mapv (fn [c] (merge {:status :open} c)) children)
     :metadata {:total (count children)}}))
 
+(defn make-work-on-response
+  "Build a work-on CLI response map."
+  ([] (make-work-on-response {}))
+  ([overrides]
+   (merge {:worktree-path "/test"
+           :branch-name "test-branch"
+           :task-id 0
+           :title "Test task"}
+          overrides)))
+
 (defn task-responses
   "Build command-keyed responses for a task in mcp-tasks Nullable.
-   Returns {:show [...] :why-blocked [...]} for mcp-tasks Nullable :responses."
+   Returns {:work-on [...] :show [...] :why-blocked [...]} for mcp-tasks Nullable :responses."
   ([] (task-responses {}))
   ([task-overrides]
-   {:show [(make-task-response task-overrides)]
+   {:work-on [(make-work-on-response)]
+    :show [(make-task-response task-overrides)]
     :why-blocked [(make-blocking-response)]}))
 
 (defn story-responses
   "Build command-keyed responses for a story with children.
-   Returns {:show [...] :why-blocked [...] :list [...]}."
+   Returns {:work-on [...] :show [...] :why-blocked [...] :list [...]}."
   [story-overrides children]
-  {:show [(make-task-response (merge {:type :story} story-overrides))]
+  {:work-on [(make-work-on-response)]
+   :show [(make-task-response (merge {:type :story} story-overrides))]
    :why-blocked [(make-blocking-response)]
    :list [(make-children-response children)]})
 
@@ -327,7 +339,8 @@
     (testing "returns error when task not found"
       (with-work-on-state
         (let [nullable (mcp-tasks/make-nullable
-                        {:responses {:show [{:error :not-found
+                        {:responses {:work-on [(make-work-on-response)]
+                                     :show [{:error :not-found
                                              :message "Not found"}]}})]
           (mcp-tasks/with-nullable-mcp-tasks nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
@@ -369,7 +382,7 @@
                     work-on-result (get result `resolvers/work-on!)
                     session-id (:work-on/session-id work-on-result)
                     data (sc/get-data session-id)]
-                (is (= "/my/project" (:project-dir data)))
+                (is (= "/test" (:project-dir data)))
                 (is (= 555 (:task-id data)))
                 (is (= :story (:task-type data)))
                 (is (= session-id (:session-id data)))))))))))
@@ -404,7 +417,7 @@
                 (let [invs (claude-cli/invocations cli-nullable)]
                   (is (= 1 (count invs)))
                   (is (= "/mcp-tasks:refine-task" (:prompt (:opts (first invs)))))
-                  (is (= "/test/dir" (:dir (:opts (first invs))))))))))))
+                  (is (= "/test" (:dir (:opts (first invs))))))))))))
 
     (testing "transitions to :escalated on skill error"
       (with-work-on-state
@@ -437,7 +450,8 @@
         (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
               ;; Provide enough responses for the skills and any state transitions
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:show (vec (repeat 10 (make-task-response {:meta {:refined "true"}})))
+                            {:responses {:work-on [(make-work-on-response)]
+                                         :show (vec (repeat 10 (make-task-response {:meta {:refined "true"}})))
                                          :why-blocked [(make-blocking-response)]}})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
@@ -466,7 +480,9 @@
         (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
               ;; Provide enough responses for work-on!, store-pre-skill-state!, on-skill-complete
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:show (vec (repeat 10 (make-task-response {:meta {:refined "true"}})))
+                            {:responses {:work-on [(make-work-on-response {:worktree-path "/project-a"})
+                                                   (make-work-on-response {:worktree-path "/project-b"})]
+                                         :show (vec (repeat 10 (make-task-response {:meta {:refined "true"}})))
                                          :why-blocked [(make-blocking-response)
                                                        (make-blocking-response)]}})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
@@ -510,7 +526,8 @@
               ;; Task stays :refined after skill (no meta change, no PR)
               ;; Need 3 show responses: work-on!, store-pre-skill-state!, on-skill-complete
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:show [(make-task-response {:meta {:refined "true"}})
+                            {:responses {:work-on [(make-work-on-response)]
+                                         :show [(make-task-response {:meta {:refined "true"}})
                                                 (make-task-response {:meta {:refined "true"}})
                                                 (make-task-response {:meta {:refined "true"}})]
                                          :why-blocked [(make-blocking-response)]}})
@@ -538,7 +555,8 @@
               ;; Need 3 show responses: work-on!, store-pre-skill-state!, on-skill-complete
               ;; First two are :refined, third shows progress with pr-num
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:show [(make-task-response {:meta {:refined "true"}})
+                            {:responses {:work-on [(make-work-on-response)]
+                                         :show [(make-task-response {:meta {:refined "true"}})
                                                 (make-task-response {:meta {:refined "true"}})
                                                 (make-task-response {:meta {:refined "true"}
                                                                      :pr-num 42})]
@@ -568,7 +586,8 @@
               ;; Story has 2 open children before and after skill
               ;; Need 3 show and 3 list responses: work-on!, store-pre-skill-state!, on-skill-complete
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:show [(make-task-response {:type :story
+                            {:responses {:work-on [(make-work-on-response)]
+                                         :show [(make-task-response {:type :story
                                                                      :meta {:refined "true"}})
                                                 (make-task-response {:type :story
                                                                      :meta {:refined "true"}})
@@ -601,7 +620,8 @@
               ;; Story has 2 open children before, 1 after skill
               ;; Need 3 show and 3 list responses: work-on!, store-pre-skill-state!, on-skill-complete
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:show [(make-task-response {:type :story
+                            {:responses {:work-on [(make-work-on-response)]
+                                         :show [(make-task-response {:type :story
                                                                      :meta {:refined "true"}})
                                                 (make-task-response {:type :story
                                                                      :meta {:refined "true"}})

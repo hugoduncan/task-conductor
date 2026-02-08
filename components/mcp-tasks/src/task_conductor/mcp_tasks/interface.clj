@@ -286,3 +286,25 @@
     (why-blocked {:project-dir \"/path/to/project\"
                   :task-id 42})"
   core/why-blocked)
+
+(def work-on
+  "Set up environment for working on a task.
+
+  Returns worktree information on success, or error map on failure.
+  The :worktree-path in the result is the directory where work should happen.
+
+  Required:
+    :project-dir - Working directory for .mcp-tasks.edn discovery
+    :task-id     - Task ID to work on (integer)
+
+  Returns map with keys including:
+    :worktree-path - Absolute path to the worktree directory
+    :branch-name   - Git branch name for the task
+    :task-id       - The task ID
+    :title         - Task title
+
+  Example:
+    (work-on {:project-dir \"/path/to/project\"
+              :task-id 42})
+    ;; => {:worktree-path \"/path/to/project/42-task-title\" ...}"
+  core/work-on)
