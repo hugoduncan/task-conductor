@@ -1,5 +1,5 @@
-(ns task-conductor.project.work-on-integration-test
-  "Integration tests for work-on! EQL mutation using Nullable infrastructure.
+(ns task-conductor.project.execute-integration-test
+  "Integration tests for execute! EQL mutation using Nullable infrastructure.
 
   These tests exercise the statechart lifecycle without subprocess execution:
   - Uses claude-cli Nullable for skill invocations (no real CLI processes)
@@ -23,7 +23,7 @@
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
    [task-conductor.project.resolvers :as resolvers]
-   [task-conductor.project.work-on :as work-on]
+   [task-conductor.project.execute :as execute]
    [task-conductor.statechart-engine.core :as engine]
    [task-conductor.statechart-engine.interface :as sc]
    [task-conductor.statechart-engine.resolvers :as engine-resolvers]))
@@ -43,7 +43,7 @@
      (engine-resolvers/reset-dev-env-hooks!)
      (resolvers/reset-skill-threads!)
      ;; Register statecharts
-     (work-on/register-statecharts!)
+     (execute/register-statecharts!)
      ;; Register resolvers
      (engine-resolvers/register-resolvers!)
      (dev-env-resolvers/register-resolvers!)
@@ -168,7 +168,7 @@
 ;;; Session Startup Tests
 
 (deftest session-startup-test
-  ;; Verify work-on! correctly starts a statechart session and derives
+  ;; Verify execute! correctly starts a statechart session and derives
   ;; initial state. Uses mcp-tasks Nullable for task data.
   (testing "session startup"
     (testing "starts session for unrefined task"
@@ -177,17 +177,17 @@
                         {:responses (task-responses)})]
           (mcp-tasks/with-nullable-mcp-tasks nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 100})])
-                    work-on-result (get result `resolvers/work-on!)]
+                    execute-result (get result `resolvers/execute!)]
 
-                (is (string? (:work-on/session-id work-on-result)))
-                (is (= :unrefined (:work-on/initial-state work-on-result)))
-                (is (nil? (:work-on/error work-on-result)))
+                (is (string? (:execute/session-id execute-result)))
+                (is (= :unrefined (:execute/initial-state execute-result)))
+                (is (nil? (:execute/error execute-result)))
 
                 ;; Verify session is in :idle state
-                (is (contains? (sc/current-state (:work-on/session-id work-on-result))
+                (is (contains? (sc/current-state (:execute/session-id execute-result))
                                :idle))))))))
 
     (testing "starts session for refined task"
@@ -196,12 +196,12 @@
                         {:responses (task-responses {:meta {:refined "true"}})})]
           (mcp-tasks/with-nullable-mcp-tasks nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 101})])
-                    work-on-result (get result `resolvers/work-on!)]
+                    execute-result (get result `resolvers/execute!)]
 
-                (is (= :refined (:work-on/initial-state work-on-result)))))))))
+                (is (= :refined (:execute/initial-state execute-result)))))))))
 
     (testing "starts session for task with PR"
       (with-integration-state
@@ -210,12 +210,12 @@
                                                      :pr-num 42})})]
           (mcp-tasks/with-nullable-mcp-tasks nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 102})])
-                    work-on-result (get result `resolvers/work-on!)]
+                    execute-result (get result `resolvers/execute!)]
 
-                (is (= :wait-pr-merge (:work-on/initial-state work-on-result)))))))))))
+                (is (= :wait-pr-merge (:execute/initial-state execute-result)))))))))))
 
 ;;; Skill Invocation Tests
 
@@ -226,7 +226,7 @@
     (testing "invokes skill when entering :unrefined state"
       (with-integration-state
         (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
-              ;; Responses: initial work-on! (show+blocking), re-derive after skill (show+blocking)
+              ;; Responses: initial execute! (show+blocking), re-derive after skill (show+blocking)
               mcp-nullable (mcp-tasks/make-nullable
                             {:responses (merge-responses (task-responses)
                                                          (task-responses {:meta {:refined "true"}}))})
@@ -235,11 +235,11 @@
 
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 200})])
-                    work-on-result (get result `resolvers/work-on!)
-                    session-id (:work-on/session-id work-on-result)]
+                    execute-result (get result `resolvers/execute!)
+                    session-id (:execute/session-id execute-result)]
 
                 ;; Send initial state event to trigger skill
                 (sc/send! session-id :unrefined)
@@ -269,11 +269,11 @@
 
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 300})])
-                    work-on-result (get result `resolvers/work-on!)
-                    session-id (:work-on/session-id work-on-result)]
+                    execute-result (get result `resolvers/execute!)
+                    session-id (:execute/session-id execute-result)]
 
                 ;; Send initial state to trigger skill
                 (sc/send! session-id :unrefined)
@@ -300,14 +300,14 @@
 
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 301})])
-                    work-on-result (get result `resolvers/work-on!)
-                    session-id (:work-on/session-id work-on-result)]
+                    execute-result (get result `resolvers/execute!)
+                    session-id (:execute/session-id execute-result)]
 
                 ;; Start in refined state
-                (is (= :refined (:work-on/initial-state work-on-result)))
+                (is (= :refined (:execute/initial-state execute-result)))
 
                 ;; Send refined event to trigger execute skill
                 (sc/send! session-id :refined)
@@ -336,7 +336,7 @@
    :list [(make-children-response children)]})
 
 (deftest story-session-test
-  ;; Verify work-on! handles stories correctly with children.
+  ;; Verify execute! handles stories correctly with children.
   (testing "story session"
     (testing "derives :has-tasks for story with incomplete children"
       (with-integration-state
@@ -347,12 +347,12 @@
                                           {:status :closed}])})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 400})])
-                    work-on-result (get result `resolvers/work-on!)]
+                    execute-result (get result `resolvers/execute!)]
 
-                (is (= :has-tasks (:work-on/initial-state work-on-result)))))))))
+                (is (= :has-tasks (:execute/initial-state execute-result)))))))))
 
     (testing "derives :done for story with all children complete"
       (with-integration-state
@@ -363,12 +363,12 @@
                                           {:status :closed}])})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 410})])
-                    work-on-result (get result `resolvers/work-on!)]
+                    execute-result (get result `resolvers/execute!)]
 
-                (is (= :done (:work-on/initial-state work-on-result)))))))))))
+                (is (= :done (:execute/initial-state execute-result)))))))))))
 
 ;;; State Transition Tests
 
@@ -381,10 +381,10 @@
                             {:responses (task-responses)})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 500})])
-                    session-id (:work-on/session-id (get result `resolvers/work-on!))]
+                    session-id (:execute/session-id (get result `resolvers/execute!))]
 
                 ;; Starts in :idle
                 (is (contains? (sc/current-state session-id) :idle))
@@ -415,17 +415,17 @@
                                          :why-blocked [(make-blocking-response)]
                                          ;; Work-on!, then pairs of (pre-skill, on-complete) showing progress
                                          ;; Each cycle: store-pre sees N open, on-complete sees N-1 open
-                                         :list (concat [three-open]           ; work-on!
+                                         :list (concat [three-open]           ; execute!
                                                        [three-open two-open]    ; cycle 1: 3->2 (progress)
                                                        [two-open one-open]      ; cycle 2: 2->1 (progress)
                                                        [one-open all-closed]    ; cycle 3: 1->0 (->done)
                                                        (repeat 10 all-closed))}})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 510})])
-                    session-id (:work-on/session-id (get result `resolvers/work-on!))]
+                    session-id (:execute/session-id (get result `resolvers/execute!))]
 
                 ;; Send has-tasks, triggers cascade as children complete
                 (sc/send! session-id :has-tasks)
@@ -449,17 +449,17 @@
     (testing "tracks claude-cli invocations during skill execution"
       (with-integration-state
         (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
-              ;; Responses: initial work-on! (show+blocking), re-derive after skill (show+blocking)
+              ;; Responses: initial execute! (show+blocking), re-derive after skill (show+blocking)
               mcp-nullable (mcp-tasks/make-nullable
                             {:responses (merge-responses (task-responses)
                                                          (task-responses {:meta {:refined "true"}}))})]
 
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
-              (let [result (graph/query [`(resolvers/work-on!
+              (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/my/project"
                                             :task/id 600})])
-                    session-id (:work-on/session-id (get result `resolvers/work-on!))]
+                    session-id (:execute/session-id (get result `resolvers/execute!))]
 
                 ;; Trigger skill invocation
                 (sc/send! session-id :unrefined)
