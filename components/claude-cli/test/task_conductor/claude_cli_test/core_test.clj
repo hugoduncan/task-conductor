@@ -8,7 +8,7 @@
 
 (def base-args
   ["claude" "--output-format" "stream-json" "--verbose"
-   "--print" "conversation-summary"])
+   "--print"])
 
 (deftest build-args-test
   (testing "build-args"

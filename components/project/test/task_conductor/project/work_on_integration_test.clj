@@ -121,6 +121,16 @@
    {:tasks (mapv (fn [c] (merge {:status :open} c)) children)
     :metadata {:total (count children)}}))
 
+(defn make-work-on-response
+  "Build a work-on CLI response map."
+  ([] (make-work-on-response {}))
+  ([overrides]
+   (merge {:worktree-path "/test"
+           :branch-name "test-branch"
+           :task-id 0
+           :title "Test task"}
+          overrides)))
+
 (defn task-responses
   "Build command-keyed responses for a task in mcp-tasks Nullable.
 
@@ -132,10 +142,11 @@
   Args:
     task-overrides - map passed to `make-task-response`
 
-  Returns {:show [...] :why-blocked [...]} for mcp-tasks Nullable :responses."
+  Returns {:work-on [...] :show [...] :why-blocked [...]} for mcp-tasks Nullable :responses."
   ([] (task-responses {}))
   ([task-overrides]
-   {:show [(make-task-response task-overrides)]
+   {:work-on [(make-work-on-response)]
+    :show [(make-task-response task-overrides)]
     :why-blocked [(make-blocking-response)]}))
 
 (defn merge-responses
@@ -317,9 +328,10 @@
     story-overrides - map passed to `make-task-response` (type forced to :story)
     children        - vector of child task maps for `make-children-response`
 
-  Returns {:show [...] :why-blocked [...] :list [...]} for mcp-tasks Nullable."
+  Returns {:work-on [...] :show [...] :why-blocked [...] :list [...]} for mcp-tasks Nullable."
   [story-overrides children]
-  {:show [(make-task-response (merge {:type :story} story-overrides))]
+  {:work-on [(make-work-on-response)]
+   :show [(make-task-response (merge {:type :story} story-overrides))]
    :why-blocked [(make-blocking-response)]
    :list [(make-children-response children)]})
 
@@ -396,7 +408,8 @@
               one-open (make-children-response [{:status :open} {:status :closed} {:status :closed}])
               all-closed (make-children-response [{:status :closed} {:status :closed} {:status :closed}])
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:show (concat
+                            {:responses {:work-on [(make-work-on-response)]
+                                         :show (concat
                                                 (repeat 10 story-response)   ; during :has-tasks cycles
                                                 (repeat 5 reviewed-story))   ; after review sets code-reviewed
                                          :why-blocked [(make-blocking-response)]
@@ -455,6 +468,6 @@
                 ;; Verify invocation was tracked with correct options
                 (let [invs (claude-cli/invocations cli-nullable)]
                   (is (= 1 (count invs)))
-                  (is (= "/my/project" (:dir (:opts (first invs)))))
+                  (is (= "/test" (:dir (:opts (first invs)))))
                   (is (= "/mcp-tasks:refine-task" (:prompt (:opts (first invs)))))
                   (is (instance? java.time.Instant (:timestamp (first invs)))))))))))))

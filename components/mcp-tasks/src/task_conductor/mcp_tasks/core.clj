@@ -367,3 +367,22 @@
   [{:keys [project-dir task-id]}]
   (run-cli {:project-dir project-dir
             :args ["why-blocked" "--task-id" (str task-id)]}))
+
+(defn work-on
+  "Set up environment for working on a task.
+
+  Returns worktree information on success, or error map on failure.
+  The :worktree-path in the result is the directory where work should happen.
+
+  Options:
+    :project-dir - Working directory (required)
+    :task-id     - Task ID to work on (required)
+
+  Returns map with keys including:
+    :worktree-path - Absolute path to the worktree directory
+    :branch-name   - Git branch name for the task
+    :task-id       - The task ID
+    :title         - Task title"
+  [{:keys [project-dir task-id]}]
+  (run-cli {:project-dir project-dir
+            :args ["work-on" "--task-id" (str task-id)]}))

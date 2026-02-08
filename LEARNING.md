@@ -47,3 +47,21 @@ Past discoveries and learnings.
 - Can have multiple nREPL servers on different ports (7888, 54158)
 - CIDER connects to one; dev-env registry is per-JVM
 - Ensure commands use correct port for the running system
+
+## 2026-02-02: nREPL and Dev-Env Reset
+
+### nREPL Server Restart
+- Find process: `ps aux | grep nrepl` or check `.nrepl-port` file
+- Kill and restart: `kill <pid> && clj -M:dev:nrepl -m nrepl.cmdline --port 7888`
+- Verify: `clj-nrepl-eval --port 7888 "(+ 1 1)"`
+- Exit code 143 = SIGTERM (expected when killing process)
+
+### Interface Function Names
+- pathom-graph: `reset-graph!` (not `reset!`)
+- emacs-dev-env: `register-emacs-dev-env` takes no args for default
+- emacs-dev-env: `shutdown` requires dev-env argument
+- emacs-dev-env state clears on nREPL restart (in-memory atoms)
+
+### Emacs Dev-Env Registration
+- `(emacs-dev-env/register-emacs-dev-env)` - creates and registers default
+- `(emacs-dev-env/list-dev-envs)` - verify registration, shows `{:connected? true}`
