@@ -124,11 +124,15 @@
   (let [worktree-result (mcp-tasks/work-on
                          {:project-dir project-dir :task-id id})]
     (if (:error worktree-result)
-      {:execute/error worktree-result}
+      {:execute/session-id nil
+       :execute/initial-state nil
+       :execute/error worktree-result}
       (let [worktree-path (:worktree-path worktree-result)
             task (fetch-task worktree-path id)]
         (if (:task/error task)
-          {:execute/error (:task/error task)}
+          {:execute/session-id nil
+           :execute/initial-state nil
+           :execute/error (:task/error task)}
           (let [is-story (story? task)
                 children (when is-story
                            (fetch-children worktree-path id))
@@ -149,7 +153,8 @@
                    :engine/session-id ~session-id
                    :engine/event :complete})]))
             {:execute/session-id session-id
-             :execute/initial-state initial-state}))))))
+             :execute/initial-state initial-state
+             :execute/error nil}))))))
 
 ;;; Skill Invocation
 
