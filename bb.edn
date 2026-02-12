@@ -14,8 +14,8 @@
          ensure-installed!
          (fn []
            (when-not (fs/which line-breaker-cmd)
-             (println "Installing line-breaker via brew...")
-             (shell "brew install hugoduncan/tap/line-breaker")))
+             (println "Installing line-breaker...")
+             (shell "curl -sL https://raw.githubusercontent.com/hugoduncan/line-breaker/master/scripts/install.sh | bash -s -- --install-dir ~/.local/bin")))
 
          show-help
          (fn []
