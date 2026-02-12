@@ -428,7 +428,7 @@
                     session-id (:execute/session-id (get work-result `resolvers/execute!))
                     ;; Now invoke skill
                     result (graph/query [`(resolvers/invoke-skill!
-                                           {:skill "mcp-tasks:refine-task"
+                                           {:skill "mcp-tasks:refine-task (MCP)"
                                             :engine/session-id ~session-id})])
                     invoke-result (get result `resolvers/invoke-skill!)]
                 (is (= :started (:invoke-skill/status invoke-result)))
@@ -437,7 +437,7 @@
                 ;; Verify invocation was tracked
                 (let [invs (claude-cli/invocations cli-nullable)]
                   (is (= 1 (count invs)))
-                  (is (= "/mcp-tasks:refine-task" (:prompt (:opts (first invs)))))
+                  (is (= "/mcp-tasks:refine-task (MCP)" (:prompt (:opts (first invs)))))
                   (is (= "/test" (:dir (:opts (first invs))))))))))))
 
     (testing "transitions to :escalated on skill error"

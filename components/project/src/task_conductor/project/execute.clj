@@ -167,7 +167,7 @@
                  (sc/state {:id :unrefined}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:refine-task"})}))
+                                                            {:skill "mcp-tasks:refine-task (MCP)"})}))
                            (sc/transition {:event :refined :target :refined})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
@@ -176,7 +176,7 @@
                  (sc/state {:id :refined}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:execute-task"})}))
+                                                            {:skill "mcp-tasks:execute-task (MCP)"})}))
                            (sc/transition {:event :done :target :done})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
@@ -185,7 +185,7 @@
                  (sc/state {:id :done}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:review-task-implementation"})}))
+                                                            {:skill "mcp-tasks:review-task-implementation (MCP)"})}))
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
@@ -194,7 +194,7 @@
                  (sc/state {:id :awaiting-pr}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:create-task-pr"})}))
+                                                            {:skill "mcp-tasks:create-task-pr (MCP)"})}))
                            (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
@@ -237,7 +237,7 @@
                  (sc/state {:id :unrefined}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:refine-task"})}))
+                                                            {:skill "mcp-tasks:refine-task (MCP)"})}))
                            (sc/transition {:event :refined :target :refined})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
@@ -246,7 +246,7 @@
                  (sc/state {:id :refined}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:create-story-tasks"})}))
+                                                            {:skill "mcp-tasks:create-story-tasks (MCP)"})}))
                            (sc/transition {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
@@ -255,7 +255,7 @@
                  (sc/state {:id :has-tasks}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:execute-story-child"})}))
+                                                            {:skill "mcp-tasks:execute-story-child (MCP)"})}))
       ;; Can stay in has-tasks (more children) or move to done
                            (sc/transition {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :done :target :done})
@@ -268,7 +268,7 @@
                  (sc/state {:id :done}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:review-story-implementation"})}))
+                                                            {:skill "mcp-tasks:review-story-implementation (MCP)"})}))
       ;; Review may find issues requiring more work
                            (sc/transition {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :awaiting-pr :target :awaiting-pr})
@@ -279,7 +279,7 @@
                  (sc/state {:id :awaiting-pr}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:create-story-pr"})}))
+                                                            {:skill "mcp-tasks:create-story-pr (MCP)"})}))
                            (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))

@@ -250,7 +250,7 @@
 
                 ;; Verify claude-cli Nullable was invoked
                 (is (= 1 (count (claude-cli/invocations cli-nullable))))
-                (is (= "/mcp-tasks:refine-task"
+                (is (= "/mcp-tasks:refine-task (MCP)"
                        (:prompt (:opts (first (claude-cli/invocations cli-nullable))))))))))))))
 
 ;;; Error Path Tests
@@ -469,5 +469,5 @@
                 (let [invs (claude-cli/invocations cli-nullable)]
                   (is (= 1 (count invs)))
                   (is (= "/test" (:dir (:opts (first invs)))))
-                  (is (= "/mcp-tasks:refine-task" (:prompt (:opts (first invs)))))
+                  (is (= "/mcp-tasks:refine-task (MCP)" (:prompt (:opts (first invs)))))
                   (is (instance? java.time.Instant (:timestamp (first invs)))))))))))))

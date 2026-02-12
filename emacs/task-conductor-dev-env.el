@@ -344,9 +344,10 @@ resuming a previous Claude conversation."
                (resume-args (when claude-session-id
                               (list "--resume" claude-session-id))))
           ;; Start claude-code with optional resume
+          ;; ARG=nil (no prefix), default-directory is already set to work-dir
           (if resume-args
-              (claude-code--start work-dir resume-args)
-            (claude-code--start work-dir))
+              (claude-code--start nil resume-args)
+            (claude-code--start nil nil))
           ;; Find the buffer that was just created
           ;; Try claude-code's function first, then fall back to matching default-directory
           (let ((bufs (or (claude-code--find-claude-buffers-for-directory work-dir)
