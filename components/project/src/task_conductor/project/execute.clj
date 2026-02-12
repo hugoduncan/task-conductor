@@ -139,12 +139,12 @@
 
 (def task-states
   "Valid states for standalone task execution."
-  #{:idle :unrefined :refined :done :awaiting-pr :wait-pr-merge :complete :escalated})
+  #{:idle :unrefined :refined :done :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated})
 
 (def story-states
   "Valid states for story execution."
   #{:idle :unrefined :refined :has-tasks :done
-    :awaiting-pr :wait-pr-merge :complete :escalated})
+    :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated})
 
 (def task-statechart
   "Statechart for standalone task execution.
@@ -201,9 +201,19 @@
 
     ;; Wait for PR merge - PR created, awaiting merge notification from dev-env
                  (sc/state {:id :wait-pr-merge}
-      ;; No entry action - waiting for external PR merge event
+      ;; No entry action - waiting for external event
+                           (sc/transition {:event :merge-pr :target :merging-pr})
                            (sc/transition {:event :complete :target :complete})
                            (sc/transition {:event :error :target :escalated}))
+
+    ;; Merging PR - manually triggered, squash-merges the PR on GitHub
+                 (sc/state {:id :merging-pr}
+                           (sc/on-entry {}
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "squash-merge-on-gh"})}))
+                           (sc/transition {:event :complete :target :complete})
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
 
     ;; Complete - task finished
                  (sc/final {:id :complete})
@@ -294,9 +304,19 @@
 
     ;; Wait for PR merge - PR created, awaiting merge notification from dev-env
                  (sc/state {:id :wait-pr-merge}
-      ;; No entry action - waiting for external PR merge event
+      ;; No entry action - waiting for external event
+                           (sc/transition {:event :merge-pr :target :merging-pr})
                            (sc/transition {:event :complete :target :complete})
                            (sc/transition {:event :error :target :escalated}))
+
+    ;; Merging PR - manually triggered, squash-merges the PR on GitHub
+                 (sc/state {:id :merging-pr}
+                           (sc/on-entry {}
+                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                            {:skill "squash-merge-on-gh"})}))
+                           (sc/transition {:event :complete :target :complete})
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition {:event :no-progress :target :escalated}))
 
     ;; Complete - story finished
                  (sc/final {:id :complete})

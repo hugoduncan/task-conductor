@@ -287,7 +287,15 @@
             (sc/send! sid :wait-pr-merge)
             (sc/send! sid :complete)
             ;; Final state causes termination - configuration becomes empty
-            (is (= #{} (sc/current-state sid)))))))
+            (is (= #{} (sc/current-state sid))))))
+
+      (testing "wait-pr-merge → merging-pr on :merge-pr"
+        (with-clean-test-env
+          (sc/register! ::task-flow5 execute/task-statechart)
+          (let [sid (sc/start! ::task-flow5)]
+            (sc/send! sid :wait-pr-merge)
+            (sc/send! sid :merge-pr)
+            (is (contains? (sc/current-state sid) :merging-pr))))))
 
     (testing "guards against :unrefined → :done transition"
       ;; Tasks must be refined before completion. Sending :done event
@@ -437,7 +445,15 @@
             (sc/send! sid :wait-pr-merge)
             (sc/send! sid :complete)
             ;; Final state causes termination - configuration becomes empty
-            (is (= #{} (sc/current-state sid)))))))
+            (is (= #{} (sc/current-state sid))))))
+
+      (testing "wait-pr-merge → merging-pr on :merge-pr"
+        (with-clean-test-env
+          (sc/register! ::story-flow7 execute/story-statechart)
+          (let [sid (sc/start! ::story-flow7)]
+            (sc/send! sid :wait-pr-merge)
+            (sc/send! sid :merge-pr)
+            (is (contains? (sc/current-state sid) :merging-pr))))))
 
     (testing "transitions to :escalated on :error from any state"
       (with-clean-test-env
@@ -490,7 +506,7 @@
   (testing "task-states"
     (testing "contains all task statechart states"
       (is (= #{:idle :unrefined :refined :done :awaiting-pr
-               :wait-pr-merge :complete :escalated}
+               :wait-pr-merge :merging-pr :complete :escalated}
              execute/task-states)))))
 
 (deftest story-states-test
@@ -498,5 +514,5 @@
   (testing "story-states"
     (testing "contains all story statechart states"
       (is (= #{:idle :unrefined :refined :has-tasks :done
-               :awaiting-pr :wait-pr-merge :complete :escalated}
+               :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated}
              execute/story-states)))))
