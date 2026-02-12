@@ -428,7 +428,7 @@
                     session-id (:execute/session-id (get work-result `resolvers/execute!))
                     ;; Now invoke skill
                     result (graph/query [`(resolvers/invoke-skill!
-                                           {:skill "mcp-tasks:refine-task"
+                                           {:skill "mcp-tasks:refine-task (MCP)"
                                             :engine/session-id ~session-id})])
                     invoke-result (get result `resolvers/invoke-skill!)]
                 (is (= :started (:invoke-skill/status invoke-result)))
@@ -437,7 +437,7 @@
                 ;; Verify invocation was tracked
                 (let [invs (claude-cli/invocations cli-nullable)]
                   (is (= 1 (count invs)))
-                  (is (= "/mcp-tasks:refine-task" (:prompt (:opts (first invs)))))
+                  (is (= "/mcp-tasks:refine-task (MCP)" (:prompt (:opts (first invs)))))
                   (is (= "/test" (:dir (:opts (first invs))))))))))))
 
     (testing "transitions to :escalated on skill error"
@@ -723,6 +723,71 @@
                 (is (= dev-env-id (:escalate/dev-env-id escalate-result)))
                 (is (some? start-call) "start-session should have been called")
                 (is (= session-id (:session-id start-call)))))))))
+
+    (testing "registers on-close hook with dev-env"
+      (with-execute-state
+        (let [dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 350})])
+                    session-id (:execute/session-id (get work-result `resolvers/execute!))
+                    result (graph/query [`(resolvers/escalate-to-dev-env!
+                                           {:engine/session-id ~session-id})])
+                    escalate-result (get result `resolvers/escalate-to-dev-env!)
+                    calls @(:calls dev-env)
+                    on-close-calls (filter #(and (= :register-hook (:op %))
+                                                 (= :on-close (:hook-type %)))
+                                           calls)]
+                (is (= :escalated (:escalate/status escalate-result)))
+                (is (= 1 (count on-close-calls))
+                    "should register exactly one on-close hook")
+                (is (= session-id (:session-id (first on-close-calls))))))))))
+
+    (testing "on-close hook re-derives state and sends event to statechart"
+      (with-execute-state
+        (let [dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)
+              ;; Responses consumed by:
+              ;; 1. execute! fetch-task (refined)
+              ;; 2. store-pre-skill-state! from :refined entry action (refined)
+              ;; 3. on-skill-complete virtual thread (refined → no-progress)
+              ;; 4. on-dev-env-close re-derive (done)
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses {:work-on [(make-work-on-response)]
+                                         :show [(make-task-response {:meta {:refined "true"}})
+                                                (make-task-response {:meta {:refined "true"}})
+                                                (make-task-response {:meta {:refined "true"}})
+                                                (make-task-response {:status :done
+                                                                     :meta {:refined "true"}})]
+                                         :why-blocked [(make-blocking-response)]}})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 351})])
+                    session-id (:execute/session-id (get work-result `resolvers/execute!))]
+                ;; Transition to :escalated (entering :refined triggers invoke-skill!)
+                (sc/send! session-id :refined)
+                (sc/send! session-id :error)
+                (is (contains? (sc/current-state session-id) :escalated))
+                ;; Wait for skill thread from :refined entry action to complete
+                (resolvers/await-skill-threads!)
+                (is (contains? (sc/current-state session-id) :escalated))
+                ;; Find and invoke the on-close callback
+                (let [hooks @(:hooks dev-env)
+                      on-close-hook (first (filter #(= :on-close (:type (val %))) hooks))
+                      callback (:callback (val on-close-hook))]
+                  ;; Simulate buffer close
+                  (callback {:session-id session-id
+                             :timestamp (java.time.Instant/now)
+                             :reason :user-exit})
+                  ;; Should have transitioned from :escalated to :done
+                  (is (contains? (sc/current-state session-id) :done)))))))))
 
     (testing "returns error when no dev-env available"
       (with-execute-state

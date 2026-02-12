@@ -5,6 +5,8 @@
   (:require
    [com.wsscode.pathom3.connect.operation :as pco]
    [task-conductor.claude-cli.interface :as claude-cli]
+   [task-conductor.dev-env.protocol :as dev-env]
+   [task-conductor.dev-env.registry :as dev-env-registry]
    [task-conductor.mcp-tasks.interface :as mcp-tasks]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
@@ -124,11 +126,15 @@
   (let [worktree-result (mcp-tasks/work-on
                          {:project-dir project-dir :task-id id})]
     (if (:error worktree-result)
-      {:execute/error worktree-result}
+      {:execute/session-id nil
+       :execute/initial-state nil
+       :execute/error worktree-result}
       (let [worktree-path (:worktree-path worktree-result)
             task (fetch-task worktree-path id)]
         (if (:task/error task)
-          {:execute/error (:task/error task)}
+          {:execute/session-id nil
+           :execute/initial-state nil
+           :execute/error (:task/error task)}
           (let [is-story (story? task)
                 children (when is-story
                            (fetch-children worktree-path id))
@@ -149,7 +155,8 @@
                    :engine/session-id ~session-id
                    :engine/event :complete})]))
             {:execute/session-id session-id
-             :execute/initial-state initial-state}))))))
+             :execute/initial-state initial-state
+             :execute/error nil}))))))
 
 ;;; Skill Invocation
 
@@ -195,39 +202,67 @@
   "Handle skill completion. Re-derives state and sends event to statechart.
    Called from virtual thread when claude-cli promise delivers.
    Guards against session being stopped during skill execution.
-   Detects no-progress and escalates to dev-env with Claude session-id."
+   Detects no-progress and escalates to dev-env with Claude session-id.
+   When :on-complete is set in session data, sends that event directly
+   on success instead of re-deriving (used for terminal actions like merge)."
   [session-id result]
   (try
     (let [data (sc/get-data session-id)
           {:keys [project-dir task-id task-type
-                  pre-skill-state pre-skill-open-children]} data]
+                  pre-skill-state pre-skill-open-children
+                  on-complete]} data]
       (if (:error result)
         ;; Skill failed - send error event
         (sc/send! session-id :error)
-        ;; Skill succeeded - re-derive state and check for progress
-        (let [task (fetch-task project-dir task-id)
-              children (when (= :story task-type)
-                         (fetch-children project-dir task-id))
-              children-maps (mapv task->execute-map children)
-              new-state (if (= :story task-type)
-                          (execute/derive-story-state
-                           (task->execute-map task)
-                           children-maps)
-                          (execute/derive-task-state
-                           (task->execute-map task)))
-              new-open-children (when (= :story task-type)
-                                  (execute/count-open-children children-maps))]
-          (if (no-progress? pre-skill-state new-state
-                            pre-skill-open-children new-open-children)
-            ;; No progress - store Claude session-id and escalate
-            (do
-              (sc/update-data! session-id
-                               #(assoc % :last-claude-session-id (:session-id result)))
-              (sc/send! session-id :no-progress))
-            ;; Progress made - send new state as event
-            (sc/send! session-id new-state)))))
+        (if on-complete
+          ;; Fixed outcome - send the predetermined event (e.g. merge → :complete)
+          (sc/send! session-id on-complete)
+          ;; Re-derive state and check for progress
+          (let [task (fetch-task project-dir task-id)
+                children (when (= :story task-type)
+                           (fetch-children project-dir task-id))
+                children-maps (mapv task->execute-map children)
+                new-state (if (= :story task-type)
+                            (execute/derive-story-state
+                             (task->execute-map task)
+                             children-maps)
+                            (execute/derive-task-state
+                             (task->execute-map task)))
+                new-open-children (when (= :story task-type)
+                                    (execute/count-open-children children-maps))]
+            (if (no-progress? pre-skill-state new-state
+                              pre-skill-open-children new-open-children)
+              ;; No progress - store Claude session-id and escalate
+              (do
+                (sc/update-data! session-id
+                                 #(assoc % :last-claude-session-id (:session-id result)))
+                (sc/send! session-id :no-progress))
+              ;; Progress made - send new state as event
+              (sc/send! session-id new-state))))))
     (catch clojure.lang.ExceptionInfo e
       ;; Session was stopped during skill execution - ignore
+      (when-not (= :session-not-found (:error (ex-data e)))
+        (throw e)))))
+
+(defn- on-dev-env-close
+  "Handle dev-env session close. Re-derives state and sends event to statechart.
+   Called when the human closes the interactive dev-env buffer after intervention.
+   Guards against session being stopped while dev-env was open."
+  [session-id _context]
+  (try
+    (let [data (sc/get-data session-id)
+          {:keys [project-dir task-id task-type]} data
+          task (fetch-task project-dir task-id)
+          children (when (= :story task-type)
+                     (fetch-children project-dir task-id))
+          new-state (if (= :story task-type)
+                      (execute/derive-story-state
+                       (task->execute-map task)
+                       (mapv task->execute-map children))
+                      (execute/derive-task-state
+                       (task->execute-map task)))]
+      (sc/send! session-id new-state))
+    (catch clojure.lang.ExceptionInfo e
       (when-not (= :session-not-found (:error (ex-data e)))
         (throw e)))))
 
@@ -266,11 +301,14 @@
    Input (injected by statechart engine):
      :engine/session-id - statechart session ID
      :skill             - skill name to invoke
+     :on-complete       - optional event keyword to send on success
+                          instead of re-deriving state
 
    Returns immediately with invocation status."
-  [{:keys [skill] :engine/keys [session-id]}]
+  [{:keys [skill on-complete] :engine/keys [session-id]}]
   {::pco/output [:invoke-skill/status :invoke-skill/error]}
-  (let [_ (store-pre-skill-state! session-id)
+  (let [_ (sc/update-data! session-id #(assoc % :on-complete on-complete))
+        _ (store-pre-skill-state! session-id)
         data (sc/get-data session-id)
         {:keys [project-dir]} data
         prompt (str "/" skill)
@@ -305,7 +343,7 @@
         dev-env-id (:dev-env/id (:dev-env/selected selected))]
     (if dev-env-id
       ;; Start an interactive session in the dev-env for human intervention
-      (do
+      (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)]
         (graph/query [`(task-conductor.dev-env.resolvers/dev-env-start-session!
                         {:dev-env/id ~dev-env-id
                          :dev-env/session-id ~session-id
@@ -313,6 +351,10 @@
                                                  :task-id task-id}
                                           last-claude-session-id
                                           (assoc :claude-session-id last-claude-session-id))})])
+        ;; Register on-close hook to resume workflow when human finishes
+        (when dev-env-instance
+          (dev-env/register-hook dev-env-instance session-id :on-close
+                                 (partial on-dev-env-close session-id)))
         {:escalate/status :escalated
          :escalate/dev-env-id dev-env-id})
       {:escalate/status :no-dev-env

@@ -14,14 +14,21 @@ Past discoveries and learnings.
 - Same for `:status`: `"open"`, `"closed"`, `"deleted"` are strings
 - Resolvers and state derivation must handle both: `(or (= :story t) (= "story" t))`
 
-### Optional Fields in Pathom Resolvers
-- If a resolver declares outputs, Pathom expects them all to be present
+### Optional Fields in Pathom Resolvers and Mutations
+- If a resolver/mutation declares `::pco/output`, Pathom expects all keys present
 - CLI may not return optional fields (`:pr-num`, `:code-reviewed`) when nil
-- Fix: merge nil defaults before prefixing keys:
+- Fix for resolvers: merge nil defaults before prefixing keys:
   ```clojure
   (merge {:task/pr-num nil :task/code-reviewed nil :task/error nil}
          (prefix-keys (:task result)))
   ```
+- Fix for mutations: always return all declared output keys, including `nil` for absent ones
+- Without this, mutation joins fail: Pathom tries to resolve missing keys via non-existent resolvers
+
+### EQL Mutation Calling Convention
+- Mutations in EQL must be **quoted symbols**, not evaluated function calls
+- `(graph/query [{(my-mutation! params) [:key]}])` — WRONG: evaluates mutation as function, result map becomes invalid join key
+- `(graph/query [`{(my-mutation! ~params) [:key]}])` — correct: backtick keeps mutation as symbol list
 
 ### Deleted Tasks in State Derivation
 - `list-tasks` with `:parent-id` filter returns deleted children
@@ -65,3 +72,34 @@ Past discoveries and learnings.
 ### Emacs Dev-Env Registration
 - `(emacs-dev-env/register-emacs-dev-env)` - creates and registers default
 - `(emacs-dev-env/list-dev-envs)` - verify registration, shows `{:connected? true}`
+
+## 2026-02-08: Emacs Dev-Env Registration
+
+### Registration Must Happen From Emacs
+- `register-emacs-dev-env` called from JVM (clj-nrepl-eval) creates the dev-env but no Emacs poll loop starts
+- `M-x task-conductor-dev-env-connect` must be used — it both registers AND starts the async poll timer
+- Without the poll loop, commands (`:start-session`, etc.) sit on the channel and timeout after 30s
+- `escalate-to-dev-env!` returns `{:escalate/status :escalated}` even on timeout — it doesn't check the response
+
+## 2026-02-08: nREPL Shell Escaping and Alias Staleness
+
+### Shell Escaping `!` in clj-nrepl-eval
+- Symbols containing `!` get mangled by shell escaping in single-quoted `clj-nrepl-eval` args
+- Use heredoc pattern to avoid escaping issues:
+  ```bash
+  read -r -d '' CODE << 'EoC' || true
+  (let [f @(ns-resolve (the-ns 'task-conductor.dev-env.registry) 'unregister!)]
+    (f "dev-env-34681"))
+  EoC
+  clj-nrepl-eval --port PORT "$CODE"
+  ```
+
+### Stale Namespace Aliases in nREPL
+- `require :reload` reloads namespace code but does NOT update aliases in the user ns if the var didn't exist when the alias was first created
+- Workaround: use `ns-resolve` + `the-ns` to get the var directly
+- Fully qualified calls also cache at compile time, so they fail the same way
+
+### Dev-Env Registry API
+- `unregister!` (not `deregister!`) removes a dev-env by ID, returns true/false
+- `clear!` removes all entries (testing only)
+- `select-dev-env` returns first available entry

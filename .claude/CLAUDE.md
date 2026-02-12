@@ -241,3 +241,5 @@ Pre-commit hook runs cljfmt and clj-kondo on staged files. Configure with:
 ```bash
 git config core.hooksPath .githooks
 ```
+
+@../LEARNING.md
