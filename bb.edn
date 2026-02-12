@@ -46,8 +46,7 @@
        (do
          (ensure-installed!)
          (let [paths (or (seq (rest cmds)) ["."])]
-           (apply shell {:continue true}
-                  line-breaker-cmd "--check" paths)))
+           (apply shell line-breaker-cmd "--check" paths)))
 
        (= "fix" (first cmds))
        (do
