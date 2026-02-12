@@ -178,15 +178,51 @@
       (should (string-match-p "Missing" (plist-get result :message))))))
 
 (ert-deftest task-conductor-dev-env-handle-start-session-creates-buffer ()
-  ;; Test that start-session creates a claude-code buffer.
+  ;; Test that start-session starts a claude-code session with opts.
   (with-task-conductor-test-state
     (let* ((test-buffer (generate-new-buffer "*test-claude*"))
-           (claude-code--stub-buffer test-buffer))
+           (started-with-args nil))
       (unwind-protect
-          (let ((result (task-conductor-dev-env--handle-start-session
-                         '(:session-id "sess-abc"))))
-            (should (eq :ok (plist-get result :status)))
-            (should (gethash "sess-abc" task-conductor-dev-env--sessions)))
+          (cl-letf (((symbol-function 'claude-code--start)
+                     (lambda (dir &optional args)
+                       (setq started-with-args (list dir args))))
+                    ((symbol-function 'claude-code--find-claude-buffers-for-directory)
+                     (lambda (_dir) (list test-buffer))))
+            (let ((result (task-conductor-dev-env--handle-start-session
+                           '(:session-id "sess-abc"
+                             :opts (:dir "/test/dir"
+                                    :claude-session-id "claude-123"
+                                    :task-id 42)))))
+              (should (eq :ok (plist-get result :status)))
+              (should (gethash "sess-abc" task-conductor-dev-env--sessions))
+              ;; Verify claude-code--start was called with resume args
+              (should (equal "/test/dir" (car started-with-args)))
+              (should (equal '("--resume" "claude-123") (cadr started-with-args)))
+              ;; Verify response includes metadata
+              (should (eq t (plist-get result :resumed)))
+              (should (eq 42 (plist-get result :task-id)))))
+        (kill-buffer test-buffer)))))
+
+(ert-deftest task-conductor-dev-env-handle-start-session-without-resume ()
+  ;; Test that start-session works without claude-session-id.
+  (with-task-conductor-test-state
+    (let* ((test-buffer (generate-new-buffer "*test-claude-no-resume*"))
+           (started-with-args nil))
+      (unwind-protect
+          (cl-letf (((symbol-function 'claude-code--start)
+                     (lambda (dir &optional args)
+                       (setq started-with-args (list dir args))))
+                    ((symbol-function 'claude-code--find-claude-buffers-for-directory)
+                     (lambda (_dir) (list test-buffer))))
+            (let ((result (task-conductor-dev-env--handle-start-session
+                           '(:session-id "sess-no-resume"
+                             :opts (:dir "/test/dir" :task-id 99)))))
+              (should (eq :ok (plist-get result :status)))
+              ;; Verify claude-code--start was called without resume args
+              (should (equal "/test/dir" (car started-with-args)))
+              (should (null (cadr started-with-args)))
+              ;; Verify response shows not resumed
+              (should (null (plist-get result :resumed)))))
         (kill-buffer test-buffer)))))
 
 (ert-deftest task-conductor-dev-env-handle-start-session-reuses-existing ()

@@ -25,9 +25,11 @@
     (swap! sessions assoc session-id {:state :running :opts opts})
     {:session-id session-id :handle :mock})
 
-  (register-hook [_ hook-type callback]
+  (register-hook [_ session-id hook-type callback]
     (let [hook-id (java.util.UUID/randomUUID)]
-      (swap! hooks update hook-type (fnil conj []) {:id hook-id :callback callback})
+      (swap! hooks update hook-type (fnil conj []) {:id hook-id
+                                                    :session-id session-id
+                                                    :callback callback})
       hook-id))
 
   (query-transcript [_ session-id]

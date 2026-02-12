@@ -30,6 +30,83 @@
   ```"
   (:require [task-conductor.mcp-tasks.core :as core]))
 
+;;; Nullable API
+
+(defn make-nullable
+  "Create a Nullable mcp-tasks for testing.
+
+  Returns a nullable instance that can be used with `with-nullable-mcp-tasks`.
+  When bound, all mcp-tasks operations return configured responses without
+  spawning CLI subprocesses.
+
+  Config options:
+    :responses - Response configuration in one of two formats:
+
+      1. Simple queue (vector): Responses consumed in order regardless of command
+         [{:task {...}} {:tasks [...]}]
+
+      2. Command-keyed map: Responses consumed per-command type
+         {:show [{:task {...}}]
+          :list [{:tasks [...]}]
+          :why-blocked [{:blocked-by [] :blocking-reason nil}]}
+
+      Command keys: :show, :list, :why-blocked, :add, :complete, :update,
+                    :delete, :reopen
+
+    :debug? - When true, prints each request and response to stdout
+
+  Access tracked operations via `operations` function.
+
+  Example (simple queue):
+    (let [nullable (make-nullable
+                     {:responses [{:tasks [{:id 1 :title \"Task\"}]
+                                   :metadata {:total 1}}
+                                  {:task {:id 1 :status \"closed\"}}]})]
+      (with-nullable-mcp-tasks nullable
+        (list-tasks {:project-dir \"/p\"})
+        (complete-task {:project-dir \"/p\" :task-id 1}))
+      (operations nullable))
+
+  Example (command-keyed - recommended for integration tests):
+    (let [nullable (make-nullable
+                     {:responses {:show [{:task {:id 1 :type :task}}]
+                                  :why-blocked [{:blocked-by []}]}
+                      :debug? true})]
+      (with-nullable-mcp-tasks nullable
+        ;; Pathom may call both show and why-blocked resolvers
+        (graph/query {:task/id 1} [:task/type :task/status])))"
+  ([]
+   (make-nullable {}))
+  ([config]
+   {:responses (atom (if (map? (:responses config))
+                       (:responses config)
+                       (vec (:responses config))))
+    :operations (atom {:queries [] :mutations []})
+    :debug? (:debug? config false)}))
+
+(defmacro with-nullable-mcp-tasks
+  "Execute body with nullable mcp-tasks bound.
+
+  All mcp-tasks operations within body use the nullable instead of
+  spawning real CLI processes. Operations are tracked and can be
+  retrieved via `operations`."
+  [nullable & body]
+  `(binding [core/*nullable* ~nullable]
+     ~@body))
+
+(defn operations
+  "Get operations recorded by a nullable.
+
+  Returns map with:
+    :queries   - Vector of query operations (list-tasks, show-task, why-blocked)
+    :mutations - Vector of mutation operations (add, complete, update, delete, reopen)
+
+  Each operation is a map with:
+    :opts      - The options map passed to the operation
+    :timestamp - java.time.Instant when operation occurred"
+  [nullable]
+  @(:operations nullable))
+
 (def run-cli
   "Execute mcp-tasks CLI with args in the given project directory.
   Always uses --format edn for native Clojure parsing.
@@ -209,3 +286,25 @@
     (why-blocked {:project-dir \"/path/to/project\"
                   :task-id 42})"
   core/why-blocked)
+
+(def work-on
+  "Set up environment for working on a task.
+
+  Returns worktree information on success, or error map on failure.
+  The :worktree-path in the result is the directory where work should happen.
+
+  Required:
+    :project-dir - Working directory for .mcp-tasks.edn discovery
+    :task-id     - Task ID to work on (integer)
+
+  Returns map with keys including:
+    :worktree-path - Absolute path to the worktree directory
+    :branch-name   - Git branch name for the task
+    :task-id       - The task ID
+    :title         - Task title
+
+  Example:
+    (work-on {:project-dir \"/path/to/project\"
+              :task-id 42})
+    ;; => {:worktree-path \"/path/to/project/42-task-title\" ...}"
+  core/work-on)

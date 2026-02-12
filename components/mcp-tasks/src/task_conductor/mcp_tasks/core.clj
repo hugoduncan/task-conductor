@@ -4,6 +4,70 @@
   (:require [babashka.process :as p]
             [cheshire.core :as json]))
 
+;;; Nullable Support
+
+(def ^:dynamic *nullable*
+  "When bound to a nullable config map, run-cli returns configured
+  responses instead of spawning real processes. Used for testing."
+  nil)
+
+(defn- classify-operation
+  "Classify CLI args as :query or :mutation based on command."
+  [args]
+  (let [cmd (first args)]
+    (if (#{"list" "show" "why-blocked"} cmd)
+      :query
+      :mutation)))
+
+(defn- get-command
+  "Extract CLI command from args."
+  [args]
+  (keyword (first args)))
+
+(defn- nullable-run-cli
+  "Handle run-cli when *nullable* is bound.
+  Records the operation and returns configured response.
+
+  Supports two response formats:
+  1. Simple queue: {:responses [r1 r2 ...]} - responses consumed in order
+  2. Command-keyed: {:responses {:show [r1] :list [r2] :why-blocked [r3]}}
+     - responses consumed per-command"
+  [nullable opts]
+  (let [{:keys [operations responses debug?]} nullable
+        op-type (classify-operation (:args opts))
+        cmd (get-command (:args opts))
+        response
+        (let [resps @responses]
+          (cond
+            ;; Command-keyed responses (map with keyword keys)
+            (and (map? resps) (keyword? (first (keys resps))))
+            (let [cmd-queue (get resps cmd)]
+              (if (seq cmd-queue)
+                (do (swap! responses update cmd rest)
+                    (first cmd-queue))
+                {:error :no-more-responses
+                 :message (str "Nullable has no more responses for command: " cmd)
+                 :command cmd
+                 :available-commands (keys resps)}))
+
+            ;; Simple queue (vector)
+            (sequential? resps)
+            (if (seq resps)
+              (do (swap! responses rest)
+                  (first resps))
+              {:error :no-more-responses
+               :message "Nullable has no more configured responses"})
+
+            ;; Invalid format
+            :else
+            {:error :invalid-nullable-config
+             :message "Nullable :responses must be a vector or command-keyed map"}))]
+    (when debug?
+      (println "[mcp-tasks-nullable]" cmd (:args opts) "->" response))
+    (swap! operations update (if (= op-type :query) :queries :mutations)
+           conj {:opts opts :timestamp (java.time.Instant/now) :response response})
+    response))
+
 (defn- safe-read-string
   "Read a string as Clojure data with *read-eval* disabled.
   Uses clojure.core/read-string to support ::keyword syntax which
@@ -22,23 +86,27 @@
 
   Options:
     :project-dir - Working directory for .mcp-tasks.edn discovery (required)
-    :args        - Vector of command arguments"
-  [{:keys [project-dir args]}]
-  (try
-    (let [full-args (into ["mcp-tasks"] (conj (vec args) "--format" "edn"))
-          result (apply p/shell {:dir project-dir
-                                 :out :string
-                                 :err :string
-                                 :continue true}
-                        full-args)]
-      (if (zero? (:exit result))
-        (safe-read-string (:out result))
-        {:error :cli-error
-         :exit-code (:exit result)
-         :stderr (:err result)}))
-    (catch java.io.IOException e
-      {:error :io-error
-       :message (.getMessage e)})))
+    :args        - Vector of command arguments
+
+  When *nullable* is bound, returns configured response without subprocess."
+  [{:keys [project-dir args] :as opts}]
+  (if *nullable*
+    (nullable-run-cli *nullable* opts)
+    (try
+      (let [full-args (into ["mcp-tasks"] (conj (vec args) "--format" "edn"))
+            result (apply p/shell {:dir project-dir
+                                   :out :string
+                                   :err :string
+                                   :continue true}
+                          full-args)]
+        (if (zero? (:exit result))
+          (safe-read-string (:out result))
+          {:error :cli-error
+           :exit-code (:exit result)
+           :stderr (:err result)}))
+      (catch java.io.IOException e
+        {:error :io-error
+         :message (.getMessage e)}))))
 
 (defn build-list-args
   "Construct CLI arguments for the list command from options map.
@@ -302,3 +370,22 @@
   [{:keys [project-dir task-id]}]
   (run-cli {:project-dir project-dir
             :args ["why-blocked" "--task-id" (str task-id)]}))
+
+(defn work-on
+  "Set up environment for working on a task.
+
+  Returns worktree information on success, or error map on failure.
+  The :worktree-path in the result is the directory where work should happen.
+
+  Options:
+    :project-dir - Working directory (required)
+    :task-id     - Task ID to work on (required)
+
+  Returns map with keys including:
+    :worktree-path - Absolute path to the worktree directory
+    :branch-name   - Git branch name for the task
+    :task-id       - The task ID
+    :title         - Task title"
+  [{:keys [project-dir task-id]}]
+  (run-cli {:project-dir project-dir
+            :args ["work-on" "--task-id" (str task-id)]}))

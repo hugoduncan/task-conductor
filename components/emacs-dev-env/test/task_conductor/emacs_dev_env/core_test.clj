@@ -7,6 +7,27 @@
    [task-conductor.dev-env.registry :as generic-registry]
    [task-conductor.emacs-dev-env.core :as core]))
 
+(defmacro with-register-hook-responder
+  "Spawn a thread that responds to :register-hook commands with success.
+  Body executes while responder is active; thread stops on exit."
+  [dev-env & body]
+  `(let [dev-env# ~dev-env
+         running# (atom true)
+         responder# (future
+                      (while @running#
+                        (let [result# (core/await-command dev-env# 50)]
+                          (when (= :ok (:status result#))
+                            (let [cmd# (:command result#)]
+                              (when (= :register-hook (:command cmd#))
+                                (core/send-response
+                                 dev-env# (:command-id cmd#) {:status :ok})))))))]
+     (try
+       (Thread/sleep 30)  ; Let responder start
+       ~@body
+       (finally
+         (reset! running# false)
+         (deref responder# 100 nil)))))
+
 (deftest make-emacs-dev-env-test
   (testing "make-emacs-dev-env"
     (testing "creates an unconnected dev-env"
@@ -129,12 +150,13 @@
   (testing "register-hook"
     (testing "stores hook and returns uuid"
       (let [dev-env (core/make-emacs-dev-env)
-            callback (fn [_] :called)
-            hook-id (protocol/register-hook dev-env :on-idle callback)]
-        (is (uuid? hook-id))
-        (let [hook (get-in @(:state dev-env) [:hooks hook-id])]
-          (is (= :on-idle (:type hook)))
-          (is (= callback (:callback hook))))
+            callback (fn [_] :called)]
+        (with-register-hook-responder dev-env
+          (let [hook-id (protocol/register-hook dev-env "s1" :on-idle callback)]
+            (is (uuid? hook-id))
+            (let [hook (get-in @(:state dev-env) [:hooks hook-id])]
+              (is (= :on-idle (:type hook)))
+              (is (= callback (:callback hook))))))
         (core/shutdown dev-env)))))
 
 (deftest send-hook-event-test
@@ -143,7 +165,8 @@
       (let [dev-env (core/make-emacs-dev-env)
             received (atom nil)
             callback (fn [ctx] (reset! received ctx))]
-        (protocol/register-hook dev-env :on-idle callback)
+        (with-register-hook-responder dev-env
+          (protocol/register-hook dev-env "sess-1" :on-idle callback))
         (core/send-hook-event dev-env :on-idle "sess-1" :idle)
         (is (= "sess-1" (:session-id @received)))
         (is (= :idle (:reason @received)))
@@ -154,14 +177,11 @@
       (let [dev-env (core/make-emacs-dev-env)
             idle-called (atom false)
             close-called (atom false)]
-        (protocol/register-hook
-         dev-env
-         :on-idle
-         (fn [_] (reset! idle-called true)))
-        (protocol/register-hook
-         dev-env
-         :on-close
-         (fn [_] (reset! close-called true)))
+        (with-register-hook-responder dev-env
+          (protocol/register-hook
+           dev-env "s1" :on-idle (fn [_] (reset! idle-called true)))
+          (protocol/register-hook
+           dev-env "s1" :on-close (fn [_] (reset! close-called true))))
         (core/send-hook-event dev-env :on-close "s1" :user-exit)
         (is (false? @idle-called))
         (is (true? @close-called))
@@ -461,12 +481,13 @@
             hook1-called (atom false)
             hook3-called (atom false)]
         ;; Register hooks - second one will throw
-        (protocol/register-hook dev-env :on-idle
-                                (fn [_] (reset! hook1-called true)))
-        (protocol/register-hook dev-env :on-idle
-                                (fn [_] (throw (ex-info "Hook error" {}))))
-        (protocol/register-hook dev-env :on-idle
-                                (fn [_] (reset! hook3-called true)))
+        (with-register-hook-responder dev-env
+          (protocol/register-hook dev-env "s1" :on-idle
+                                  (fn [_] (reset! hook1-called true)))
+          (protocol/register-hook dev-env "s1" :on-idle
+                                  (fn [_] (throw (ex-info "Hook error" {}))))
+          (protocol/register-hook dev-env "s1" :on-idle
+                                  (fn [_] (reset! hook3-called true))))
         ;; Send event - should not throw
         (is (true? (core/send-hook-event dev-env :on-idle "s1" :idle)))
         ;; All non-throwing hooks should have been called
@@ -480,10 +501,11 @@
       (let [dev-env (core/make-emacs-dev-env)
             close-called (atom false)]
         ;; Register throwing idle hook and normal close hook
-        (protocol/register-hook dev-env :on-idle
-                                (fn [_] (throw (ex-info "Idle error" {}))))
-        (protocol/register-hook dev-env :on-close
-                                (fn [_] (reset! close-called true)))
+        (with-register-hook-responder dev-env
+          (protocol/register-hook dev-env "s1" :on-idle
+                                  (fn [_] (throw (ex-info "Idle error" {}))))
+          (protocol/register-hook dev-env "s1" :on-close
+                                  (fn [_] (reset! close-called true))))
         ;; Trigger idle - should not affect close hook
         (core/send-hook-event dev-env :on-idle "s1" :idle)
         ;; Trigger close - should work

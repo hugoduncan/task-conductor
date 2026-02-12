@@ -2,6 +2,56 @@
   "Public interface for Claude CLI invocation."
   (:require [task-conductor.claude-cli.core :as core]))
 
+;;; Nullable API
+
+(defn make-nullable
+  "Create a Nullable claude-cli for testing.
+
+  Returns a nullable instance that can be used with `with-nullable-claude-cli`.
+  When bound, `invoke` returns configured responses without spawning processes.
+
+  Config options:
+    :exit-code   - Exit code to return (default 0)
+    :events      - Events vector to return (default [])
+    :session-id  - Session ID to return (default \"test-session\")
+    :error       - Error keyword to simulate failure (e.g., :timeout, :interrupted)
+                   When set, :exit-code is nil and other fields ignored.
+
+  Access tracked invocations via `invocations` function.
+
+  Example:
+    (let [nullable (make-nullable {:exit-code 0
+                                   :events [{:type \"result\"}]
+                                   :session-id \"abc-123\"})]
+      (with-nullable-claude-cli nullable
+        (invoke {:prompt \"test\"}))
+      (invocations nullable))
+    ;=> [{:opts {:prompt \"test\"} :timestamp #inst \"...\"}]"
+  ([]
+   (make-nullable {}))
+  ([config]
+   {:config config
+    :invocations (atom [])}))
+
+(defmacro with-nullable-claude-cli
+  "Execute body with nullable claude-cli bound.
+
+  All calls to `invoke` within body use the nullable instead of
+  spawning real processes. Invocations are tracked and can be
+  retrieved via `invocations`."
+  [nullable & body]
+  `(binding [core/*nullable* ~nullable]
+     ~@body))
+
+(defn invocations
+  "Get invocations recorded by a nullable.
+
+  Returns vector of maps, each with:
+    :opts      - The options map passed to invoke
+    :timestamp - java.time.Instant when invocation occurred"
+  [nullable]
+  @(:invocations nullable))
+
 (defn invoke
   "Invoke Claude CLI with the given options.
   Returns {:process p :result-promise promise}.
