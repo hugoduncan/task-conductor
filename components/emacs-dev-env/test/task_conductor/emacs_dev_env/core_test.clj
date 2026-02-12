@@ -78,7 +78,10 @@
              (core/await-command-by-id "unknown"))))
 
     (testing "send-response-by-id returns error for unknown id"
-      (let [result (core/send-response-by-id "unknown" (java.util.UUID/randomUUID) nil)]
+      (let [result (core/send-response-by-id
+                    "unknown"
+                    (java.util.UUID/randomUUID)
+                    nil)]
         (is (= :not-found (:error result)))))
 
     (testing "send-hook-event-by-id returns error for unknown id"
@@ -139,7 +142,8 @@
 
     (testing "returns false for unknown command-id"
       (let [dev-env (core/make-emacs-dev-env)]
-        (is (false? (core/send-response dev-env (java.util.UUID/randomUUID) "x")))
+        (is
+         (false? (core/send-response dev-env (java.util.UUID/randomUUID) "x")))
         (core/shutdown dev-env)))))
 
 (deftest register-hook-test
@@ -174,8 +178,10 @@
             idle-called (atom false)
             close-called (atom false)]
         (with-register-hook-responder dev-env
-          (protocol/register-hook dev-env "s1" :on-idle (fn [_] (reset! idle-called true)))
-          (protocol/register-hook dev-env "s1" :on-close (fn [_] (reset! close-called true))))
+          (protocol/register-hook
+           dev-env "s1" :on-idle (fn [_] (reset! idle-called true)))
+          (protocol/register-hook
+           dev-env "s1" :on-close (fn [_] (reset! close-called true))))
         (core/send-hook-event dev-env :on-close "s1" :user-exit)
         (is (false? @idle-called))
         (is (true? @close-called))
@@ -356,12 +362,16 @@
             ;; Start a responder thread
             responder (future
                         (loop []
-                          (let [result (core/await-command-by-id dev-env-id 100)]
+                          (let [result (core/await-command-by-id
+                                        dev-env-id
+                                        100)]
                             (when (= :ok (:status result))
                               (let [cmd (:command result)]
                                 (when (= :ping (:command cmd))
-                                  (core/send-response-by-id dev-env-id (:command-id cmd)
-                                                            {:status :ok}))
+                                  (core/send-response-by-id
+                                   dev-env-id
+                                   (:command-id cmd)
+                                   {:status :ok}))
                                 (recur))))))]
         (Thread/sleep 50)
         (let [healthy (core/list-healthy-dev-envs 1000)]
@@ -382,12 +392,16 @@
             ;; Start a responder
             responder (future
                         (loop []
-                          (let [result (core/await-command-by-id dev-env-id 100)]
+                          (let [result (core/await-command-by-id
+                                        dev-env-id
+                                        100)]
                             (when (= :ok (:status result))
                               (let [cmd (:command result)]
                                 (when (= :ping (:command cmd))
-                                  (core/send-response-by-id dev-env-id (:command-id cmd)
-                                                            {:status :ok}))
+                                  (core/send-response-by-id
+                                   dev-env-id
+                                   (:command-id cmd)
+                                   {:status :ok}))
                                 (recur))))))]
         (Thread/sleep 50)
         (let [selected (core/select-dev-env 1000)]
@@ -404,7 +418,8 @@
   ;; Verify multiple protocol calls can be in flight simultaneously
   ;; and responses are correctly routed to each caller.
   (testing "concurrent command handling"
-    (testing "routes responses to correct callers when multiple commands in flight"
+    (testing
+     "routes responses to correct callers when multiple commands in flight"
       (let [dev-env (core/make-emacs-dev-env)
             ;; Start three concurrent protocol calls
             f1 (future (protocol/query-transcript dev-env "s1"))

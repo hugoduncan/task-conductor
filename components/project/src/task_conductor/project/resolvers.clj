@@ -121,7 +121,8 @@
      :execute/error         - error map if failed"
   [{:task/keys [project-dir id]}]
   {::pco/output [:execute/session-id :execute/initial-state :execute/error]}
-  (let [worktree-result (mcp-tasks/work-on {:project-dir project-dir :task-id id})]
+  (let [worktree-result (mcp-tasks/work-on
+                         {:project-dir project-dir :task-id id})]
     (if (:error worktree-result)
       {:execute/error worktree-result}
       (let [worktree-path (:worktree-path worktree-result)
@@ -129,22 +130,24 @@
         (if (:task/error task)
           {:execute/error (:task/error task)}
           (let [is-story (story? task)
-                children (when is-story (fetch-children worktree-path id))
+                children (when is-story
+                           (fetch-children worktree-path id))
                 chart-id (if is-story :execute/story :execute/task)
                 initial-data {:project-dir worktree-path
                               :task-id id
                               :task-type (if is-story :story :task)}
                 session-id (sc/start! chart-id {:data initial-data})
                 initial-state (derive-initial-state task children)
-                ;; Register dev-env hook for PR merge notification
                 selected (graph/query [:dev-env/selected])
-                dev-env-id (:dev-env/id (:dev-env/selected selected))]
+                dev-env-id (:dev-env/id
+                            (:dev-env/selected selected))]
             (when dev-env-id
-              (graph/query [`(task-conductor.statechart-engine.resolvers/engine-register-dev-env-hook!
-                              {:dev-env/id ~dev-env-id
-                               :dev-env/hook-type :on-idle
-                               :engine/session-id ~session-id
-                               :engine/event :complete})]))
+              (graph/query
+               [`(task-conductor.statechart-engine.resolvers/engine-register-dev-env-hook!
+                  {:dev-env/id ~dev-env-id
+                   :dev-env/hook-type :on-idle
+                   :engine/session-id ~session-id
+                   :engine/event :complete})]))
             {:execute/session-id session-id
              :execute/initial-state initial-state}))))))
 

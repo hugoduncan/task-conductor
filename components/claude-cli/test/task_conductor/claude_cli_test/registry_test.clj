@@ -101,7 +101,9 @@
     (testing "returns nil for non-existent ID"
       (with-clean-registry
         (let [fake-id (random-uuid)]
-          (is (nil? (registry/update-invocation! fake-id {:status :complete}))))))))
+          (is
+           (nil?
+            (registry/update-invocation! fake-id {:status :complete}))))))))
 
 (deftest remove-invocation!-test
   (testing "remove-invocation!"

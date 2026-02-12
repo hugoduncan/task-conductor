@@ -53,8 +53,12 @@
   [{:dev-env/keys [id session-id opts]}]
   {::pco/output [:dev-env/session-result]}
   (if-let [dev-env (core/get-dev-env id)]
-    {:dev-env/session-result (dev-env/start-session dev-env session-id (or opts {}))}
-    {:dev-env/session-result {:error :not-found :message (str "Dev-env not found: " id)}}))
+    {:dev-env/session-result (dev-env/start-session
+                              dev-env
+                              session-id
+                              (or opts {}))}
+    {:dev-env/session-result {:error :not-found
+                              :message (str "Dev-env not found: " id)}}))
 
 (graph/defmutation dev-env-close-session!
   "Close a Claude session in the dev-env."
@@ -62,7 +66,8 @@
   {::pco/output [:dev-env/close-result]}
   (if-let [dev-env (core/get-dev-env id)]
     {:dev-env/close-result (dev-env/close-session dev-env session-id)}
-    {:dev-env/close-result {:error :not-found :message (str "Dev-env not found: " id)}}))
+    {:dev-env/close-result {:error :not-found
+                            :message (str "Dev-env not found: " id)}}))
 
 (graph/defmutation dev-env-query-transcript!
   "Query the transcript for a session."
@@ -70,7 +75,8 @@
   {::pco/output [:dev-env/transcript-result]}
   (if-let [dev-env (core/get-dev-env id)]
     {:dev-env/transcript-result (dev-env/query-transcript dev-env session-id)}
-    {:dev-env/transcript-result {:error :not-found :message (str "Dev-env not found: " id)}}))
+    {:dev-env/transcript-result {:error :not-found
+                                 :message (str "Dev-env not found: " id)}}))
 
 ;;; Registration
 

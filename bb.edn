@@ -1,6 +1,62 @@
 {:tasks
- {:requires []
+ {:requires [[babashka.cli :as cli]
+             [babashka.fs :as fs]
+             [babashka.process :refer [shell]]]
 
   kondo-config
   {:doc "Pull clj-kondo config from dependencies"
-   :task (shell "clj-kondo --copy-configs --dependencies --lint .")}}}
+   :task (shell "clj-kondo --copy-configs --dependencies --lint .")}
+
+  line-length
+  {:doc "Check or fix line length (subcommands: check, fix)"
+   :task
+   (let [line-breaker-cmd "line-breaker"
+         ensure-installed!
+         (fn []
+           (when-not (fs/which line-breaker-cmd)
+             (println "Installing line-breaker...")
+             (shell "curl -sL https://raw.githubusercontent.com/hugoduncan/line-breaker/master/scripts/install.sh | bash -s -- --install-dir ~/.local/bin")))
+
+         show-help
+         (fn []
+           (println "Usage: bb line-length <command> [options] [files...]")
+           (println)
+           (println "Commands:")
+           (println
+            "  check   Check files for line length violations (default)")
+           (println "  fix     Fix files by reformatting long lines")
+           (println)
+           (println "Options:")
+           (println "  -h, --help  Show this help")
+           (println)
+           (println "Examples:")
+           (println "  bb line-length check")
+           (println "  bb line-length fix src/")
+           (println "  bb line-length check components/claude-cli/"))
+
+         {:keys [cmds opts]}
+         (cli/parse-args *command-line-args*
+                         {:coerce {:help :boolean}
+                          :alias {:h :help}})]
+     (cond
+       (:help opts)
+       (show-help)
+
+       (or (empty? cmds) (= "check" (first cmds)))
+       (do
+         (ensure-installed!)
+         (let [paths (or (seq (rest cmds)) ["."])]
+           (apply shell line-breaker-cmd "--check" paths)))
+
+       (= "fix" (first cmds))
+       (do
+         (ensure-installed!)
+         (let [paths (or (seq (rest cmds)) ["."])]
+           (apply shell line-breaker-cmd "--fix" paths)))
+
+       :else
+       (do
+         (println "Unknown command:" (first cmds))
+         (show-help)
+         (System/exit 2))))}}}
+

@@ -85,18 +85,27 @@
                                      {:dev-env/id ~id
                                       :dev-env/session-id "sess-123"
                                       :dev-env/opts {:dir "/tmp"}})])
-              session-result (get-in result [`resolvers/dev-env-start-session! :dev-env/session-result])
+              session-result (get-in
+                              result
+                              [`resolvers/dev-env-start-session!
+                               :dev-env/session-result])
               calls @(:calls dev-env)]
           (is (= "sess-123" (:session-id session-result)))
           (is (= :noop (:handle session-result)))
           (is (= 1 (count (filter #(= :start-session (:op %)) calls))))
-          (is (= {:dir "/tmp"} (:opts (first (filter #(= :start-session (:op %)) calls)))))))
+          (is
+           (=
+            {:dir "/tmp"}
+            (:opts (first (filter #(= :start-session (:op %)) calls)))))))
 
       (testing "returns error for non-existent dev-env"
         (let [result (graph/query [`(resolvers/dev-env-start-session!
                                      {:dev-env/id "missing"
                                       :dev-env/session-id "sess-123"})])
-              session-result (get-in result [`resolvers/dev-env-start-session! :dev-env/session-result])]
+              session-result (get-in
+                              result
+                              [`resolvers/dev-env-start-session!
+                               :dev-env/session-result])]
           (is (= :not-found (:error session-result))))))))
 
 (deftest dev-env-close-session-test
@@ -108,7 +117,10 @@
               result (graph/query [`(resolvers/dev-env-close-session!
                                      {:dev-env/id ~id
                                       :dev-env/session-id "sess-123"})])
-              close-result (get-in result [`resolvers/dev-env-close-session! :dev-env/close-result])
+              close-result (get-in
+                            result
+                            [`resolvers/dev-env-close-session!
+                             :dev-env/close-result])
               calls @(:calls dev-env)]
           (is (false? close-result))
           (is (= 1 (count (filter #(= :close-session (:op %)) calls))))))
@@ -117,7 +129,10 @@
         (let [result (graph/query [`(resolvers/dev-env-close-session!
                                      {:dev-env/id "missing"
                                       :dev-env/session-id "sess-123"})])
-              close-result (get-in result [`resolvers/dev-env-close-session! :dev-env/close-result])]
+              close-result (get-in
+                            result
+                            [`resolvers/dev-env-close-session!
+                             :dev-env/close-result])]
           (is (= :not-found (:error close-result))))))))
 
 (deftest dev-env-query-transcript-test
@@ -129,7 +144,10 @@
               result (graph/query [`(resolvers/dev-env-query-transcript!
                                      {:dev-env/id ~id
                                       :dev-env/session-id "sess-123"})])
-              transcript (get-in result [`resolvers/dev-env-query-transcript! :dev-env/transcript])
+              transcript (get-in
+                          result
+                          [`resolvers/dev-env-query-transcript!
+                           :dev-env/transcript])
               calls @(:calls dev-env)]
           (is (nil? transcript))
           (is (= 1 (count (filter #(= :query-transcript (:op %)) calls))))))
@@ -138,7 +156,10 @@
         (let [result (graph/query [`(resolvers/dev-env-query-transcript!
                                      {:dev-env/id "missing"
                                       :dev-env/session-id "sess-123"})])
-              transcript (get-in result [`resolvers/dev-env-query-transcript! :dev-env/transcript])]
+              transcript (get-in
+                          result
+                          [`resolvers/dev-env-query-transcript!
+                           :dev-env/transcript])]
           (is (= :not-found (:error transcript))))))))
 
 (deftest dev-env-query-events-test
@@ -150,7 +171,9 @@
               result (graph/query [`(resolvers/dev-env-query-events!
                                      {:dev-env/id ~id
                                       :dev-env/session-id "sess-123"})])
-              events (get-in result [`resolvers/dev-env-query-events! :dev-env/events])
+              events (get-in
+                      result
+                      [`resolvers/dev-env-query-events! :dev-env/events])
               calls @(:calls dev-env)]
           (is (nil? events))
           (is (= 1 (count (filter #(= :query-events (:op %)) calls))))))
@@ -159,5 +182,7 @@
         (let [result (graph/query [`(resolvers/dev-env-query-events!
                                      {:dev-env/id "missing"
                                       :dev-env/session-id "sess-123"})])
-              events (get-in result [`resolvers/dev-env-query-events! :dev-env/events])]
+              events (get-in
+                      result
+                      [`resolvers/dev-env-query-events! :dev-env/events])]
           (is (= :not-found (:error events))))))))

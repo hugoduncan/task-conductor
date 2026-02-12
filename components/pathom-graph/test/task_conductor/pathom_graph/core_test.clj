@@ -81,10 +81,13 @@
       (testing "executes mutations"
         (core/register! set-value!)
         ;; Mutations use fully-qualified symbol as key (not the invocation form)
-        (let [result (core/query ['(task-conductor.pathom-graph.core-test/set-value!
-                                    {:value "test"})])]
+        (let [result (core/query
+                      ['(task-conductor.pathom-graph.core-test/set-value!
+                         {:value "test"})])]
           (is (= {:result "test"}
-                 (get result 'task-conductor.pathom-graph.core-test/set-value!))))))))
+                 (get
+                  result
+                  'task-conductor.pathom-graph.core-test/set-value!))))))))
 
 (deftest reset-graph!-test
   ;; Verifies that reset-graph! clears all registered resolvers.

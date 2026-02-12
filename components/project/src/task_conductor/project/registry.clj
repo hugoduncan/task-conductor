@@ -70,7 +70,9 @@
                   (cond
                     (contains? m canonical)
                     (do (reset! result {:error :duplicate-path
-                                        :message (str "Project already registered: " canonical)})
+                                        :message (str
+                                                  "Project already registered: "
+                                                  canonical)})
                         m)
 
                     (find-by-name m name)

@@ -60,7 +60,9 @@
     (testing "dev-env-by-id resolver"
       (testing "returns nil for unknown id"
         (let [result (graph/query {:dev-env/id "unknown"}
-                                  [:dev-env/instance :dev-env/type :dev-env/connected?])]
+                                  [:dev-env/instance
+                                   :dev-env/type
+                                   :dev-env/connected?])]
           (is (nil? (:dev-env/instance result)))
           (is (nil? (:dev-env/type result)))
           (is (false? (:dev-env/connected? result)))))
@@ -68,7 +70,9 @@
       (testing "returns dev-env for valid id"
         (let [dev-env-id (core/register-emacs-dev-env)
               result (graph/query {:dev-env/id dev-env-id}
-                                  [:dev-env/instance :dev-env/type :dev-env/connected?])]
+                                  [:dev-env/instance
+                                   :dev-env/type
+                                   :dev-env/connected?])]
           (is (some? (:dev-env/instance result)))
           (is (= :emacs (:dev-env/type result)))
           (is (true? (:dev-env/connected? result)))
@@ -85,7 +89,9 @@
       (testing "returns timeout for unresponsive dev-env"
         (let [dev-env-id (core/register-emacs-dev-env)]
           (with-redefs [core/default-ping-timeout-ms 50]
-            (let [result (graph/query {:dev-env/id dev-env-id} [:dev-env/health])]
+            (let [result (graph/query
+                          {:dev-env/id dev-env-id}
+                          [:dev-env/health])]
               (is (= {:status :timeout} (:dev-env/health result)))))
           (core/unregister-emacs-dev-env dev-env-id))))))
 
@@ -98,7 +104,8 @@
                          {:dev-env/id "unknown"
                           :dev-env/session-id "s1"})])]
           (is (= {:error :not-found :message "Dev-env not found: unknown"}
-                 (:dev-env/session-result (get result `resolvers/dev-env-start-session!))))))
+                 (:dev-env/session-result
+                  (get result `resolvers/dev-env-start-session!))))))
 
       (testing "queues start-session command"
         (let [dev-env-id (core/register-emacs-dev-env)]
@@ -118,9 +125,14 @@
             (is (= :start-session (:command cmd)))
             (is (= "s1" (get-in cmd [:params :session-id])))
             ;; Send response
-            (core/send-response-by-id dev-env-id (:command-id cmd) {:handle :test})
+            (core/send-response-by-id
+             dev-env-id
+             (:command-id cmd)
+             {:handle :test})
             (let [mutation-result @mutation-future]
               (is (= {:handle :test}
                      (:dev-env/session-result
-                      (get mutation-result `resolvers/dev-env-start-session!))))))
+                      (get
+                       mutation-result
+                       `resolvers/dev-env-start-session!))))))
           (core/unregister-emacs-dev-env dev-env-id))))))

@@ -123,7 +123,12 @@
                            {:task/project-dir "/proj"
                             :task/category "simple"
                             :task/title "New task"})])]
-            (is (= 99 (:id (:task (get-in result [`resolvers/task-create! :task/result]))))))))
+            (is
+             (=
+              99
+              (:id
+               (:task
+                (get-in result [`resolvers/task-create! :task/result]))))))))
 
       (testing "passes optional params"
         (with-redefs [interface/add-task
@@ -154,7 +159,9 @@
                         [`(resolvers/task-complete!
                            {:task/project-dir "/proj"
                             :task/id 42})])
-                task-result (get-in result [`resolvers/task-complete! :task/result])]
+                task-result (get-in
+                             result
+                             [`resolvers/task-complete! :task/result])]
             (is (= "closed" (:status (:task task-result)))))))
 
       (testing "passes comment"
@@ -184,7 +191,9 @@
                             :task/id 42
                             :task/title "New title"
                             :task/status :in-progress})])
-                task-result (get-in result [`resolvers/task-update! :task/result])]
+                task-result (get-in
+                             result
+                             [`resolvers/task-update! :task/result])]
             (is (= "New title" (:title (:task task-result))))))))))
 
 (deftest task-delete-test
@@ -199,7 +208,9 @@
                         [`(resolvers/task-delete!
                            {:task/project-dir "/proj"
                             :task/id 42})])
-                task-result (get-in result [`resolvers/task-delete! :task/result])]
+                task-result (get-in
+                             result
+                             [`resolvers/task-delete! :task/result])]
             (is (:deleted task-result)))))
 
       (testing "deletes by title-pattern"
@@ -224,5 +235,7 @@
                         [`(resolvers/task-reopen!
                            {:task/project-dir "/proj"
                             :task/id 42})])
-                task-result (get-in result [`resolvers/task-reopen! :task/result])]
+                task-result (get-in
+                             result
+                             [`resolvers/task-reopen! :task/result])]
             (is (= "open" (:status (:task task-result))))))))))

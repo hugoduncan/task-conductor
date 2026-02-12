@@ -50,7 +50,10 @@
               (registry/register! dir2 {:project/name "p2"})
               (let [result (graph/query [:project/all])
                     projects (:project/all result)
-                    by-name (into {} (map (juxt :project/name identity)) projects)]
+                    by-name (into
+                             {}
+                             (map (juxt :project/name identity))
+                             projects)]
                 (is (= 2 (count projects)))
                 (is (= dir1 (:project/path (get by-name "p1"))))
                 (is (= dir2 (:project/path (get by-name "p2"))))))))))))
@@ -94,7 +97,9 @@
           (let [dir (str (fs/canonicalize tmp))
                 result (graph/query [`(resolvers/project-create!
                                        {:project/path ~dir})])
-                project (get-in result [`resolvers/project-create! :project/result])]
+                project (get-in
+                         result
+                         [`resolvers/project-create! :project/result])]
             (is (= dir (:project/path project)))
             (is (string? (:project/name project))))))
 
@@ -104,7 +109,9 @@
                 result (graph/query [`(resolvers/project-create!
                                        {:project/path ~dir
                                         :project/name "custom"})])
-                project (get-in result [`resolvers/project-create! :project/result])]
+                project (get-in
+                         result
+                         [`resolvers/project-create! :project/result])]
             (is (= dir (:project/path project)))
             (is (= "custom" (:project/name project))))))
 
@@ -114,13 +121,17 @@
             (registry/register! dir)
             (let [result (graph/query [`(resolvers/project-create!
                                          {:project/path ~dir})])
-                  error (get-in result [`resolvers/project-create! :project/result])]
+                  error (get-in
+                         result
+                         [`resolvers/project-create! :project/result])]
               (is (= :duplicate-path (:error error)))))))
 
       (testing "returns error for non-existent path"
         (let [result (graph/query [`(resolvers/project-create!
                                      {:project/path "/no/such/path"})])
-              error (get-in result [`resolvers/project-create! :project/result])]
+              error (get-in
+                     result
+                     [`resolvers/project-create! :project/result])]
           (is (= :path-not-found (:error error))))))))
 
 (deftest project-update-test
@@ -133,7 +144,9 @@
             (let [result (graph/query [`(resolvers/project-update!
                                          {:project/path ~dir
                                           :project/name "renamed"})])
-                  project (get-in result [`resolvers/project-update! :project/result])]
+                  project (get-in
+                           result
+                           [`resolvers/project-update! :project/result])]
               (is (= "renamed" (:project/name project)))
               (is (= dir (:project/path project)))))))
 
@@ -143,7 +156,9 @@
                 result (graph/query [`(resolvers/project-update!
                                        {:project/path ~dir
                                         :project/name "x"})])
-                error (get-in result [`resolvers/project-update! :project/result])]
+                error (get-in
+                       result
+                       [`resolvers/project-update! :project/result])]
             (is (= :project-not-found (:error error))))))
 
       (testing "returns error for duplicate name"
@@ -156,7 +171,9 @@
               (let [result (graph/query [`(resolvers/project-update!
                                            {:project/path ~dir2
                                             :project/name "taken"})])
-                    error (get-in result [`resolvers/project-update! :project/result])]
+                    error (get-in
+                           result
+                           [`resolvers/project-update! :project/result])]
                 (is (= :duplicate-name (:error error)))))))))))
 
 (deftest project-delete-test
@@ -168,7 +185,9 @@
                 project (registry/register! dir {:project/name "todel"})
                 result (graph/query [`(resolvers/project-delete!
                                        {:project/path ~dir})])
-                deleted (get-in result [`resolvers/project-delete! :project/result])]
+                deleted (get-in
+                         result
+                         [`resolvers/project-delete! :project/result])]
             (is (= project deleted))
             (is (nil? (registry/get-by-path dir))))))
 
@@ -177,7 +196,9 @@
           (let [dir (str (fs/canonicalize tmp))
                 result (graph/query [`(resolvers/project-delete!
                                        {:project/path ~dir})])
-                deleted (get-in result [`resolvers/project-delete! :project/result])]
+                deleted (get-in
+                         result
+                         [`resolvers/project-delete! :project/result])]
             (is (nil? deleted))))))))
 
 ;;; Execute Test Helpers

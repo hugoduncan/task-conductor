@@ -89,7 +89,9 @@
         (fs/with-temp-dir [tmp1]
           (fs/with-temp-dir [tmp2]
             (registry/register! (str tmp1) {:project/name "shared"})
-            (let [result (registry/register! (str tmp2) {:project/name "shared"})]
+            (let [result (registry/register!
+                          (str tmp2)
+                          {:project/name "shared"})]
               (is (= :duplicate-name (:error result)))))))
 
       (testing "returns :path-not-found error for non-existent path"
@@ -199,7 +201,9 @@
     (testing "get-by-name"
       (testing "returns project for existing name"
         (fs/with-temp-dir [tmp]
-          (let [project (registry/register! (str tmp) {:project/name "myproject"})]
+          (let [project (registry/register!
+                         (str tmp)
+                         {:project/name "myproject"})]
             (is (= project (registry/get-by-name "myproject"))))))
 
       (testing "returns nil for non-existent name"
