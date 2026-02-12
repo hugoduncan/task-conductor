@@ -36,7 +36,7 @@ if echo "$kondo_output" | grep -qE '(info|warning|error):'; then
 fi
 
 # Check line length on staged files
-if ! bb line-length check "${staged_files[@]}" 2>/dev/null; then
+if ! bb line-length check "${staged_files[@]}"; then
   echo "Pre-commit hook: line length violations found."
   echo "Run 'bb line-length fix' to auto-fix, then restage."
   exit 1
