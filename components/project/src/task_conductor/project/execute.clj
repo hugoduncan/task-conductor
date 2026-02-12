@@ -210,7 +210,7 @@
                  (sc/state {:id :merging-pr}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "squash-merge-on-gh"})}))
+                                                            {:skill "squash-merge-on-gh" :on-complete :complete})}))
                            (sc/transition {:event :complete :target :complete})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
@@ -313,7 +313,7 @@
                  (sc/state {:id :merging-pr}
                            (sc/on-entry {}
                                         (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "squash-merge-on-gh"})}))
+                                                            {:skill "squash-merge-on-gh" :on-complete :complete})}))
                            (sc/transition {:event :complete :target :complete})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition {:event :no-progress :target :escalated}))
