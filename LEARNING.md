@@ -73,6 +73,14 @@ Past discoveries and learnings.
 - `(emacs-dev-env/register-emacs-dev-env)` - creates and registers default
 - `(emacs-dev-env/list-dev-envs)` - verify registration, shows `{:connected? true}`
 
+## 2026-02-08: Emacs Dev-Env Registration
+
+### Registration Must Happen From Emacs
+- `register-emacs-dev-env` called from JVM (clj-nrepl-eval) creates the dev-env but no Emacs poll loop starts
+- `M-x task-conductor-dev-env-connect` must be used — it both registers AND starts the async poll timer
+- Without the poll loop, commands (`:start-session`, etc.) sit on the channel and timeout after 30s
+- `escalate-to-dev-env!` returns `{:escalate/status :escalated}` even on timeout — it doesn't check the response
+
 ## 2026-02-08: nREPL Shell Escaping and Alias Staleness
 
 ### Shell Escaping `!` in clj-nrepl-eval
