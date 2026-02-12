@@ -208,10 +208,18 @@
     ;; Complete - task finished
                  (sc/final {:id :complete})
 
-    ;; Escalated - error occurred, notify dev-env for human intervention
+    ;; Escalated - error occurred, notify dev-env for human intervention.
+                 ;; After human intervention, on-dev-env-close re-derives state and
+                 ;; sends the appropriate event to resume the workflow.
                  (sc/state {:id :escalated}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/escalate-to-dev-env! {})})))))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/escalate-to-dev-env! {})}))
+                           (sc/transition {:event :unrefined :target :unrefined})
+                           (sc/transition {:event :refined :target :refined})
+                           (sc/transition {:event :done :target :done})
+                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition {:event :complete :target :complete}))))
 
 (def story-statechart
   "Statechart for story execution.
@@ -293,10 +301,19 @@
     ;; Complete - story finished
                  (sc/final {:id :complete})
 
-    ;; Escalated - error occurred, notify dev-env for human intervention
+    ;; Escalated - error occurred, notify dev-env for human intervention.
+                 ;; After human intervention, on-dev-env-close re-derives state and
+                 ;; sends the appropriate event to resume the workflow.
                  (sc/state {:id :escalated}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/escalate-to-dev-env! {})})))))
+                                        (sc/action {:expr '(task-conductor.project.resolvers/escalate-to-dev-env! {})}))
+                           (sc/transition {:event :unrefined :target :unrefined})
+                           (sc/transition {:event :refined :target :refined})
+                           (sc/transition {:event :has-tasks :target :has-tasks})
+                           (sc/transition {:event :done :target :done})
+                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition {:event :complete :target :complete}))))
 
 ;;; Statechart Registration
 ;; Register statecharts on namespace load for use by execute! mutation.

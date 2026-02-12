@@ -308,6 +308,35 @@
           (sc/send! sid :error)
           (is (contains? (sc/current-state sid) :escalated)))))
 
+    (testing "transitions from :escalated to derived states"
+      (testing "escalated → refined"
+        (with-clean-test-env
+          (sc/register! ::task-esc1 execute/task-statechart)
+          (let [sid (sc/start! ::task-esc1)]
+            (sc/send! sid :unrefined)
+            (sc/send! sid :error)
+            (is (contains? (sc/current-state sid) :escalated))
+            (sc/send! sid :refined)
+            (is (contains? (sc/current-state sid) :refined)))))
+
+      (testing "escalated → done"
+        (with-clean-test-env
+          (sc/register! ::task-esc2 execute/task-statechart)
+          (let [sid (sc/start! ::task-esc2)]
+            (sc/send! sid :refined)
+            (sc/send! sid :error)
+            (sc/send! sid :done)
+            (is (contains? (sc/current-state sid) :done)))))
+
+      (testing "escalated → complete"
+        (with-clean-test-env
+          (sc/register! ::task-esc3 execute/task-statechart)
+          (let [sid (sc/start! ::task-esc3)]
+            (sc/send! sid :unrefined)
+            (sc/send! sid :error)
+            (sc/send! sid :complete)
+            (is (= #{} (sc/current-state sid)))))))
+
     (testing ":complete is a final state"
       (testing "terminates statechart (empty configuration)"
         (with-clean-test-env
@@ -417,6 +446,35 @@
           (sc/send! sid :has-tasks)
           (sc/send! sid :error)
           (is (contains? (sc/current-state sid) :escalated)))))
+
+    (testing "transitions from :escalated to derived states"
+      (testing "escalated → has-tasks"
+        (with-clean-test-env
+          (sc/register! ::story-esc1 execute/story-statechart)
+          (let [sid (sc/start! ::story-esc1)]
+            (sc/send! sid :has-tasks)
+            (sc/send! sid :error)
+            (is (contains? (sc/current-state sid) :escalated))
+            (sc/send! sid :has-tasks)
+            (is (contains? (sc/current-state sid) :has-tasks)))))
+
+      (testing "escalated → done"
+        (with-clean-test-env
+          (sc/register! ::story-esc2 execute/story-statechart)
+          (let [sid (sc/start! ::story-esc2)]
+            (sc/send! sid :has-tasks)
+            (sc/send! sid :error)
+            (sc/send! sid :done)
+            (is (contains? (sc/current-state sid) :done)))))
+
+      (testing "escalated → complete"
+        (with-clean-test-env
+          (sc/register! ::story-esc3 execute/story-statechart)
+          (let [sid (sc/start! ::story-esc3)]
+            (sc/send! sid :unrefined)
+            (sc/send! sid :error)
+            (sc/send! sid :complete)
+            (is (= #{} (sc/current-state sid)))))))
 
     (testing ":complete is a final state"
       (testing "terminates statechart (empty configuration)"

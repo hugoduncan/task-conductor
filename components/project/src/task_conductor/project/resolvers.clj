@@ -5,6 +5,8 @@
   (:require
    [com.wsscode.pathom3.connect.operation :as pco]
    [task-conductor.claude-cli.interface :as claude-cli]
+   [task-conductor.dev-env.protocol :as dev-env]
+   [task-conductor.dev-env.registry :as dev-env-registry]
    [task-conductor.mcp-tasks.interface :as mcp-tasks]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
@@ -236,6 +238,28 @@
       (when-not (= :session-not-found (:error (ex-data e)))
         (throw e)))))
 
+(defn- on-dev-env-close
+  "Handle dev-env session close. Re-derives state and sends event to statechart.
+   Called when the human closes the interactive dev-env buffer after intervention.
+   Guards against session being stopped while dev-env was open."
+  [session-id _context]
+  (try
+    (let [data (sc/get-data session-id)
+          {:keys [project-dir task-id task-type]} data
+          task (fetch-task project-dir task-id)
+          children (when (= :story task-type)
+                     (fetch-children project-dir task-id))
+          new-state (if (= :story task-type)
+                      (execute/derive-story-state
+                       (task->execute-map task)
+                       (mapv task->execute-map children))
+                      (execute/derive-task-state
+                       (task->execute-map task)))]
+      (sc/send! session-id new-state))
+    (catch clojure.lang.ExceptionInfo e
+      (when-not (= :session-not-found (:error (ex-data e)))
+        (throw e)))))
+
 (defn- store-pre-skill-state!
   "Store current derived state and open children count before skill invocation.
    Used by on-skill-complete to detect no-progress.
@@ -310,7 +334,7 @@
         dev-env-id (:dev-env/id (:dev-env/selected selected))]
     (if dev-env-id
       ;; Start an interactive session in the dev-env for human intervention
-      (do
+      (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)]
         (graph/query [`(task-conductor.dev-env.resolvers/dev-env-start-session!
                         {:dev-env/id ~dev-env-id
                          :dev-env/session-id ~session-id
@@ -318,6 +342,10 @@
                                                  :task-id task-id}
                                           last-claude-session-id
                                           (assoc :claude-session-id last-claude-session-id))})])
+        ;; Register on-close hook to resume workflow when human finishes
+        (when dev-env-instance
+          (dev-env/register-hook dev-env-instance session-id :on-close
+                                 (partial on-dev-env-close session-id)))
         {:escalate/status :escalated
          :escalate/dev-env-id dev-env-id})
       {:escalate/status :no-dev-env
