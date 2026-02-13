@@ -42,7 +42,8 @@
   Config options:
     :responses - Response configuration in one of two formats:
 
-      1. Simple queue (vector): Responses consumed in order regardless of command
+      1. Simple queue (vector): Responses consumed in order
+         regardless of command
          [{:task {...}} {:tasks [...]}]
 
       2. Command-keyed map: Responses consumed per-command type
@@ -99,7 +100,8 @@
 
   Returns map with:
     :queries   - Vector of query operations (list-tasks, show-task, why-blocked)
-    :mutations - Vector of mutation operations (add, complete, update, delete, reopen)
+    :mutations - Vector of mutation operations
+                 (add, complete, update, delete, reopen)
 
   Each operation is a map with:
     :opts      - The options map passed to the operation
@@ -131,7 +133,8 @@
     :project-dir   - Working directory for .mcp-tasks.edn discovery
 
   Filter options:
-    :status        - Filter by status: :open, :closed, :in-progress, :blocked, :any
+    :status        - Filter by status: :open, :closed,
+                     :in-progress, :blocked, :any
     :category      - Filter by category name (string)
     :type          - Filter by type: :task, :bug, :feature, :story, :chore
     :parent-id     - Filter by parent task ID (integer)

@@ -14,7 +14,8 @@
     :exit-code   - Exit code to return (default 0)
     :events      - Events vector to return (default [])
     :session-id  - Session ID to return (default \"test-session\")
-    :error       - Error keyword to simulate failure (e.g., :timeout, :interrupted)
+    :error       - Error keyword to simulate failure
+                   (e.g., :timeout, :interrupted)
                    When set, :exit-code is nil and other fields ignored.
 
   Access tracked invocations via `invocations` function.

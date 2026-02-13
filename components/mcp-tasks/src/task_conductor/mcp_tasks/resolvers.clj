@@ -40,14 +40,16 @@
                  :task/error]}
   (let [result (interface/show-task {:project-dir project-dir :task-id id})]
     (if (:error result)
-      ;; Return nil for all declared outputs so Pathom doesn't try other resolvers
+      ;; Return nil for all declared outputs so Pathom
+      ;; doesn't try other resolvers
       {:task/error result
        :task/title nil :task/description nil :task/status nil
        :task/category nil :task/type nil :task/parent-id nil
        :task/relations nil :task/meta nil :task/design nil
        :task/shared-context nil :task/blocking-task-ids nil
        :task/is-blocked nil :task/pr-num nil :task/code-reviewed nil}
-      ;; Always include :task/error (nil when no error) so Pathom doesn't look elsewhere
+      ;; Always include :task/error (nil when no error)
+      ;; so Pathom doesn't look elsewhere
       ;; Merge with nil defaults for optional fields that CLI may not return
       (merge {:task/pr-num nil :task/code-reviewed nil :task/error nil}
              (prefix-keys (:task result))))))
@@ -67,13 +69,18 @@
        :task/metadata (:metadata result)})))
 
 (graph/defresolver task-blocking-info
-  "Get blocking information for a task. Requires :task/id and :task/project-dir."
+  "Get blocking information for a task.
+  Requires :task/id and :task/project-dir."
   [{:task/keys [id project-dir]}]
   {::pco/input [:task/id :task/project-dir]
-   ::pco/output [:task/blocked-by :task/blocking-reason (pco/? :task/blocking-error)]}
+   ::pco/output [:task/blocked-by
+                 :task/blocking-reason
+                 (pco/? :task/blocking-error)]}
   (let [result (interface/why-blocked {:project-dir project-dir :task-id id})]
     (if (:error result)
-      {:task/blocking-error result :task/blocked-by nil :task/blocking-reason nil}
+      {:task/blocking-error result
+       :task/blocked-by nil
+       :task/blocking-reason nil}
       (prefix-keys result))))
 
 ;;; Mutations
@@ -82,7 +89,14 @@
   "Create a new task. Returns :task/result with created task or error."
   [params]
   {::pco/output [:task/result]}
-  (let [{:task/keys [project-dir category title description type parent-id prepend]} params
+  (let [{:task/keys
+         [project-dir
+          category
+          title
+          description
+          type
+          parent-id
+          prepend]} params
         opts (cond-> {:project-dir project-dir
                       :category category
                       :title title}
@@ -152,7 +166,8 @@
 
 (defn register-resolvers!
   "Register all mcp-tasks resolvers and mutations with pathom-graph.
-   Called automatically on namespace load. Can be called again after graph reset."
+   Called automatically on namespace load.
+   Can be called again after graph reset."
   []
   (graph/register! all-operations))
 

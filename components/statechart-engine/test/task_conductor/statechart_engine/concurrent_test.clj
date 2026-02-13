@@ -1,6 +1,7 @@
 (ns task-conductor.statechart-engine.concurrent-test
-  ;; Verify thread-safety when multiple sessions are accessed concurrently.
-  ;; Tests concurrent data updates, event sends, and session lifecycle operations.
+  ;; Verify thread-safety when multiple sessions are
+  ;; accessed concurrently. Tests concurrent data
+  ;; updates, event sends, and session lifecycle.
   (:require
    [clojure.test :refer [deftest is testing]]
    [com.fulcrologic.statecharts.elements :refer [state transition]]
@@ -33,12 +34,16 @@
         (core/register! ::concurrent-data counter-chart)
         (let [session-ids (doall
                            (for [i (range 3)]
-                             (core/start! ::concurrent-data {:data {:id i :count 0}})))
+                             (core/start!
+                              ::concurrent-data
+                              {:data {:id i :count 0}})))
               futures (doall
                        (for [session-id session-ids]
                          (future
                            (dotimes [_ 20]
-                             (core/update-data! session-id #(update % :count inc))))))
+                             (core/update-data!
+                              session-id
+                              #(update % :count inc))))))
               _ (doseq [f futures] @f)]
           (doseq [session-id session-ids]
             (let [data (core/get-data session-id)]
@@ -53,7 +58,9 @@
                        (for [_ (range 5)]
                          (future
                            (dotimes [_ 20]
-                             (core/update-data! session-id #(update % :count inc))))))]
+                             (core/update-data!
+                              session-id
+                              #(update % :count inc))))))]
           (doseq [f futures] @f)
           (is (= 100 (:count (core/get-data session-id)))))))))
 
@@ -160,7 +167,8 @@
 ;;; Cross-Session Data Isolation Tests
 
 (deftest session-data-isolation-test
-  ;; Verify that concurrent operations don't cause data leakage between sessions.
+  ;; Verify that concurrent operations don't cause
+  ;; data leakage between sessions.
   (testing "session data isolation"
     (testing "under concurrent access"
       (with-clean-engine
@@ -169,7 +177,8 @@
                         (for [i (range 3)]
                           {:id i
                            :session-id (core/start! ::isolation
-                                                    {:data {:owner i :value 0}})}))
+                                                    {:data {:owner i
+                                                            :value 0}})}))
               futures (doall
                        (for [{:keys [id session-id]} sessions]
                          (future

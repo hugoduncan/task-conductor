@@ -1,7 +1,9 @@
 (ns task-conductor.statechart-engine.integration-test
-  ;; Integration tests for the statechart engine using a realistic traffic light scenario.
-  ;; Tests multiple states, history pseudo-state, entry/exit actions, introspection, and
-  ;; concurrent sessions.
+  ;; Integration tests for the statechart engine
+  ;; using a realistic traffic light scenario.
+  ;; Tests multiple states, history pseudo-state,
+  ;; entry/exit actions, introspection,
+  ;; and concurrent sessions.
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.statechart-engine.interface :as sc]
@@ -12,64 +14,58 @@
 ;; Transitions: :next cycles through lights, :maintain enters maintenance,
 ;; :resume returns via shallow history to previous state.
 
+(defn- log-action
+  "Creates an assign that logs to action-log and increments count."
+  [action-log action color]
+  (let [count-key (if (= :enter action)
+                    :enter-count
+                    :exit-count)]
+    (sc/assign
+     {:location [count-key color]
+      :expr (fn [_env data]
+              (swap! action-log conj [action color])
+              (inc (get-in data [count-key color] 0)))})))
+
 (defn make-traffic-light
   "Creates a traffic light chart with action tracking atom."
   [action-log]
-  (sc/statechart {}
-                 (sc/state {:id :operating}
-                           (sc/initial {}
-                                       (sc/transition {:target :red}))
-                           (sc/state {:id :red}
-                                     (sc/on-entry {}
-                                                  (sc/assign {:location [:enter-count :red]
-                                                              :expr     (fn [_env data]
-                                                                          (swap! action-log conj [:enter :red])
-                                                                          (inc (get-in data [:enter-count :red] 0)))}))
-                                     (sc/on-exit {}
-                                                 (sc/assign {:location [:exit-count :red]
-                                                             :expr     (fn [_env data]
-                                                                         (swap! action-log conj [:exit :red])
-                                                                         (inc (get-in data [:exit-count :red] 0)))}))
-                                     (sc/transition {:event :next :target :green}))
-                           (sc/state {:id :green}
-                                     (sc/on-entry {}
-                                                  (sc/assign {:location [:enter-count :green]
-                                                              :expr     (fn [_env data]
-                                                                          (swap! action-log conj [:enter :green])
-                                                                          (inc (get-in data [:enter-count :green] 0)))}))
-                                     (sc/on-exit {}
-                                                 (sc/assign {:location [:exit-count :green]
-                                                             :expr     (fn [_env data]
-                                                                         (swap! action-log conj [:exit :green])
-                                                                         (inc (get-in data [:exit-count :green] 0)))}))
-                                     (sc/transition {:event :next :target :yellow}))
-                           (sc/state {:id :yellow}
-                                     (sc/on-entry {}
-                                                  (sc/assign {:location [:enter-count :yellow]
-                                                              :expr     (fn [_env data]
-                                                                          (swap! action-log conj [:enter :yellow])
-                                                                          (inc (get-in data [:enter-count :yellow] 0)))}))
-                                     (sc/on-exit {}
-                                                 (sc/assign {:location [:exit-count :yellow]
-                                                             :expr     (fn [_env data]
-                                                                         (swap! action-log conj [:exit :yellow])
-                                                                         (inc (get-in data [:exit-count :yellow] 0)))}))
-                                     (sc/transition {:event :next :target :red}))
-                           (sc/history-node {:id :operating-history :type :shallow}
-                                            (sc/transition {:target :red}))
-                           (sc/transition {:event :maintain :target :maintenance}))
-                 (sc/state {:id :maintenance}
-                           (sc/on-entry {}
-                                        (sc/assign {:location [:enter-count :maintenance]
-                                                    :expr     (fn [_env data]
-                                                                (swap! action-log conj [:enter :maintenance])
-                                                                (inc (get-in data [:enter-count :maintenance] 0)))}))
-                           (sc/on-exit {}
-                                       (sc/assign {:location [:exit-count :maintenance]
-                                                   :expr     (fn [_env data]
-                                                               (swap! action-log conj [:exit :maintenance])
-                                                               (inc (get-in data [:exit-count :maintenance] 0)))}))
-                           (sc/transition {:event :resume :target :operating-history}))))
+  (let [enter-red (log-action action-log :enter :red)
+        exit-red (log-action action-log :exit :red)
+        enter-green (log-action action-log :enter :green)
+        exit-green (log-action action-log :exit :green)
+        enter-yellow (log-action action-log :enter :yellow)
+        exit-yellow (log-action action-log :exit :yellow)
+        enter-maint (log-action action-log :enter :maintenance)
+        exit-maint (log-action action-log :exit :maintenance)]
+    (sc/statechart {}
+                   (sc/state {:id :operating}
+                             (sc/initial {}
+                                         (sc/transition {:target :red}))
+                             (sc/state {:id :red}
+                                       (sc/on-entry {} enter-red)
+                                       (sc/on-exit {} exit-red)
+                                       (sc/transition
+                                        {:event :next :target :green}))
+                             (sc/state {:id :green}
+                                       (sc/on-entry {} enter-green)
+                                       (sc/on-exit {} exit-green)
+                                       (sc/transition
+                                        {:event :next :target :yellow}))
+                             (sc/state {:id :yellow}
+                                       (sc/on-entry {} enter-yellow)
+                                       (sc/on-exit {} exit-yellow)
+                                       (sc/transition
+                                        {:event :next :target :red}))
+                             (sc/history-node
+                              {:id :operating-history :type :shallow}
+                              (sc/transition {:target :red}))
+                             (sc/transition
+                              {:event :maintain :target :maintenance}))
+                   (sc/state {:id :maintenance}
+                             (sc/on-entry {} enter-maint)
+                             (sc/on-exit {} exit-maint)
+                             (sc/transition
+                              {:event :resume :target :operating-history})))))
 
 (defn simple-traffic-light
   "Simple traffic light without action tracking for basic tests."
@@ -79,16 +75,22 @@
                            (sc/initial {}
                                        (sc/transition {:target :red}))
                            (sc/state {:id :red}
-                                     (sc/transition {:event :next :target :green}))
+                                     (sc/transition
+                                      {:event :next :target :green}))
                            (sc/state {:id :green}
-                                     (sc/transition {:event :next :target :yellow}))
+                                     (sc/transition
+                                      {:event :next :target :yellow}))
                            (sc/state {:id :yellow}
-                                     (sc/transition {:event :next :target :red}))
-                           (sc/history-node {:id :operating-history :type :shallow}
-                                            (sc/transition {:target :red}))
-                           (sc/transition {:event :maintain :target :maintenance}))
+                                     (sc/transition
+                                      {:event :next :target :red}))
+                           (sc/history-node
+                            {:id :operating-history :type :shallow}
+                            (sc/transition {:target :red}))
+                           (sc/transition
+                            {:event :maintain :target :maintenance}))
                  (sc/state {:id :maintenance}
-                           (sc/transition {:event :resume :target :operating-history}))))
+                           (sc/transition
+                            {:event :resume :target :operating-history}))))
 
 ;;; Tests
 
@@ -142,7 +144,8 @@
 (deftest introspection-during-execution-test
   ;; Tests introspection functions at each step of execution.
   (testing "introspection during execution"
-    (testing "current-state, available-events, and history are accurate at each step"
+    (testing
+     "current-state, available-events, and history are accurate at each step"
       (with-clean-engine
         (sc/register! ::intro (simple-traffic-light))
         (let [sid (sc/start! ::intro)]

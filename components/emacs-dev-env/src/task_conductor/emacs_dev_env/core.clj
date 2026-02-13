@@ -33,7 +33,8 @@
     params       - Map of parameters for the command
     timeout-ms   - Timeout for response in milliseconds
 
-  Returns the response from Emacs, or {:error :timeout :message \"...\"} on timeout."
+  Returns the response from Emacs,
+  or {:error :timeout :message \"...\"} on timeout."
   [state command-chan command-kw params timeout-ms]
   (let [command-id (UUID/randomUUID)
         response-promise (promise)
@@ -45,9 +46,11 @@
     (let [result (deref response-promise timeout-ms response-timeout-sentinel)]
       (if (= result response-timeout-sentinel)
         (do
-          ;; Clean up pending command on timeout to prevent late response delivery
+          ;; Clean up pending command on timeout
+          ;; to prevent late response delivery
           (swap! state update :pending-commands dissoc command-id)
-          {:error :timeout :message (str "Response timeout waiting for " (name command-kw))})
+          {:error :timeout
+           :message (str "Response timeout waiting for " (name command-kw))})
         result))))
 
 (defrecord EmacsDevEnv [state]
@@ -210,8 +213,11 @@
 
            :else
            (do
-             (swap! (:state dev-env) assoc-in [:pending-commands (:command-id value)]
-                    (:response-promise value))
+             (swap!
+              (:state dev-env)
+              assoc-in
+              [:pending-commands (:command-id value)]
+              (:response-promise value))
              {:status :ok
               :command (dissoc value :response-promise)})))))))
 
@@ -276,7 +282,8 @@
     true))
 
 ;;; ID-based nREPL functions
-;; These functions take a dev-env-id string and look up the dev-env in the registry.
+;; These functions take a dev-env-id string and look up
+;; the dev-env in the registry.
 ;; They are the primary API for Emacs to interact with the dev-env.
 
 (defn await-command-by-id
@@ -358,7 +365,8 @@
        {:status :error :message "Command channel closed"}
 
        :else
-       (let [result (send-command-and-wait state command-chan :ping {} timeout-ms)]
+       (let [result
+             (send-command-and-wait state command-chan :ping {} timeout-ms)]
          (cond
            (:error result)
            {:status :timeout}

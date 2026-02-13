@@ -51,7 +51,8 @@
   "Called by Emacs to register itself as a dev-env.
 
   Arity:
-    ()        - Create new dev-env, register in global registry, return dev-env-id
+    ()        - Create new dev-env, register in global
+                registry, return dev-env-id
     (dev-env) - Mark existing dev-env as connected (for internal use)
 
   Returns dev-env-id (string) when called with no args.

@@ -245,7 +245,7 @@
 
 (defn task-responses
   "Build command-keyed responses for a task in mcp-tasks Nullable.
-   Returns {:work-on [...] :show [...] :why-blocked [...]} for mcp-tasks Nullable :responses."
+   Returns command-keyed map for mcp-tasks Nullable."
   ([] (task-responses {}))
   ([task-overrides]
    {:work-on [(make-work-on-response)]
@@ -301,7 +301,8 @@
     (testing "starts statechart session for a task"
       (with-execute-state
         (let [nullable (mcp-tasks/make-nullable
-                        {:responses (task-responses {:meta {:refined "true"}})})]
+                        {:responses (task-responses
+                                     {:meta {:refined "true"}})})]
           (mcp-tasks/with-nullable-mcp-tasks nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/execute!
@@ -341,7 +342,8 @@
                     execute-result (get result `resolvers/execute!)]
                 (is (string? (:execute/session-id execute-result)))
                 ;; Has incomplete children, so state is :has-tasks
-                (is (= :has-tasks (:execute/initial-state execute-result)))))))))
+                (is
+                 (= :has-tasks (:execute/initial-state execute-result)))))))))
 
     (testing "derives :done for story with all children complete"
       (with-execute-state
@@ -377,7 +379,8 @@
         (let [dev-env (dev-env-protocol/make-noop-dev-env)
               _dev-env-id (dev-env-registry/register! dev-env :test)
               nullable (mcp-tasks/make-nullable
-                        {:responses (task-responses {:meta {:refined "true"}})})]
+                        {:responses (task-responses
+                                     {:meta {:refined "true"}})})]
           (mcp-tasks/with-nullable-mcp-tasks nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/execute!
@@ -386,7 +389,7 @@
                     execute-result (get result `resolvers/execute!)
                     session-id (:execute/session-id execute-result)]
                 (is (string? session-id))
-                ;; Verify hook was registered by checking the dev-env's hooks atom
+                ;; Verify hook was registered
                 (is (= 1 (count @(:hooks dev-env))))))))))
 
     (testing "stores session data including task context"
@@ -418,14 +421,16 @@
       (with-execute-state
         (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses (task-responses {:meta {:refined "true"}})})]
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
               ;; Start an execute session to get valid session-id with data
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test/dir"
                                                  :task/id 99})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
                     ;; Now invoke skill
                     result (graph/query [`(resolvers/invoke-skill!
                                            {:skill "mcp-tasks:refine-task (MCP)"
@@ -437,14 +442,18 @@
                 ;; Verify invocation was tracked
                 (let [invs (claude-cli/invocations cli-nullable)]
                   (is (= 1 (count invs)))
-                  (is (= "/mcp-tasks:refine-task (MCP)" (:prompt (:opts (first invs)))))
+                  (is
+                   (=
+                    "/mcp-tasks:refine-task (MCP)"
+                    (:prompt (:opts (first invs)))))
                   (is (= "/test" (:dir (:opts (first invs))))))))))))
 
     (testing "transitions to :escalated on skill error"
       (with-execute-state
         (let [cli-nullable (claude-cli/make-nullable {:error :timeout})
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses (task-responses {:meta {:refined "true"}})})
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
@@ -452,13 +461,15 @@
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 100})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
                     ;; Trigger skill via state event
                     _ (sc/send! session-id :refined)]
                 ;; Wait for skill thread to process error
                 (resolvers/await-skill-threads!)
                 ;; Verify transitioned to :escalated state
-                (is (contains? (sc/current-state session-id) :escalated))))))))))
+                (is
+                 (contains? (sc/current-state session-id) :escalated))))))))))
 
 ;;; Concurrent Skill Invocation Tests
 
@@ -468,19 +479,26 @@
   (testing "concurrent skill invocations"
     (testing "handles multiple skills invoked in parallel"
       (with-execute-state
-        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
-              ;; Provide enough responses for the skills and any state transitions
+        (let [cli-nullable (claude-cli/make-nullable
+                            {:exit-code 0 :events []})
+              ;; Enough responses for skills + transitions
+              show-resps (vec (repeat 10
+                                      (make-task-response
+                                       {:meta {:refined "true"}})))
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:work-on [(make-work-on-response)]
-                                         :show (vec (repeat 10 (make-task-response {:meta {:refined "true"}})))
-                                         :why-blocked [(make-blocking-response)]}})]
+                            {:responses
+                             {:work-on [(make-work-on-response)]
+                              :show show-resps
+                              :why-blocked
+                              [(make-blocking-response)]}})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
               ;; Start an execute session
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 200})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))]
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))]
                 ;; Invoke multiple skills concurrently
                 (dotimes [i 3]
                   (graph/query [`(resolvers/invoke-skill!
@@ -498,25 +516,39 @@
 
     (testing "each concurrent invocation gets correct session data"
       (with-execute-state
-        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
-              ;; Provide enough responses for execute!, store-pre-skill-state!, on-skill-complete
-              mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:work-on [(make-work-on-response {:worktree-path "/project-a"})
-                                                   (make-work-on-response {:worktree-path "/project-b"})]
-                                         :show (vec (repeat 10 (make-task-response {:meta {:refined "true"}})))
-                                         :why-blocked [(make-blocking-response)
-                                                       (make-blocking-response)]}})]
+        (let [cli-nullable (claude-cli/make-nullable
+                            {:exit-code 0 :events []})
+              ;; Enough responses for execute!,
+              ;; store-pre-skill-state!, on-skill-complete
+              show-resps
+              (vec (repeat 10
+                           (make-task-response
+                            {:meta {:refined "true"}})))
+              mcp-nullable
+              (mcp-tasks/make-nullable
+               {:responses
+                {:work-on
+                 [(make-work-on-response
+                   {:worktree-path "/project-a"})
+                  (make-work-on-response
+                   {:worktree-path "/project-b"})]
+                 :show show-resps
+                 :why-blocked
+                 [(make-blocking-response)
+                  (make-blocking-response)]}})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
               ;; Start two sessions with different project dirs
               (let [result1 (graph/query [`(resolvers/execute!
                                             {:task/project-dir "/project-a"
                                              :task/id 301})])
-                    session1 (:execute/session-id (get result1 `resolvers/execute!))
+                    session1 (:execute/session-id
+                              (get result1 `resolvers/execute!))
                     result2 (graph/query [`(resolvers/execute!
                                             {:task/project-dir "/project-b"
                                              :task/id 302})])
-                    session2 (:execute/session-id (get result2 `resolvers/execute!))]
+                    session2 (:execute/session-id
+                              (get result2 `resolvers/execute!))]
                 ;; Invoke skills on both sessions
                 (graph/query [`(resolvers/invoke-skill!
                                 {:skill "test"
@@ -526,7 +558,7 @@
                                  :engine/session-id ~session2})])
                 ;; Wait for skill threads
                 (resolvers/await-skill-threads!)
-                ;; Verify each got the right project dir (at least these two dirs were used)
+                ;; Verify each got the right project dir
                 (let [invs (claude-cli/invocations cli-nullable)
                       dirs (set (map #(:dir (:opts %)) invs))]
                   (is (contains? dirs "/project-a"))
@@ -541,17 +573,20 @@
     (testing "sends :no-progress when re-derived state matches current state"
       (with-execute-state
         ;; Configure CLI to return a session-id for resumption
-        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0
-                                                      :events []
-                                                      :session-id "claude-abc"})
-              ;; Task stays :refined after skill (no meta change, no PR)
-              ;; Need 3 show responses: execute!, store-pre-skill-state!, on-skill-complete
-              mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:work-on [(make-work-on-response)]
-                                         :show [(make-task-response {:meta {:refined "true"}})
-                                                (make-task-response {:meta {:refined "true"}})
-                                                (make-task-response {:meta {:refined "true"}})]
-                                         :why-blocked [(make-blocking-response)]}})
+        (let [cli-nullable
+              (claude-cli/make-nullable
+               {:exit-code 0 :events []
+                :session-id "claude-abc"})
+              ;; Task stays :refined after skill
+              refined-resp (make-task-response
+                            {:meta {:refined "true"}})
+              mcp-nullable
+              (mcp-tasks/make-nullable
+               {:responses
+                {:work-on [(make-work-on-response)]
+                 :show (repeat 3 refined-resp)
+                 :why-blocked
+                 [(make-blocking-response)]}})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
@@ -559,7 +594,8 @@
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 100})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
                     _ (sc/send! session-id :refined)]
                 ;; Wait for skill to complete
                 (resolvers/await-skill-threads!)
@@ -571,17 +607,23 @@
 
     (testing "sends state event when progress is made"
       (with-execute-state
-        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
-              ;; Task moves from :refined to :wait-pr-merge (pr-num set)
-              ;; Need 3 show responses: execute!, store-pre-skill-state!, on-skill-complete
-              ;; First two are :refined, third shows progress with pr-num
-              mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:work-on [(make-work-on-response)]
-                                         :show [(make-task-response {:meta {:refined "true"}})
-                                                (make-task-response {:meta {:refined "true"}})
-                                                (make-task-response {:meta {:refined "true"}
-                                                                     :pr-num 42})]
-                                         :why-blocked [(make-blocking-response)]}})
+        (let [cli-nullable (claude-cli/make-nullable
+                            {:exit-code 0 :events []})
+              ;; Task moves from :refined to :wait-pr-merge
+              ;; Third show response has pr-num set
+              refined-resp (make-task-response
+                            {:meta {:refined "true"}})
+              mcp-nullable
+              (mcp-tasks/make-nullable
+               {:responses
+                {:work-on [(make-work-on-response)]
+                 :show [refined-resp
+                        refined-resp
+                        (make-task-response
+                         {:meta {:refined "true"}
+                          :pr-num 42})]
+                 :why-blocked
+                 [(make-blocking-response)]}})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
@@ -589,7 +631,8 @@
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 101})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
                     _ (sc/send! session-id :refined)]
                 (resolvers/await-skill-threads!)
                 ;; Should have transitioned to :wait-pr-merge (progress made)
@@ -601,26 +644,26 @@
 
     (testing "sends :no-progress for :has-tasks when open children unchanged"
       (with-execute-state
-        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0
-                                                      :events []
-                                                      :session-id "claude-def"})
-              ;; Story has 2 open children before and after skill
-              ;; Need 3 show and 3 list responses: execute!, store-pre-skill-state!, on-skill-complete
-              mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:work-on [(make-work-on-response)]
-                                         :show [(make-task-response {:type :story
-                                                                     :meta {:refined "true"}})
-                                                (make-task-response {:type :story
-                                                                     :meta {:refined "true"}})
-                                                (make-task-response {:type :story
-                                                                     :meta {:refined "true"}})]
-                                         :why-blocked [(make-blocking-response)]
-                                         :list [(make-children-response [{:status :open}
-                                                                         {:status :open}])
-                                                (make-children-response [{:status :open}
-                                                                         {:status :open}])
-                                                (make-children-response [{:status :open}
-                                                                         {:status :open}])]}})
+        (let [cli-nullable
+              (claude-cli/make-nullable
+               {:exit-code 0 :events []
+                :session-id "claude-def"})
+              ;; 2 open children before and after skill
+              story-resp
+              (make-task-response
+               {:type :story
+                :meta {:refined "true"}})
+              two-open
+              (make-children-response
+               [{:status :open} {:status :open}])
+              mcp-nullable
+              (mcp-tasks/make-nullable
+               {:responses
+                {:work-on [(make-work-on-response)]
+                 :show (repeat 3 story-resp)
+                 :why-blocked
+                 [(make-blocking-response)]
+                 :list (repeat 3 two-open)}})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
@@ -628,33 +671,40 @@
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 102})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
                     _ (sc/send! session-id :has-tasks)]
                 (resolvers/await-skill-threads!)
                 ;; Should have transitioned to :escalated (no progress)
                 (is (contains? (sc/current-state session-id) :escalated))
-                (is (= "claude-def" (:last-claude-session-id (sc/get-data session-id))))))))))
+                (is
+                 (=
+                  "claude-def"
+                  (:last-claude-session-id (sc/get-data session-id))))))))))
 
     (testing "sends :has-tasks event when open children count decreases"
       (with-execute-state
-        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
-              ;; Story has 2 open children before, 1 after skill
-              ;; Need 3 show and 3 list responses: execute!, store-pre-skill-state!, on-skill-complete
-              mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:work-on [(make-work-on-response)]
-                                         :show [(make-task-response {:type :story
-                                                                     :meta {:refined "true"}})
-                                                (make-task-response {:type :story
-                                                                     :meta {:refined "true"}})
-                                                (make-task-response {:type :story
-                                                                     :meta {:refined "true"}})]
-                                         :why-blocked [(make-blocking-response)]
-                                         :list [(make-children-response [{:status :open}
-                                                                         {:status :open}])
-                                                (make-children-response [{:status :open}
-                                                                         {:status :open}])
-                                                (make-children-response [{:status :open}
-                                                                         {:status :closed}])]}})
+        (let [cli-nullable (claude-cli/make-nullable
+                            {:exit-code 0 :events []})
+              ;; 2 open before, 1 after skill
+              story-resp
+              (make-task-response
+               {:type :story
+                :meta {:refined "true"}})
+              two-open
+              (make-children-response
+               [{:status :open} {:status :open}])
+              one-open
+              (make-children-response
+               [{:status :open} {:status :closed}])
+              mcp-nullable
+              (mcp-tasks/make-nullable
+               {:responses
+                {:work-on [(make-work-on-response)]
+                 :show (repeat 3 story-resp)
+                 :why-blocked
+                 [(make-blocking-response)]
+                 :list [two-open two-open one-open]}})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
@@ -662,63 +712,75 @@
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 103})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
                     _ (sc/send! session-id :has-tasks)]
                 (resolvers/await-skill-threads!)
                 ;; Should have received :has-tasks event (progress made)
                 (let [hist (sc/history session-id)
                       events (mapv :event hist)]
                   (is (some #{:has-tasks} (rest events))
-                      "Should have received :has-tasks event after progress"))))))))))
+                      "Should have :has-tasks event"))))))))))
 
 ;;; Escalate to Dev-env Tests
 
 (deftest escalate-to-dev-env-test
-  ;; Verify escalate-to-dev-env! starts a dev-env session for human intervention.
+  ;; Verify escalate-to-dev-env! starts a dev-env session.
   (testing "escalate-to-dev-env!"
     (testing "passes claude-session-id to dev-env when available"
       (with-execute-state
         (let [dev-env (dev-env-protocol/make-noop-dev-env)
               dev-env-id (dev-env-registry/register! dev-env :test)
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses (task-responses {:meta {:refined "true"}})})]
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 300})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))
-                    ;; Manually store a Claude session-id (as would happen on no-progress)
-                    _ (sc/update-data! session-id #(assoc % :last-claude-session-id "claude-xyz"))
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    ;; Store Claude session-id (simulates no-progress)
+                    _ (sc/update-data!
+                       session-id
+                       #(assoc % :last-claude-session-id "claude-xyz"))
                     result (graph/query [`(resolvers/escalate-to-dev-env!
                                            {:engine/session-id ~session-id})])
                     escalate-result (get result `resolvers/escalate-to-dev-env!)
                     calls @(:calls dev-env)
-                    start-call (first (filter #(= :start-session (:op %)) calls))]
+                    start-call (first
+                                (filter #(= :start-session (:op %)) calls))]
                 (is (= :escalated (:escalate/status escalate-result)))
                 (is (= dev-env-id (:escalate/dev-env-id escalate-result)))
                 (is (some? start-call))
                 ;; Verify Claude session-id was passed in opts
-                (is (= "claude-xyz" (get-in start-call [:opts :claude-session-id])))))))))
+                (is
+                 (=
+                  "claude-xyz"
+                  (get-in start-call [:opts :claude-session-id])))))))))
 
     (testing "starts dev-env session when available"
       (with-execute-state
         (let [dev-env (dev-env-protocol/make-noop-dev-env)
               dev-env-id (dev-env-registry/register! dev-env :test)
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses (task-responses {:meta {:refined "true"}})})]
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 200})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
                     result (graph/query [`(resolvers/escalate-to-dev-env!
                                            {:engine/session-id ~session-id})])
                     escalate-result (get result `resolvers/escalate-to-dev-env!)
                     ;; Check that start-session was called via the :calls atom
                     calls @(:calls dev-env)
-                    start-call (first (filter #(= :start-session (:op %)) calls))]
+                    start-call (first
+                                (filter #(= :start-session (:op %)) calls))]
                 (is (= :escalated (:escalate/status escalate-result)))
                 (is (= dev-env-id (:escalate/dev-env-id escalate-result)))
                 (is (some? start-call) "start-session should have been called")
@@ -729,13 +791,15 @@
         (let [dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses (task-responses {:meta {:refined "true"}})})]
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 350})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
                     result (graph/query [`(resolvers/escalate-to-dev-env!
                                            {:engine/session-id ~session-id})])
                     escalate-result (get result `resolvers/escalate-to-dev-env!)
@@ -757,21 +821,30 @@
               ;; 2. store-pre-skill-state! from :refined entry action (refined)
               ;; 3. on-skill-complete virtual thread (refined → no-progress)
               ;; 4. on-dev-env-close re-derive (done)
-              mcp-nullable (mcp-tasks/make-nullable
-                            {:responses {:work-on [(make-work-on-response)]
-                                         :show [(make-task-response {:meta {:refined "true"}})
-                                                (make-task-response {:meta {:refined "true"}})
-                                                (make-task-response {:meta {:refined "true"}})
-                                                (make-task-response {:status :done
-                                                                     :meta {:refined "true"}})]
-                                         :why-blocked [(make-blocking-response)]}})]
+              refined-resp
+              (make-task-response
+               {:meta {:refined "true"}})
+              mcp-nullable
+              (mcp-tasks/make-nullable
+               {:responses
+                {:work-on [(make-work-on-response)]
+                 :show [refined-resp
+                        refined-resp
+                        refined-resp
+                        (make-task-response
+                         {:status :done
+                          :meta {:refined "true"}})]
+                 :why-blocked
+                 [(make-blocking-response)]}})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 351})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))]
-                ;; Transition to :escalated (entering :refined triggers invoke-skill!)
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))]
+                ;; Enter :refined (triggers invoke-skill!),
+                ;; then send :error to transition to :escalated
                 (sc/send! session-id :refined)
                 (sc/send! session-id :error)
                 (is (contains? (sc/current-state session-id) :escalated))
@@ -780,7 +853,10 @@
                 (is (contains? (sc/current-state session-id) :escalated))
                 ;; Find and invoke the on-close callback
                 (let [hooks @(:hooks dev-env)
-                      on-close-hook (first (filter #(= :on-close (:type (val %))) hooks))
+                      on-close-hook (first
+                                     (filter
+                                      #(= :on-close (:type (val %)))
+                                      hooks))
                       callback (:callback (val on-close-hook))]
                   ;; Simulate buffer close
                   (callback {:session-id session-id
@@ -792,15 +868,22 @@
     (testing "returns error when no dev-env available"
       (with-execute-state
         (let [mcp-nullable (mcp-tasks/make-nullable
-                            {:responses (task-responses {:meta {:refined "true"}})})]
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [work-result (graph/query [`(resolvers/execute!
                                                 {:task/project-dir "/test"
                                                  :task/id 201})])
-                    session-id (:execute/session-id (get work-result `resolvers/execute!))
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
                     result (graph/query [`(resolvers/escalate-to-dev-env!
                                            {:engine/session-id ~session-id})])
-                    escalate-result (get result `resolvers/escalate-to-dev-env!)]
+                    escalate-result (get
+                                     result
+                                     `resolvers/escalate-to-dev-env!)]
                 (is (= :no-dev-env (:escalate/status escalate-result)))
-                (is (= :no-dev-env (:error (:escalate/error escalate-result))))))))))))
+                (is
+                 (=
+                  :no-dev-env
+                  (:error (:escalate/error escalate-result))))))))))))

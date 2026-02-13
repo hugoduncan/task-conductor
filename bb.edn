@@ -15,7 +15,13 @@
          (fn []
            (when-not (fs/which line-breaker-cmd)
              (println "Installing line-breaker...")
-             (shell "curl -sL https://raw.githubusercontent.com/hugoduncan/line-breaker/master/scripts/install.sh | bash -s -- --install-dir ~/.local/bin")))
+             (let [url (str "https://raw.githubusercontent.com"
+                            "/hugoduncan/line-breaker"
+                            "/master/scripts/install.sh")]
+               (shell
+                (str "curl -sL " url
+                     " | bash -s --"
+                     " --install-dir ~/.local/bin")))))
 
          show-help
          (fn []

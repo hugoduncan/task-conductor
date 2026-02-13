@@ -22,7 +22,11 @@
     (testing "delegates to protocol/register-hook for :on-close"
       (let [dev-env (protocol/make-noop-dev-env)
             callback (fn [_] :test)
-            result (interface/register-hook dev-env "sess-123" :on-close callback)]
+            result (interface/register-hook
+                    dev-env
+                    "sess-123"
+                    :on-close
+                    callback)]
         (is (uuid? result))
         (let [calls @(:calls dev-env)]
           (is (= :register-hook (:op (first calls))))
@@ -31,7 +35,11 @@
     (testing "delegates to protocol/register-hook for :on-idle"
       (let [dev-env (protocol/make-noop-dev-env)
             callback (fn [_] :test)
-            result (interface/register-hook dev-env "sess-456" :on-idle callback)]
+            result (interface/register-hook
+                    dev-env
+                    "sess-456"
+                    :on-idle
+                    callback)]
         (is (uuid? result))
         (let [calls @(:calls dev-env)]
           (is (= :register-hook (:op (first calls))))
@@ -85,8 +93,11 @@
       (let [dev-env (protocol/make-noop-dev-env)
             on-close (fn [_] :closed)
             on-idle (fn [_] :idle)
-            result (interface/register-hooks dev-env "sess-multi" {:on-close on-close
-                                                                   :on-idle on-idle})]
+            result (interface/register-hooks
+                    dev-env
+                    "sess-multi"
+                    {:on-close on-close
+                     :on-idle on-idle})]
         (is (= #{:on-close :on-idle} (set (keys result))))
         (is (uuid? (:on-close result)))
         (is (uuid? (:on-idle result)))

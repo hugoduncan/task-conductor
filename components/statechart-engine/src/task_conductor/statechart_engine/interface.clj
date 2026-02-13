@@ -18,12 +18,13 @@
     - (symbol ...) expression → mutation"
   (:require
    [task-conductor.statechart-engine.core :as core]
-   [task-conductor.statechart-engine.resolvers] ; registers EQL resolvers on load
+   [task-conductor.statechart-engine.resolvers] ; auto-registers resolvers
    [com.fulcrologic.statecharts.chart :as chart]
    [com.fulcrologic.statecharts.elements :as ele]))
 
 ;;; DSL Re-exports for Chart Construction
-;; These allow consumers to build statecharts without importing fulcrologic namespaces.
+;; These allow consumers to build statecharts
+;; without importing fulcrologic namespaces.
 
 (def statechart
   "Create a statechart definition.
@@ -39,7 +40,8 @@
 
 (def transition
   "Define a transition between states.
-  attrs keys: :event (keyword or list), :cond, :target (keyword or set), :type (:internal/:external)"
+  attrs keys: :event (keyword or list), :cond,
+  :target (keyword or set), :type (:internal/:external)"
   ele/transition)
 
 (def initial
@@ -62,7 +64,8 @@
   "Create a history pseudo-state.
   attrs keys: :id, :type (:deep or :shallow), :deep? (alias for type)
   default-transition: transition element or target keyword.
-  Note: Named history-node to avoid conflict with introspection history function."
+  Note: Named history-node to avoid conflict with
+  introspection history function."
   ele/history)
 
 (def on-entry
@@ -81,7 +84,8 @@
   ele/assign)
 
 (def Send
-  "Send an event to a target (external system, this machine, or another machine).
+  "Send an event to a target
+  (external system, this machine, or another machine).
   attrs keys: :event, :target, :delay, :content, etc.
   Note: Capitalized to avoid conflict with clojure.core/send."
   ele/Send)
@@ -99,7 +103,8 @@
 
 (def register!
   "Register a statechart definition under the given name.
-  Returns chart-name on success. Throws if name already registered or chart-def invalid."
+  Returns chart-name on success.
+  Throws if name already registered or chart-def invalid."
   core/register!)
 
 (def unregister!
@@ -157,7 +162,8 @@
 
 (def history
   "Returns the state transition history for a session.
-  Returns [{:state config :event event :timestamp inst} ...] in chronological order.
+  Returns [{:state config :event event :timestamp inst} ...]
+  in chronological order.
   With optional n parameter, returns only the last n entries.
   Throws if session doesn't exist."
   core/history)

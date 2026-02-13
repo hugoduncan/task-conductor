@@ -1,6 +1,7 @@
 (ns task-conductor.statechart-engine.core
   "Core statechart engine implementation.
-  Provides singleton environment for registering statecharts and managing sessions.
+  Provides singleton environment for registering
+  statecharts and managing sessions.
   Actions execute EQL through Pathom (pathom-graph component)."
   (:require
    [com.fulcrologic.statecharts :as sc]
@@ -73,10 +74,14 @@
   Each entry is {:state config :event event :timestamp inst}."} histories
   (atom {}))
 
-(defonce ^{:doc "Map of session-id to max history size (nil = unlimited)."} history-limits
+(defonce
+  ^{:doc "Map of session-id to max history size (nil = unlimited)."}
+  history-limits
   (atom {}))
 
-(defonce ^{:doc "Map of session-id to lock object for serializing sends."} session-locks
+(defonce
+  ^{:doc "Map of session-id to lock object for serializing sends."}
+  session-locks
   (atom {}))
 
 ;;; Internal Helpers
@@ -150,7 +155,9 @@
          wmem       (sp/start! processor env chart-name
                                {::sc/session-id session-id})
          init-state (::sc/configuration wmem)
-         init-entry {:state init-state :event nil :timestamp (java.time.Instant/now)}
+         init-entry {:state init-state
+                     :event nil
+                     :timestamp (java.time.Instant/now)}
          max-size   (:max-history-size opts)
          init-data  (assoc (:data opts) :session-id session-id)]
      (swap! sessions assoc session-id wmem)
@@ -178,13 +185,20 @@
     (locking lock
       (if-let [wmem (get @sessions session-id)]
         (let [processor  (::sc/processor env)
-              new-wmem   (sp/process-event! processor env wmem (evts/new-event event))
+              new-wmem   (sp/process-event!
+                          processor
+                          env
+                          wmem
+                          (evts/new-event event))
               new-state  (::sc/configuration new-wmem)
-              new-entry  {:state new-state :event event :timestamp (java.time.Instant/now)}
+              new-entry  {:state new-state
+                          :event event
+                          :timestamp (java.time.Instant/now)}
               max-size   (get @history-limits session-id)]
           (swap! sessions assoc session-id new-wmem)
           (swap! histories update session-id
-                 (fn [entries] (trim-history (conj entries new-entry) max-size)))
+                 (fn [entries]
+                   (trim-history (conj entries new-entry) max-size)))
           new-state)
         ;; Session was stopped while we held the lock
         (throw (ex-info "Session not found"
@@ -268,7 +282,9 @@
           statechart  (get-statechart chart-name)
           config      (::sc/configuration wmem)
           all-events  (reduce (fn [events state-id]
-                                (into events (events-for-state statechart state-id)))
+                                (into
+                                 events
+                                 (events-for-state statechart state-id)))
                               #{}
                               config)]
       all-events)
@@ -277,7 +293,8 @@
 
 (defn history
   "Returns the state transition history for a session.
-  Returns [{:state config :event event :timestamp inst} ...] in chronological order.
+  Returns [{:state config :event event :timestamp inst} ...]
+  in chronological order.
   With optional n parameter, returns only the last n entries.
   Throws if session doesn't exist."
   ([session-id]

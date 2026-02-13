@@ -1,11 +1,13 @@
 (ns task-conductor.mcp-tasks-test.nullable-test
   "Tests for mcp-tasks Nullable infrastructure.
-  Verifies configurable responses, operation tracking, and query/mutation classification."
+  Verifies configurable responses, operation tracking,
+  and query/mutation classification."
   (:require [clojure.test :refer [deftest is testing]]
             [task-conductor.mcp-tasks.interface :as tasks]))
 
 ;; Tests that the Nullable provides configurable responses and tracks operations
-;; without spawning real CLI processes. Contracts: response progression, operation
+;; without spawning real CLI processes.
+;; Contracts: response progression, operation
 ;; tracking, query/mutation classification.
 
 (deftest make-nullable-test
@@ -42,7 +44,8 @@
           (tasks/with-nullable-mcp-tasks nullable
             (is (= resp1 (tasks/list-tasks {:project-dir "/p"})))
             (is (= resp2 (tasks/complete-task {:project-dir "/p" :task-id 1})))
-            (is (= resp3 (tasks/reopen-task {:project-dir "/p" :task-id 1})))))))
+            (is
+             (= resp3 (tasks/reopen-task {:project-dir "/p" :task-id 1})))))))
 
     (testing "when responses exhausted"
       (testing "returns error"
@@ -139,7 +142,8 @@
   (testing "nullable isolation"
     (testing "different nullables track separately"
       (let [nullable1 (tasks/make-nullable {:responses [{:tasks []}]})
-            nullable2 (tasks/make-nullable {:responses [{:tasks []} {:tasks []}]})]
+            nullable2 (tasks/make-nullable
+                       {:responses [{:tasks []} {:tasks []}]})]
         (tasks/with-nullable-mcp-tasks nullable1
           (tasks/list-tasks {:project-dir "/p1"}))
         (tasks/with-nullable-mcp-tasks nullable2

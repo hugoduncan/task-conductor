@@ -29,7 +29,11 @@
     (testing "records the hook registration"
       (let [dev-env (protocol/make-noop-dev-env)
             callback (fn [_ctx] :called)
-            hook-id (protocol/register-hook dev-env "sess-123" :on-close callback)]
+            hook-id (protocol/register-hook
+                     dev-env
+                     "sess-123"
+                     :on-close
+                     callback)]
         (is (uuid? hook-id))
         (let [calls @(:calls dev-env)
               call (first calls)]
@@ -42,7 +46,11 @@
     (testing "stores hook in hooks atom with session-id"
       (let [dev-env (protocol/make-noop-dev-env)
             callback (fn [_ctx] :called)
-            hook-id (protocol/register-hook dev-env "sess-456" :on-idle callback)
+            hook-id (protocol/register-hook
+                     dev-env
+                     "sess-456"
+                     :on-idle
+                     callback)
             hooks @(:hooks dev-env)
             hook (get hooks hook-id)]
         (is (= :on-idle (:type hook)))

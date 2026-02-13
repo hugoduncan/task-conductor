@@ -74,7 +74,8 @@
 
 (defn register-resolvers!
   "Register all claude-cli mutations with pathom-graph.
-   Called automatically on namespace load. Can be called again after graph reset."
+   Called automatically on namespace load.
+   Can be called again after graph reset."
   []
   (graph/register! all-operations))
 

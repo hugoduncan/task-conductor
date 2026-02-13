@@ -42,7 +42,8 @@
 
 (defn query
   "Execute EQL query against the current environment.
-   Returns result map. Optionally accepts entity data for parameterized queries."
+   Returns result map. Optionally accepts entity data
+   for parameterized queries."
   ([eql]
    (p.eql/process (env) eql))
   ([entity eql]
