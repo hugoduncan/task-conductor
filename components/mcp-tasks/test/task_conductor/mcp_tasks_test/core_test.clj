@@ -5,8 +5,10 @@
 
 ;;; build-list-args tests
 ;;
-;; Tests that build-list-args correctly translates options maps to CLI argument vectors.
-;; Contracts: always starts with ["list"], maps each option to correct flag format.
+;; Tests that build-list-args correctly translates options
+;; maps to CLI argument vectors.
+;; Contracts: always starts with ["list"], maps each option
+;; to correct flag format.
 
 (deftest build-list-args-test
   (testing "build-list-args"
@@ -91,7 +93,8 @@
 
 ;;; Integration tests
 ;;
-;; Tests that list-tasks and show-task correctly invoke the CLI and parse results.
+;; Tests that list-tasks and show-task correctly invoke
+;; the CLI and parse results.
 ;; Uses the current project directory which has a .mcp-tasks.edn file.
 
 (def project-dir
@@ -172,8 +175,11 @@
 
 ;;; build-add-args tests
 ;;
-;; Tests that build-add-args correctly translates options maps to CLI argument vectors.
-;; Contracts: always starts with ["add" "--category" ... "--title" ...], maps optional fields.
+;; Tests that build-add-args correctly translates options
+;; maps to CLI argument vectors.
+;; Contracts: always starts with
+;; ["add" "--category" ... "--title" ...],
+;; maps optional fields.
 
 (deftest build-add-args-test
   (testing "build-add-args"
@@ -268,10 +274,11 @@
 
     (testing "with :relations"
       (testing "adds --relations flag with JSON"
-        (let [result (core/build-update-args {:task-id 42
-                                              :relations [{:id 1
-                                                           :relates-to 10
-                                                           :as-type "blocked-by"}]})]
+        (let [result (core/build-update-args
+                      {:task-id 42
+                       :relations [{:id 1
+                                    :relates-to 10
+                                    :as-type "blocked-by"}]})]
           (is (some #{"--relations"} result)))))
 
     (testing "with :shared-context"
@@ -315,7 +322,8 @@
 
 ;;; Mutation integration tests
 ;;
-;; Tests the full lifecycle of task mutations: add -> complete -> reopen -> delete.
+;; Tests the full lifecycle of task mutations:
+;; add -> complete -> reopen -> delete.
 ;; Creates a temporary task and cleans up after.
 
 (deftest ^:integration mutation-lifecycle-integration-test

@@ -1,11 +1,13 @@
 (ns task-conductor.mcp-tasks-test.nullable-test
   "Tests for mcp-tasks Nullable infrastructure.
-  Verifies configurable responses, operation tracking, and query/mutation classification."
+  Verifies configurable responses, operation tracking,
+  and query/mutation classification."
   (:require [clojure.test :refer [deftest is testing]]
             [task-conductor.mcp-tasks.interface :as tasks]))
 
 ;; Tests that the Nullable provides configurable responses and tracks operations
-;; without spawning real CLI processes. Contracts: response progression, operation
+;; without spawning real CLI processes.
+;; Contracts: response progression, operation
 ;; tracking, query/mutation classification.
 
 (deftest make-nullable-test

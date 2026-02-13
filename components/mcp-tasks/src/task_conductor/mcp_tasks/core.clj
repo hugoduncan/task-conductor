@@ -63,7 +63,8 @@
             ;; Invalid format
             :else
             {:error :invalid-nullable-config
-             :message "Nullable :responses must be a vector or command-keyed map"}))]
+             :message (str "Nullable :responses must be"
+                           " a vector or command-keyed map")}))]
     (when debug?
       (println "[mcp-tasks-nullable]" cmd (:args opts) "->" response))
     (swap!
