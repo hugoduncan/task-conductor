@@ -577,8 +577,9 @@
               "generic registry entry should have :emacs type")
           (is (some? (:dev-env generic-entry))
               "generic registry entry should include dev-env instance")
-          (is (= (core/get-dev-env dev-env-id) (:dev-env generic-entry))
-              "generic registry should reference same instance as local registry")
+          (is (= (core/get-dev-env dev-env-id)
+                 (:dev-env generic-entry))
+              "should reference same instance")
           (core/unregister-emacs-dev-env dev-env-id)))
 
       (testing "unregister-emacs-dev-env removes from generic registry"

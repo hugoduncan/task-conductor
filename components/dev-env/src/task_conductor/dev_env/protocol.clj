@@ -10,7 +10,8 @@
   the process.")
 
 (defprotocol DevEnv
-  "Protocol for dev environment implementations that host interactive Claude sessions.
+  "Protocol for dev environment implementations
+  that host interactive Claude sessions.
 
   Implementations must handle:
   - Starting interactive sessions with a given session-id
@@ -145,7 +146,8 @@
 
   Access tracked data on the returned instance:
     (:calls dev-env) - Atom containing vector of call records, each with:
-                       :op         - Operation keyword (:start-session, :register-hook, etc.)
+                       :op         - Operation keyword
+                                     (:start-session, :register-hook, etc.)
                        :session-id - Session ID if applicable
                        :opts       - Options map if applicable (start-session)
                        :hook-type  - Hook type if applicable (register-hook)

@@ -93,7 +93,8 @@
 
 (defn register-resolvers!
   "Register all dev-env resolvers and mutations with pathom-graph.
-   Called automatically on namespace load. Can be called again after graph reset."
+   Called automatically on namespace load.
+   Can be called again after graph reset."
   []
   (graph/register! all-operations))
 

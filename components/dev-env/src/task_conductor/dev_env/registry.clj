@@ -12,7 +12,8 @@
 
   Parameters:
     dev-env - A DevEnv protocol implementation
-    type    - Keyword identifying the implementation type (e.g., :emacs, :terminal)
+    type    - Keyword identifying the implementation type
+              (e.g., :emacs, :terminal)
     meta    - Optional map of additional metadata
 
   Returns the generated dev-env ID (string)."
@@ -60,8 +61,10 @@
 (defn list-dev-envs
   "List all registered dev-envs.
 
-  Returns a seq of maps with :dev-env/id, :type, and :meta for each registered dev-env.
-  The dev-env instances themselves are not included to avoid leaking impl details."
+  Returns a seq of maps with :dev-env/id, :type, and :meta
+  for each registered dev-env.
+  The dev-env instances themselves are not included
+  to avoid leaking impl details."
   []
   (mapv (fn [[id entry]]
           {:dev-env/id id
@@ -72,10 +75,12 @@
 (defn select-dev-env
   "Select a dev-env from the registry.
 
-  Returns the first available dev-env entry as {:dev-env/id ... :dev-env :type :meta},
+  Returns the first available dev-env entry as
+  {:dev-env/id ... :dev-env :type :meta},
   or nil if registry is empty.
 
-  Future implementations may add selection criteria (e.g., by type, health check)."
+  Future implementations may add selection criteria
+  (e.g., by type, health check)."
   []
   (when-let [[id entry] (first @registry)]
     {:dev-env/id id
