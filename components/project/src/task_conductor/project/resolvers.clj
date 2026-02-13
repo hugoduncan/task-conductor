@@ -64,6 +64,9 @@
 
 ;;; Execute Mutation
 
+(def ^:private register-hook-mutation
+  'task-conductor.statechart-engine.resolvers/engine-register-dev-env-hook!)
+
 (defn- fetch-task
   "Fetch task data via EQL query.
    Returns task map with :task/type, :task/status, etc.
@@ -148,12 +151,13 @@
                 dev-env-id (:dev-env/id
                             (:dev-env/selected selected))]
             (when dev-env-id
-              (graph/query
-               [`(task-conductor.statechart-engine.resolvers/engine-register-dev-env-hook!
-                  {:dev-env/id ~dev-env-id
-                   :dev-env/hook-type :on-idle
-                   :engine/session-id ~session-id
-                   :engine/event :complete})]))
+              (let [params
+                    {:dev-env/id dev-env-id
+                     :dev-env/hook-type :on-idle
+                     :engine/session-id session-id
+                     :engine/event :complete}]
+                (graph/query
+                 [(list register-hook-mutation params)])))
             {:execute/session-id session-id
              :execute/initial-state initial-state
              :execute/error nil}))))))
@@ -215,7 +219,8 @@
         ;; Skill failed - send error event
         (sc/send! session-id :error)
         (if on-complete
-          ;; Fixed outcome - send the predetermined event (e.g. merge → :complete)
+          ;; Fixed outcome - send predetermined event
+          ;; (e.g. merge → :complete)
           (sc/send! session-id on-complete)
           ;; Re-derive state and check for progress
           (let [task (fetch-task project-dir task-id)
@@ -249,9 +254,10 @@
         (throw e)))))
 
 (defn- on-dev-env-close
-  "Handle dev-env session close. Re-derives state and sends event to statechart.
-   Called when the human closes the interactive dev-env buffer after intervention.
-   Guards against session being stopped while dev-env was open."
+  "Handle dev-env session close.
+   Re-derives state and sends event to statechart.
+   Called when human closes interactive dev-env buffer.
+   Guards against session stopped while dev-env was open."
   [session-id _context]
   (try
     (let [data (sc/get-data session-id)
@@ -282,7 +288,8 @@
         children (when (= :story task-type)
                    (fetch-children project-dir task-id))
         children-maps (mapv task->execute-map children)
-        ;; Derive current state from task data (matches how on-skill-complete works)
+        ;; Derive current state from task data
+        ;; (matches how on-skill-complete works)
         current-derived-state (if (= :story task-type)
                                 (execute/derive-story-state
                                  (task->execute-map task)
@@ -387,8 +394,8 @@
    escalate-to-dev-env!])
 
 (defn register-resolvers!
-  "Register all project resolvers and mutations with pathom-graph.
-   Called automatically on namespace load. Can be called again after graph reset."
+  "Register all project resolvers and mutations.
+   Called on namespace load. Can be called after graph reset."
   []
   (graph/register! all-operations))
 

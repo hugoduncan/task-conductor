@@ -76,10 +76,11 @@
                         m)
 
                     (find-by-name m name)
-                    (do (reset! result {:error :duplicate-name
-                                        :message (str
-                                                  "Project name already exists: "
-                                                  name)})
+                    (do (reset! result
+                                {:error :duplicate-name
+                                 :message
+                                 (str "Project name already exists: "
+                                      name)})
                         m)
 
                     :else
@@ -118,10 +119,11 @@
                      (if (and new-name
                               (not= new-name (:project/name existing))
                               (find-by-name m new-name))
-                       (do (reset! result {:error :duplicate-name
-                                           :message (str
-                                                     "Project name already exists: "
-                                                     new-name)})
+                       (do (reset! result
+                                   {:error :duplicate-name
+                                    :message
+                                    (str "Project name already exists: "
+                                         new-name)})
                            m)
                        (let [updated (merge existing allowed-updates)]
                          (reset! result updated)

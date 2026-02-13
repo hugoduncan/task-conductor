@@ -142,7 +142,8 @@
   Args:
     task-overrides - map passed to `make-task-response`
 
-  Returns {:work-on [...] :show [...] :why-blocked [...]} for mcp-tasks Nullable :responses."
+  Returns {:work-on [...] :show [...] :why-blocked [...]}
+  for mcp-tasks Nullable :responses."
   ([] (task-responses {}))
   ([task-overrides]
    {:work-on [(make-work-on-response)]
@@ -231,38 +232,44 @@
   (testing "skill invocation via entry action"
     (testing "invokes skill when entering :unrefined state"
       (with-integration-state
-        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
-              ;; Responses: initial execute! (show+blocking), re-derive after skill (show+blocking)
+        (let [cli-nullable (claude-cli/make-nullable
+                            {:exit-code 0 :events []})
+              ;; initial execute! + re-derive after skill
+              resps (merge-responses
+                     (task-responses)
+                     (task-responses {:meta {:refined "true"}}))
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses (merge-responses (task-responses)
-                                                         (task-responses
-                                                          {:meta
-                                                           {:refined "true"}}))})
+                            {:responses resps})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
 
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
-              (let [result (graph/query [`(resolvers/execute!
-                                           {:task/project-dir "/test"
-                                            :task/id 200})])
-                    execute-result (get result `resolvers/execute!)
-                    session-id (:execute/session-id execute-result)]
+              (let [result (graph/query
+                            [`(resolvers/execute!
+                               {:task/project-dir "/test"
+                                :task/id 200})])
+                    execute-result (get result
+                                        `resolvers/execute!)
+                    session-id (:execute/session-id
+                                execute-result)]
 
                 ;; Send initial state event to trigger skill
                 (sc/send! session-id :unrefined)
-                (is (contains? (sc/current-state session-id) :unrefined))
+                (is (contains?
+                     (sc/current-state session-id)
+                     :unrefined))
 
                 ;; Wait for skill invocation
                 (resolvers/await-skill-threads!)
 
                 ;; Verify claude-cli Nullable was invoked
-                (is (= 1 (count (claude-cli/invocations cli-nullable))))
-                (is (= "/mcp-tasks:refine-task (MCP)"
-                       (:prompt
-                        (:opts
-                         (first
-                          (claude-cli/invocations cli-nullable))))))))))))))
+                (let [invs (claude-cli/invocations
+                            cli-nullable)]
+                  (is (= 1 (count invs)))
+                  (is (= "/mcp-tasks:refine-task (MCP)"
+                         (:prompt
+                          (:opts (first invs))))))))))))))
 
 ;;; Error Path Tests
 
@@ -341,7 +348,7 @@
     story-overrides - map passed to `make-task-response` (type forced to :story)
     children        - vector of child task maps for `make-children-response`
 
-  Returns {:work-on [...] :show [...] :why-blocked [...] :list [...]} for mcp-tasks Nullable."
+  Returns command-keyed map for mcp-tasks Nullable."
   [story-overrides children]
   {:work-on [(make-work-on-response)]
    :show [(make-task-response (merge {:type :story} story-overrides))]
@@ -441,10 +448,10 @@
                                     story-response)   ; during :has-tasks cycles
                                    (repeat
                                     5
-                                    reviewed-story))   ; after review sets code-reviewed
+                                    reviewed-story))
                             :why-blocked [(make-blocking-response)]
-                                         ;; Work-on!, then pairs of (pre-skill, on-complete) showing progress
-                                         ;; Each cycle: store-pre sees N open, on-complete sees N-1 open
+                            ;; Pairs of (pre-skill, on-complete)
+                            ;; showing progress per cycle
                             :list (concat
                                    [three-open]           ; execute!
                                    [three-open
@@ -488,13 +495,15 @@
   (testing "Nullable infrastructure"
     (testing "tracks claude-cli invocations during skill execution"
       (with-integration-state
-        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
-              ;; Responses: initial execute! (show+blocking), re-derive after skill (show+blocking)
+        (let [cli-nullable (claude-cli/make-nullable
+                            {:exit-code 0 :events []})
+              ;; initial execute! + re-derive after skill
+              resps (merge-responses
+                     (task-responses)
+                     (task-responses
+                      {:meta {:refined "true"}}))
               mcp-nullable (mcp-tasks/make-nullable
-                            {:responses (merge-responses (task-responses)
-                                                         (task-responses
-                                                          {:meta
-                                                           {:refined "true"}}))})]
+                            {:responses resps})]
 
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli cli-nullable
