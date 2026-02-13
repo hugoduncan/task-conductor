@@ -66,7 +66,50 @@
   [mock-dev-env session-id transcript]
   (swap! (:transcript-data mock-dev-env) assoc session-id transcript))
 
-;;; Statechart Definition
+;;; Action Expression Factories
+;; Parameterized factories for action expressions.
+;; Parallel to execute.clj's top-level defs, but
+;; parameterized because test actions close over
+;; per-test state.
+
+(defn- start-session-expr
+  "EQL mutation expr to start a dev-env session."
+  [dev-env-id session-id opts]
+  `(dev-env-resolvers/dev-env-start-session!
+    {:dev-env/id ~dev-env-id
+     :dev-env/session-id ~session-id
+     :dev-env/opts ~opts}))
+
+(defn- register-hook-fn
+  "Action fn that registers an on-close hook."
+  [dev-env-id session-id-atom]
+  (fn [_env _data]
+    (graph/query
+     [`(resolvers/engine-register-dev-env-hook!
+        {:dev-env/id ~dev-env-id
+         :dev-env/hook-type :on-close
+         :engine/session-id
+         ~(deref session-id-atom)
+         :engine/event :session-closed})])))
+
+(defn- query-transcript-fn
+  "Action fn that queries transcript into atom."
+  [dev-env-id session-id captured-transcript]
+  (let [sym
+        `dev-env-resolvers/dev-env-query-transcript!]
+    (fn [_env _data]
+      (let [result
+            (graph/query
+             [`(~sym
+                {:dev-env/id ~dev-env-id
+                 :dev-env/session-id
+                 ~session-id})])]
+        (reset!
+         captured-transcript
+         (get-in result
+                 [sym :dev-env/transcript]))))))
+
+;;; Statechart Definitions
 
 (defn orchestrator-chart
   "Statechart that orchestrates a dev-env session.
@@ -74,61 +117,78 @@
    On :running entry: starts session.
    On :on-close hook: transitions to :completed."
   [dev-env-id]
-  (let [start-expr
-        `(dev-env-resolvers/dev-env-start-session!
-          {:dev-env/id ~dev-env-id
-           :dev-env/session-id "test-session"
-           :dev-env/opts {:dir "/tmp"}})]
-    (sc/statechart {}
-                   (sc/initial {}
-                               (sc/transition {:target :idle}))
-                   (sc/state {:id :idle}
-                             (sc/transition
-                              {:event :start
-                               :target :running}))
-                   (sc/state {:id :running}
-                             (sc/on-entry {}
-                                          (sc/action
-                                           {:expr start-expr}))
-                             (sc/transition
-                              {:event :session-closed
-                               :target :completed}))
-                   (sc/state {:id :completed}))))
+  (sc/statechart {}
+                 (sc/initial {}
+                             (sc/transition {:target :idle}))
+                 (sc/state {:id :idle}
+                           (sc/transition
+                            {:event :start :target :running}))
+                 (sc/state {:id :running}
+                           (sc/on-entry {}
+                                        (sc/action
+                                         {:expr (start-session-expr
+                                                 dev-env-id
+                                                 "test-session"
+                                                 {:dir "/tmp"})}))
+                           (sc/transition
+                            {:event :session-closed
+                             :target :completed}))
+                 (sc/state {:id :completed})))
 
 (defn orchestrator-with-hook-chart
-  "Statechart that registers a hook in :running on-entry.
+  "Statechart that registers a hook on :running entry.
    The hook-id is captured via session-id in context."
   [dev-env-id session-id-atom]
-  (let [start-expr
-        `(dev-env-resolvers/dev-env-start-session!
-          {:dev-env/id ~dev-env-id
-           :dev-env/session-id "test-session"
-           :dev-env/opts {:dir "/tmp"}})
-        hook-fn
-        (fn [_env _data]
-          (graph/query
-           [`(resolvers/engine-register-dev-env-hook!
-              {:dev-env/id ~dev-env-id
-               :dev-env/hook-type :on-close
-               :engine/session-id ~(deref session-id-atom)
-               :engine/event :session-closed})]))]
-    (sc/statechart {}
-                   (sc/initial {}
-                               (sc/transition {:target :idle}))
-                   (sc/state {:id :idle}
-                             (sc/transition
-                              {:event :start
-                               :target :running}))
-                   (sc/state {:id :running}
-                             (sc/on-entry {}
-                                          (sc/action
-                                           {:expr start-expr})
-                                          (sc/action
-                                           {:expr hook-fn}))
-                             (sc/transition
-                              {:event :session-closed
-                               :target :completed}))
-                   (sc/state {:id :completed}))))
+  (sc/statechart {}
+                 (sc/initial {}
+                             (sc/transition {:target :idle}))
+                 (sc/state {:id :idle}
+                           (sc/transition
+                            {:event :start :target :running}))
+                 (sc/state {:id :running}
+                           (sc/on-entry {}
+                                        (sc/action
+                                         {:expr (start-session-expr
+                                                 dev-env-id
+                                                 "test-session"
+                                                 {:dir "/tmp"})})
+                                        (sc/action
+                                         {:expr (register-hook-fn
+                                                 dev-env-id
+                                                 session-id-atom)}))
+                           (sc/transition
+                            {:event :session-closed
+                             :target :completed}))
+                 (sc/state {:id :completed})))
+
+(defn- full-orchestration-chart
+  "Statechart with start, hook, and transcript query."
+  [dev-env-id session-id-atom captured-transcript]
+  (sc/statechart {}
+                 (sc/initial {}
+                             (sc/transition {:target :idle}))
+                 (sc/state {:id :idle}
+                           (sc/transition
+                            {:event :start :target :running}))
+                 (sc/state {:id :running}
+                           (sc/on-entry {}
+                                        (sc/action
+                                         {:expr (start-session-expr
+                                                 dev-env-id "full-test" {})})
+                                        (sc/action
+                                         {:expr (register-hook-fn
+                                                 dev-env-id
+                                                 session-id-atom)}))
+                           (sc/transition
+                            {:event :session-closed
+                             :target :completed}))
+                 (sc/state {:id :completed}
+                           (sc/on-entry {}
+                                        (sc/action
+                                         {:expr (query-transcript-fn
+                                                 dev-env-id
+                                                 "full-test"
+                                                 captured-transcript)})))))
 
 ;;; Tests
 
@@ -203,13 +263,9 @@
 (deftest full-orchestration-flow-test
   ;; Complete integration test: statechart orchestrates
   ;; dev-env session lifecycle.
-  ;; 1. Start in :idle state
-  ;; 2. On :start, enter :running,
-  ;;    start dev-env session, register hook
-  ;; 3. Dev-env completes, fires :on-close hook
-  ;; 4. Receives :session-closed,
-  ;;    transitions to :completed
-  ;; 5. Query transcript shows expected content
+  ;; 1. Start in :idle, 2. :start -> :running
+  ;; 3. on-close hook fires, 4. -> :completed
+  ;; 5. Transcript query returns expected content
   (testing "full orchestration flow"
     (testing "complete dev-env lifecycle via statechart"
       (with-clean-state
@@ -219,75 +275,24 @@
               (dev-env-registry/register!
                mock-dev-env :mock)
               session-id-atom (atom nil)
-              captured-transcript (atom nil)
-              start-expr
-              `(dev-env-resolvers/dev-env-start-session!
-                {:dev-env/id ~dev-env-id
-                 :dev-env/session-id "full-test"
-                 :dev-env/opts {}})
-              hook-fn
-              (fn [_env _data]
-                (graph/query
-                 [`(resolvers/engine-register-dev-env-hook!
-                    {:dev-env/id ~dev-env-id
-                     :dev-env/hook-type :on-close
-                     :engine/session-id
-                     ~(deref session-id-atom)
-                     :engine/event
-                     :session-closed})]))
-              transcript-sym
-              `dev-env-resolvers/dev-env-query-transcript!
-              transcript-fn
-              (fn [_env _data]
-                (let [result
-                      (graph/query
-                       [`(~transcript-sym
-                          {:dev-env/id ~dev-env-id
-                           :dev-env/session-id
-                           "full-test"})])]
-                  (reset!
-                   captured-transcript
-                   (get-in
-                    result
-                    [transcript-sym
-                     :dev-env/transcript]))))
-              full-chart
-              (sc/statechart
-               {}
-               (sc/initial {}
-                           (sc/transition
-                            {:target :idle}))
-               (sc/state
-                {:id :idle}
-                (sc/transition
-                 {:event :start
-                  :target :running}))
-               (sc/state
-                {:id :running}
-                (sc/on-entry {}
-                             (sc/action
-                              {:expr start-expr})
-                             (sc/action
-                              {:expr hook-fn}))
-                (sc/transition
-                 {:event :session-closed
-                  :target :completed}))
-               (sc/state
-                {:id :completed}
-                (sc/on-entry {}
-                             (sc/action
-                              {:expr transcript-fn}))))]
-
-          (sc/register! ::full-chart full-chart)
+              captured-transcript (atom nil)]
+          (sc/register!
+           ::full-chart
+           (full-orchestration-chart
+            dev-env-id
+            session-id-atom
+            captured-transcript))
           (let [sid (sc/start! ::full-chart)]
             (reset! session-id-atom sid)
 
             ;; 1. Verify initial state
-            (is (= #{:idle} (sc/current-state sid)))
+            (is (= #{:idle}
+                   (sc/current-state sid)))
 
             ;; 2. Start the flow
             (sc/send! sid :start)
-            (is (= #{:running} (sc/current-state sid)))
+            (is (= #{:running}
+                   (sc/current-state sid)))
             (is (= 1 (count @(:sessions mock-dev-env))))
 
             ;; 3. Set transcript before completion
@@ -305,5 +310,7 @@
               :reason :user-exit})
 
             ;; 5. Verify transition and transcript
-            (is (= #{:completed} (sc/current-state sid)))
-            (is (= "Task completed" @captured-transcript))))))))
+            (is (= #{:completed}
+                   (sc/current-state sid)))
+            (is (= "Task completed"
+                   @captured-transcript))))))))
