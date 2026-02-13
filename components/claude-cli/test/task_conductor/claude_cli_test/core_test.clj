@@ -3,8 +3,10 @@
   (:require [clojure.test :refer [deftest is testing]]
             [task-conductor.claude-cli.core :as core]))
 
-;; Tests that build-args correctly translates options maps to CLI argument vectors.
-;; Contracts: always includes base flags, maps each option correctly, prompt goes last.
+;; Tests that build-args correctly translates options
+;; maps to CLI argument vectors.
+;; Contracts: always includes base flags, maps each
+;; option correctly, prompt goes last.
 
 (def base-args
   ["claude" "--output-format" "stream-json" "--verbose"
@@ -71,20 +73,24 @@
 
 ;;; invoke-process tests
 
-;; Tests that invoke-process correctly manages process lifecycle, parses JSON output,
-;; handles callbacks, and respects timeout. Uses mock bash commands instead of real Claude CLI.
+;; Tests that invoke-process correctly manages process
+;; lifecycle, parses JSON output, handles callbacks,
+;; and respects timeout. Uses mock bash commands
+;; instead of real Claude CLI.
 
 (deftest invoke-process-test
   (testing "invoke-process"
     (testing "with successful JSON output"
       (testing "parses events and returns exit code 0"
-        (let [lines (atom [])
+        (let [cmd (str "echo '{\"type\":\"start\"}';"
+                       " echo '{\"type\":\"end\"}'")
+              lines (atom [])
               events (atom [])
-              {:keys [result-promise]} (core/invoke-process
-                                        {:_args ["bash" "-c"
-                                                 "echo '{\"type\":\"start\"}'; echo '{\"type\":\"end\"}'"]
-                                         :on-line #(swap! lines conj %)
-                                         :on-event #(swap! events conj %)})
+              {:keys [result-promise]}
+              (core/invoke-process
+               {:_args ["bash" "-c" cmd]
+                :on-line #(swap! lines conj %)
+                :on-event #(swap! events conj %)})
               result (deref result-promise 5000 :timeout)]
           (is (not= :timeout result) "should complete within timeout")
           (is (= 0 (:exit-code result)))
@@ -103,9 +109,11 @@
 
     (testing "with invalid JSON line"
       (testing "includes parse-error event"
-        (let [{:keys [result-promise]} (core/invoke-process
-                                        {:_args ["bash" "-c"
-                                                 "echo 'not json'; echo '{\"ok\":true}'"]})
+        (let [cmd (str "echo 'not json';"
+                       " echo '{\"ok\":true}'")
+              {:keys [result-promise]}
+              (core/invoke-process
+               {:_args ["bash" "-c" cmd]})
               result (deref result-promise 5000 :timeout)]
           (is (not= :timeout result))
           (is (= 0 (:exit-code result)))
@@ -127,9 +135,11 @@
 
     (testing "with :dir option"
       (testing "runs process in specified directory"
-        (let [{:keys [result-promise]} (core/invoke-process
-                                        {:_args ["bash" "-c" "echo \"{\\\"cwd\\\":\\\"$(pwd)\\\"}\""]
-                                         :dir "/tmp"})
+        (let [cmd "echo \"{\\\"cwd\\\":\\\"$(pwd)\\\"}\""
+              {:keys [result-promise]}
+              (core/invoke-process
+               {:_args ["bash" "-c" cmd]
+                :dir "/tmp"})
               result (deref result-promise 5000 :timeout)]
           (is (not= :timeout result))
           (is (= 0 (:exit-code result)))
@@ -152,7 +162,9 @@
               cancelled (core/cancel! handle)
               result (deref (:result-promise handle) 5000 :timeout)
               elapsed (- (System/currentTimeMillis) start-time)]
-          (is (true? cancelled) "should return true when killing running process")
+          (is
+           (true? cancelled)
+           "should return true when killing running process")
           (is (not= :timeout result) "promise should be delivered")
           (is (< elapsed 5000) "should terminate well before sleep finishes"))))
 
@@ -162,12 +174,15 @@
               _ (deref (:result-promise handle) 5000 :timeout)
               ;; Process has already finished
               cancelled (core/cancel! handle)]
-          (is (false? cancelled) "should return false for terminated process"))))))
+          (is
+           (false? cancelled)
+           "should return false for terminated process"))))))
 
 ;;; callback exception tests
 
-;; Tests that callback exceptions don't interrupt processing.
-;; Contracts: exceptions are recorded as callback-error events, processing continues.
+;; Tests that callback exceptions don't interrupt
+;; processing. Contracts: exceptions are recorded as
+;; callback-error events, processing continues.
 
 ;;; extract-session-id tests
 
@@ -214,18 +229,21 @@
   (testing "invoke-process session-id extraction"
     (testing "with events containing session_id"
       (testing "includes :session-id in result"
-        (let [{:keys [result-promise]} (core/invoke-process
-                                        {:_args ["bash" "-c"
-                                                 "echo '{\"type\":\"init\",\"session_id\":\"sess-42\"}'"]})
+        (let [cmd (str "echo '{\"type\":\"init\","
+                       "\"session_id\":\"sess-42\"}'")
+              {:keys [result-promise]}
+              (core/invoke-process
+               {:_args ["bash" "-c" cmd]})
               result (deref result-promise 5000 :timeout)]
           (is (not= :timeout result))
           (is (= "sess-42" (:session-id result))))))
 
     (testing "with no session_id in events"
       (testing "returns nil for :session-id"
-        (let [{:keys [result-promise]} (core/invoke-process
-                                        {:_args ["bash" "-c"
-                                                 "echo '{\"type\":\"error\"}'"]})
+        (let [cmd "echo '{\"type\":\"error\"}'"
+              {:keys [result-promise]}
+              (core/invoke-process
+               {:_args ["bash" "-c" cmd]})
               result (deref result-promise 5000 :timeout)]
           (is (not= :timeout result))
           (is (nil? (:session-id result))))))
@@ -240,8 +258,9 @@
 
 ;;; callback exception tests
 
-;; Tests that callback exceptions don't interrupt processing.
-;; Contracts: exceptions are recorded as callback-error events, processing continues.
+;; Tests that callback exceptions don't interrupt
+;; processing. Contracts: exceptions are recorded as
+;; callback-error events, processing continues.
 
 (deftest callback-exception-test
   (testing "invoke-process with callback exceptions"
@@ -249,10 +268,14 @@
       (testing "records error and continues processing"
         (let [events-received (atom [])
               {:keys [result-promise]} (core/invoke-process
-                                        {:_args ["bash" "-c"
-                                                 "echo '{\"n\":1}'; echo '{\"n\":2}'"]
-                                         :on-line (fn [_] (throw (ex-info "line boom" {})))
-                                         :on-event #(swap! events-received conj %)})
+                                        {:_args
+                                         ["bash" "-c"
+                                          "echo '{\"n\":1}'; echo '{\"n\":2}'"]
+                                         :on-line
+                                         (fn [_]
+                                           (throw (ex-info "line boom" {})))
+                                         :on-event
+                                         #(swap! events-received conj %)})
               result (deref result-promise 5000 :timeout)]
           (is (not= :timeout result) "should complete")
           (is (= 0 (:exit-code result)))
@@ -267,10 +290,14 @@
       (testing "records error and continues processing"
         (let [lines-received (atom [])
               {:keys [result-promise]} (core/invoke-process
-                                        {:_args ["bash" "-c"
-                                                 "echo '{\"n\":1}'; echo '{\"n\":2}'"]
-                                         :on-line #(swap! lines-received conj %)
-                                         :on-event (fn [_] (throw (ex-info "event boom" {})))})
+                                        {:_args
+                                         ["bash" "-c"
+                                          "echo '{\"n\":1}'; echo '{\"n\":2}'"]
+                                         :on-line
+                                         #(swap! lines-received conj %)
+                                         :on-event
+                                         (fn [_]
+                                           (throw (ex-info "event boom" {})))})
               result (deref result-promise 5000 :timeout)]
           (is (not= :timeout result) "should complete")
           (is (= 0 (:exit-code result)))
@@ -278,21 +305,33 @@
           (is (= ["{\"n\":1}" "{\"n\":2}"] @lines-received))
           ;; Events include callback errors
           (is (= [{:n 1}
-                  {:type "callback-error" :callback :on-event :error "event boom"}
+                  {:type "callback-error"
+                   :callback :on-event
+                   :error "event boom"}
                   {:n 2}
-                  {:type "callback-error" :callback :on-event :error "event boom"}]
+                  {:type "callback-error"
+                   :callback :on-event
+                   :error "event boom"}]
                  (:events result))))))
 
     (testing "when both callbacks throw"
       (testing "records errors from both and completes"
         (let [{:keys [result-promise]} (core/invoke-process
                                         {:_args ["bash" "-c" "echo '{\"n\":1}'"]
-                                         :on-line (fn [_] (throw (ex-info "line err" {})))
-                                         :on-event (fn [_] (throw (ex-info "event err" {})))})
+                                         :on-line (fn [_]
+                                                    (throw
+                                                     (ex-info "line err" {})))
+                                         :on-event (fn [_]
+                                                     (throw
+                                                      (ex-info
+                                                       "event err"
+                                                       {})))})
               result (deref result-promise 5000 :timeout)]
           (is (not= :timeout result) "should complete")
           (is (= 0 (:exit-code result)))
           (is (= [{:type "callback-error" :callback :on-line :error "line err"}
                   {:n 1}
-                  {:type "callback-error" :callback :on-event :error "event err"}]
+                  {:type "callback-error"
+                   :callback :on-event
+                   :error "event err"}]
                  (:events result))))))))

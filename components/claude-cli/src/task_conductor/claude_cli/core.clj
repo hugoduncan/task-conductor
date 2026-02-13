@@ -38,12 +38,20 @@
   Maps: :model, :allowed-tools, :disallowed-tools, :max-turns, :mcp-config.
   The :prompt value goes last without a flag."
   [opts]
-  (let [{:keys [prompt model allowed-tools disallowed-tools max-turns mcp-config]} opts]
+  (let [{:keys
+         [prompt
+          model
+          allowed-tools
+          disallowed-tools
+          max-turns
+          mcp-config]} opts]
     (cond-> ["claude" "--output-format" "stream-json" "--verbose"
              "--print"]
       model (into ["--model" model])
       (seq allowed-tools) (into ["--allowedTools" (str/join "," allowed-tools)])
-      (seq disallowed-tools) (into ["--disallowedTools" (str/join "," disallowed-tools)])
+      (seq
+       disallowed-tools) (into
+                          ["--disallowedTools" (str/join "," disallowed-tools)])
       max-turns (into ["--max-turns" (str max-turns)])
       mcp-config (into ["--mcp-config" mcp-config])
       prompt (conj prompt))))
@@ -127,7 +135,8 @@
                                   ^Runnable (fn []
                                               (p/destroy proc)
                                               (deliver result-promise
-                                                       {:exit-code nil :error :timeout})
+                                                       {:exit-code nil
+                                                        :error :timeout})
                                               (.shutdown scheduler))
                                   ^long timeout
                                   TimeUnit/MILLISECONDS))]
@@ -145,7 +154,9 @@
         (catch Exception e
           ;; Process was likely destroyed by timeout or cancel
           (when-not (realized? result-promise)
-            (deliver result-promise {:exit-code nil :error :interrupted :exception e})))
+            (deliver
+             result-promise
+             {:exit-code nil :error :interrupted :exception e})))
         (finally
           (when scheduler
             (.shutdown scheduler)))))

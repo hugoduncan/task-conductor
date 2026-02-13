@@ -4,7 +4,8 @@
   (:require [clojure.test :refer [deftest is testing]]
             [task-conductor.claude-cli.interface :as cli]))
 
-;; Tests that the Nullable provides configurable responses and tracks invocations
+;; Tests that the Nullable provides configurable responses
+;; and tracks invocations
 ;; without spawning real processes. Contracts: default responses, custom config,
 ;; error simulation, invocation tracking.
 
@@ -27,8 +28,9 @@
     (testing "with default config"
       (testing "returns default success result"
         (let [nullable (cli/make-nullable)
-              {:keys [result-promise process]} (cli/with-nullable-claude-cli nullable
-                                                 (cli/invoke {:prompt "test"}))]
+              {:keys [result-promise
+                      process]} (cli/with-nullable-claude-cli nullable
+                                  (cli/invoke {:prompt "test"}))]
           (is (nil? process) "process should be nil for nullable")
           (let [result @result-promise]
             (is (= 0 (:exit-code result)))
@@ -109,5 +111,11 @@
           (cli/invoke {:prompt "for-2b"}))
         (is (= 1 (count (cli/invocations nullable1))))
         (is (= 2 (count (cli/invocations nullable2))))
-        (is (= "for-1" (get-in (first (cli/invocations nullable1)) [:opts :prompt])))
-        (is (= "for-2a" (get-in (first (cli/invocations nullable2)) [:opts :prompt])))))))
+        (is
+         (=
+          "for-1"
+          (get-in (first (cli/invocations nullable1)) [:opts :prompt])))
+        (is
+         (=
+          "for-2a"
+          (get-in (first (cli/invocations nullable2)) [:opts :prompt])))))))
