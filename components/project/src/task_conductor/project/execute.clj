@@ -139,7 +139,15 @@
 
 (def task-states
   "Valid states for standalone task execution."
-  #{:idle :unrefined :refined :done :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated})
+  #{:idle
+    :unrefined
+    :refined
+    :done
+    :awaiting-pr
+    :wait-pr-merge
+    :merging-pr
+    :complete
+    :escalated})
 
 (def story-states
   "Valid states for story execution."
@@ -156,64 +164,81 @@
   (sc/statechart {:initial :idle}
     ;; Idle - waiting for initial state check after session start
                  (sc/state {:id :idle}
-                           (sc/transition {:event :unrefined :target :unrefined})
+                           (sc/transition
+                            {:event :unrefined :target :unrefined})
                            (sc/transition {:event :refined :target :refined})
                            (sc/transition {:event :done :target :done})
-                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition
+                            {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition
+                            {:event :wait-pr-merge :target :wait-pr-merge})
                            (sc/transition {:event :complete :target :complete}))
 
     ;; Unrefined - needs task refinement
                  (sc/state {:id :unrefined}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:refine-task (MCP)"})}))
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "mcp-tasks:refine-task (MCP)"})}))
                            (sc/transition {:event :refined :target :refined})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Refined - ready for execution
                  (sc/state {:id :refined}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:execute-task (MCP)"})}))
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "mcp-tasks:execute-task (MCP)"})}))
                            (sc/transition {:event :done :target :done})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Done - executed, awaiting code review
                  (sc/state {:id :done}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:review-task-implementation (MCP)"})}))
-                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "mcp-tasks:review-task-implementation (MCP)"})}))
+                           (sc/transition
+                            {:event :awaiting-pr :target :awaiting-pr})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Awaiting PR - task executed, needs PR creation
                  (sc/state {:id :awaiting-pr}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:create-task-pr (MCP)"})}))
-                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "mcp-tasks:create-task-pr (MCP)"})}))
+                           (sc/transition
+                            {:event :wait-pr-merge :target :wait-pr-merge})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Wait for PR merge - PR created, awaiting merge notification from dev-env
                  (sc/state {:id :wait-pr-merge}
       ;; No entry action - waiting for external event
-                           (sc/transition {:event :merge-pr :target :merging-pr})
+                           (sc/transition
+                            {:event :merge-pr :target :merging-pr})
                            (sc/transition {:event :complete :target :complete})
                            (sc/transition {:event :error :target :escalated}))
 
     ;; Merging PR - manually triggered, squash-merges the PR on GitHub
                  (sc/state {:id :merging-pr}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "squash-merge-on-gh" :on-complete :complete})}))
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "squash-merge-on-gh"
+                                                   :on-complete :complete})}))
                            (sc/transition {:event :complete :target :complete})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Complete - task finished
                  (sc/final {:id :complete})
@@ -223,13 +248,19 @@
                  ;; sends the appropriate event to resume the workflow.
                  (sc/state {:id :escalated}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/escalate-to-dev-env! {})}))
-                           (sc/transition {:event :unrefined :target :unrefined})
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/escalate-to-dev-env!
+                                                  {})}))
+                           (sc/transition
+                            {:event :unrefined :target :unrefined})
                            (sc/transition {:event :refined :target :refined})
                            (sc/transition {:event :done :target :done})
-                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
-                           (sc/transition {:event :complete :target :complete}))))
+                           (sc/transition
+                            {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition
+                            {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition
+                            {:event :complete :target :complete}))))
 
 (def story-statechart
   "Statechart for story execution.
@@ -243,80 +274,103 @@
   (sc/statechart {:initial :idle}
     ;; Idle - waiting for initial state check after session start
                  (sc/state {:id :idle}
-                           (sc/transition {:event :unrefined :target :unrefined})
+                           (sc/transition
+                            {:event :unrefined :target :unrefined})
                            (sc/transition {:event :refined :target :refined})
-                           (sc/transition {:event :has-tasks :target :has-tasks})
+                           (sc/transition
+                            {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :done :target :done})
-                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition
+                            {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition
+                            {:event :wait-pr-merge :target :wait-pr-merge})
                            (sc/transition {:event :complete :target :complete}))
 
     ;; Unrefined - needs story refinement
                  (sc/state {:id :unrefined}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:refine-task (MCP)"})}))
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "mcp-tasks:refine-task (MCP)"})}))
                            (sc/transition {:event :refined :target :refined})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Refined - needs task creation
                  (sc/state {:id :refined}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:create-story-tasks (MCP)"})}))
-                           (sc/transition {:event :has-tasks :target :has-tasks})
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "mcp-tasks:create-story-tasks (MCP)"})}))
+                           (sc/transition
+                            {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Has tasks - execute next incomplete child task
                  (sc/state {:id :has-tasks}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:execute-story-child (MCP)"})}))
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "mcp-tasks:execute-story-child (MCP)"})}))
       ;; Can stay in has-tasks (more children) or move to done
-                           (sc/transition {:event :has-tasks :target :has-tasks})
+                           (sc/transition
+                            {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :done :target :done})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Done - all children complete, awaiting code review.
                  ;; Note: Story :done reviews the *entire* story implementation (all children),
                  ;; unlike task :done which reviews a single task's implementation.
                  (sc/state {:id :done}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:review-story-implementation (MCP)"})}))
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "mcp-tasks:review-story-implementation (MCP)"})}))
       ;; Review may find issues requiring more work
-                           (sc/transition {:event :has-tasks :target :has-tasks})
-                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition
+                            {:event :has-tasks :target :has-tasks})
+                           (sc/transition
+                            {:event :awaiting-pr :target :awaiting-pr})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Awaiting PR - reviewed, needs PR creation
                  (sc/state {:id :awaiting-pr}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "mcp-tasks:create-story-pr (MCP)"})}))
-                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "mcp-tasks:create-story-pr (MCP)"})}))
+                           (sc/transition
+                            {:event :wait-pr-merge :target :wait-pr-merge})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Wait for PR merge - PR created, awaiting merge notification from dev-env
                  (sc/state {:id :wait-pr-merge}
       ;; No entry action - waiting for external event
-                           (sc/transition {:event :merge-pr :target :merging-pr})
+                           (sc/transition
+                            {:event :merge-pr :target :merging-pr})
                            (sc/transition {:event :complete :target :complete})
                            (sc/transition {:event :error :target :escalated}))
 
     ;; Merging PR - manually triggered, squash-merges the PR on GitHub
                  (sc/state {:id :merging-pr}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/invoke-skill!
-                                                            {:skill "squash-merge-on-gh" :on-complete :complete})}))
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/invoke-skill!
+                                                  {:skill "squash-merge-on-gh"
+                                                   :on-complete :complete})}))
                            (sc/transition {:event :complete :target :complete})
                            (sc/transition {:event :error :target :escalated})
-                           (sc/transition {:event :no-progress :target :escalated}))
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
 
     ;; Complete - story finished
                  (sc/final {:id :complete})
@@ -326,14 +380,21 @@
                  ;; sends the appropriate event to resume the workflow.
                  (sc/state {:id :escalated}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.project.resolvers/escalate-to-dev-env! {})}))
-                           (sc/transition {:event :unrefined :target :unrefined})
+                                        (sc/action
+                                         {:expr '(task-conductor.project.resolvers/escalate-to-dev-env!
+                                                  {})}))
+                           (sc/transition
+                            {:event :unrefined :target :unrefined})
                            (sc/transition {:event :refined :target :refined})
-                           (sc/transition {:event :has-tasks :target :has-tasks})
+                           (sc/transition
+                            {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :done :target :done})
-                           (sc/transition {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition {:event :wait-pr-merge :target :wait-pr-merge})
-                           (sc/transition {:event :complete :target :complete}))))
+                           (sc/transition
+                            {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition
+                            {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition
+                            {:event :complete :target :complete}))))
 
 ;;; Statechart Registration
 ;; Register statecharts on namespace load for use by execute! mutation.

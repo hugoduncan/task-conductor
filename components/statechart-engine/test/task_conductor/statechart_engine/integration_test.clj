@@ -21,55 +21,151 @@
                                        (sc/transition {:target :red}))
                            (sc/state {:id :red}
                                      (sc/on-entry {}
-                                                  (sc/assign {:location [:enter-count :red]
-                                                              :expr     (fn [_env data]
-                                                                          (swap! action-log conj [:enter :red])
-                                                                          (inc (get-in data [:enter-count :red] 0)))}))
+                                                  (sc/assign
+                                                   {:location
+                                                    [:enter-count :red]
+                                                    :expr
+                                                    (fn [_env data]
+                                                      (swap!
+                                                       action-log
+                                                       conj
+                                                       [:enter
+                                                        :red])
+                                                      (inc
+                                                       (get-in
+                                                        data
+                                                        [:enter-count
+                                                         :red]
+                                                        0)))}))
                                      (sc/on-exit {}
-                                                 (sc/assign {:location [:exit-count :red]
-                                                             :expr     (fn [_env data]
-                                                                         (swap! action-log conj [:exit :red])
-                                                                         (inc (get-in data [:exit-count :red] 0)))}))
-                                     (sc/transition {:event :next :target :green}))
+                                                 (sc/assign
+                                                  {:location [:exit-count :red]
+                                                   :expr     (fn [_env data]
+                                                               (swap!
+                                                                action-log
+                                                                conj
+                                                                [:exit
+                                                                 :red])
+                                                               (inc
+                                                                (get-in
+                                                                 data
+                                                                 [:exit-count
+                                                                  :red]
+                                                                 0)))}))
+                                     (sc/transition
+                                      {:event :next :target :green}))
                            (sc/state {:id :green}
                                      (sc/on-entry {}
-                                                  (sc/assign {:location [:enter-count :green]
-                                                              :expr     (fn [_env data]
-                                                                          (swap! action-log conj [:enter :green])
-                                                                          (inc (get-in data [:enter-count :green] 0)))}))
+                                                  (sc/assign
+                                                   {:location
+                                                    [:enter-count :green]
+                                                    :expr
+                                                    (fn [_env data]
+                                                      (swap!
+                                                       action-log
+                                                       conj
+                                                       [:enter
+                                                        :green])
+                                                      (inc
+                                                       (get-in
+                                                        data
+                                                        [:enter-count
+                                                         :green]
+                                                        0)))}))
                                      (sc/on-exit {}
-                                                 (sc/assign {:location [:exit-count :green]
-                                                             :expr     (fn [_env data]
-                                                                         (swap! action-log conj [:exit :green])
-                                                                         (inc (get-in data [:exit-count :green] 0)))}))
-                                     (sc/transition {:event :next :target :yellow}))
+                                                 (sc/assign
+                                                  {:location
+                                                   [:exit-count :green]
+                                                   :expr
+                                                   (fn [_env data]
+                                                     (swap!
+                                                      action-log
+                                                      conj
+                                                      [:exit
+                                                       :green])
+                                                     (inc
+                                                      (get-in
+                                                       data
+                                                       [:exit-count
+                                                        :green]
+                                                       0)))}))
+                                     (sc/transition
+                                      {:event :next :target :yellow}))
                            (sc/state {:id :yellow}
                                      (sc/on-entry {}
-                                                  (sc/assign {:location [:enter-count :yellow]
-                                                              :expr     (fn [_env data]
-                                                                          (swap! action-log conj [:enter :yellow])
-                                                                          (inc (get-in data [:enter-count :yellow] 0)))}))
+                                                  (sc/assign
+                                                   {:location
+                                                    [:enter-count :yellow]
+                                                    :expr
+                                                    (fn [_env data]
+                                                      (swap!
+                                                       action-log
+                                                       conj
+                                                       [:enter
+                                                        :yellow])
+                                                      (inc
+                                                       (get-in
+                                                        data
+                                                        [:enter-count
+                                                         :yellow]
+                                                        0)))}))
                                      (sc/on-exit {}
-                                                 (sc/assign {:location [:exit-count :yellow]
-                                                             :expr     (fn [_env data]
-                                                                         (swap! action-log conj [:exit :yellow])
-                                                                         (inc (get-in data [:exit-count :yellow] 0)))}))
-                                     (sc/transition {:event :next :target :red}))
-                           (sc/history-node {:id :operating-history :type :shallow}
-                                            (sc/transition {:target :red}))
-                           (sc/transition {:event :maintain :target :maintenance}))
+                                                 (sc/assign
+                                                  {:location
+                                                   [:exit-count :yellow]
+                                                   :expr
+                                                   (fn [_env data]
+                                                     (swap!
+                                                      action-log
+                                                      conj
+                                                      [:exit
+                                                       :yellow])
+                                                     (inc
+                                                      (get-in
+                                                       data
+                                                       [:exit-count
+                                                        :yellow]
+                                                       0)))}))
+                                     (sc/transition
+                                      {:event :next :target :red}))
+                           (sc/history-node
+                            {:id :operating-history :type :shallow}
+                            (sc/transition {:target :red}))
+                           (sc/transition
+                            {:event :maintain :target :maintenance}))
                  (sc/state {:id :maintenance}
                            (sc/on-entry {}
-                                        (sc/assign {:location [:enter-count :maintenance]
-                                                    :expr     (fn [_env data]
-                                                                (swap! action-log conj [:enter :maintenance])
-                                                                (inc (get-in data [:enter-count :maintenance] 0)))}))
+                                        (sc/assign
+                                         {:location [:enter-count :maintenance]
+                                          :expr     (fn [_env data]
+                                                      (swap!
+                                                       action-log
+                                                       conj
+                                                       [:enter
+                                                        :maintenance])
+                                                      (inc
+                                                       (get-in
+                                                        data
+                                                        [:enter-count
+                                                         :maintenance]
+                                                        0)))}))
                            (sc/on-exit {}
-                                       (sc/assign {:location [:exit-count :maintenance]
-                                                   :expr     (fn [_env data]
-                                                               (swap! action-log conj [:exit :maintenance])
-                                                               (inc (get-in data [:exit-count :maintenance] 0)))}))
-                           (sc/transition {:event :resume :target :operating-history}))))
+                                       (sc/assign
+                                        {:location [:exit-count :maintenance]
+                                         :expr     (fn [_env data]
+                                                     (swap!
+                                                      action-log
+                                                      conj
+                                                      [:exit
+                                                       :maintenance])
+                                                     (inc
+                                                      (get-in
+                                                       data
+                                                       [:exit-count
+                                                        :maintenance]
+                                                       0)))}))
+                           (sc/transition
+                            {:event :resume :target :operating-history}))))
 
 (defn simple-traffic-light
   "Simple traffic light without action tracking for basic tests."
@@ -79,16 +175,22 @@
                            (sc/initial {}
                                        (sc/transition {:target :red}))
                            (sc/state {:id :red}
-                                     (sc/transition {:event :next :target :green}))
+                                     (sc/transition
+                                      {:event :next :target :green}))
                            (sc/state {:id :green}
-                                     (sc/transition {:event :next :target :yellow}))
+                                     (sc/transition
+                                      {:event :next :target :yellow}))
                            (sc/state {:id :yellow}
-                                     (sc/transition {:event :next :target :red}))
-                           (sc/history-node {:id :operating-history :type :shallow}
-                                            (sc/transition {:target :red}))
-                           (sc/transition {:event :maintain :target :maintenance}))
+                                     (sc/transition
+                                      {:event :next :target :red}))
+                           (sc/history-node
+                            {:id :operating-history :type :shallow}
+                            (sc/transition {:target :red}))
+                           (sc/transition
+                            {:event :maintain :target :maintenance}))
                  (sc/state {:id :maintenance}
-                           (sc/transition {:event :resume :target :operating-history}))))
+                           (sc/transition
+                            {:event :resume :target :operating-history}))))
 
 ;;; Tests
 
@@ -142,7 +244,8 @@
 (deftest introspection-during-execution-test
   ;; Tests introspection functions at each step of execution.
   (testing "introspection during execution"
-    (testing "current-state, available-events, and history are accurate at each step"
+    (testing
+     "current-state, available-events, and history are accurate at each step"
       (with-clean-engine
         (sc/register! ::intro (simple-traffic-light))
         (let [sid (sc/start! ::intro)]

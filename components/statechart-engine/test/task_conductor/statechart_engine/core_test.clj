@@ -292,8 +292,10 @@
     (testing "returns initial data when provided"
       (with-clean-engine
         (core/register! ::data-init simple-chart)
-        (let [session-id (core/start! ::data-init {:data {:foo "bar" :count 42}})
-              data (core/get-data session-id)]
+        (let [session-id
+              (core/start! ::data-init {:data {:foo "bar" :count 42}})
+              data
+              (core/get-data session-id)]
           (is (= "bar" (:foo data)))
           (is (= 42 (:count data)))
           (is (= session-id (:session-id data))))))
@@ -325,7 +327,9 @@
     (testing "throws when session not found"
       (with-clean-engine
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not found"
-                              (core/update-data! "no-such-session" identity)))))))
+                              (core/update-data!
+                               "no-such-session"
+                               identity)))))))
 
 (deftest session-data-cleanup-test
   ;; Tests that session data is cleaned up when session stops.

@@ -46,7 +46,9 @@
                 (do (swap! responses update cmd rest)
                     (first cmd-queue))
                 {:error :no-more-responses
-                 :message (str "Nullable has no more responses for command: " cmd)
+                 :message (str
+                           "Nullable has no more responses for command: "
+                           cmd)
                  :command cmd
                  :available-commands (keys resps)}))
 
@@ -64,8 +66,12 @@
              :message "Nullable :responses must be a vector or command-keyed map"}))]
     (when debug?
       (println "[mcp-tasks-nullable]" cmd (:args opts) "->" response))
-    (swap! operations update (if (= op-type :query) :queries :mutations)
-           conj {:opts opts :timestamp (java.time.Instant/now) :response response})
+    (swap!
+     operations
+     update
+     (if (= op-type :query) :queries :mutations)
+     conj
+     {:opts opts :timestamp (java.time.Instant/now) :response response})
     response))
 
 (defn- safe-read-string

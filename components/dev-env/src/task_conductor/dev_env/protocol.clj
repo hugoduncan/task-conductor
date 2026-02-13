@@ -104,7 +104,11 @@
 
   (register-hook [_ session-id hook-type callback]
     (let [hook-id (java.util.UUID/randomUUID)]
-      (swap! hooks assoc hook-id {:type hook-type :callback callback :session-id session-id})
+      (swap!
+       hooks
+       assoc
+       hook-id
+       {:type hook-type :callback callback :session-id session-id})
       (swap! calls conj {:op :register-hook
                          :session-id session-id
                          :hook-type hook-type

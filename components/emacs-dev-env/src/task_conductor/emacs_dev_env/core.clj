@@ -47,7 +47,8 @@
         (do
           ;; Clean up pending command on timeout to prevent late response delivery
           (swap! state update :pending-commands dissoc command-id)
-          {:error :timeout :message (str "Response timeout waiting for " (name command-kw))})
+          {:error :timeout
+           :message (str "Response timeout waiting for " (name command-kw))})
         result))))
 
 (defrecord EmacsDevEnv [state]
@@ -210,8 +211,11 @@
 
            :else
            (do
-             (swap! (:state dev-env) assoc-in [:pending-commands (:command-id value)]
-                    (:response-promise value))
+             (swap!
+              (:state dev-env)
+              assoc-in
+              [:pending-commands (:command-id value)]
+              (:response-promise value))
              {:status :ok
               :command (dissoc value :response-promise)})))))))
 
@@ -358,7 +362,8 @@
        {:status :error :message "Command channel closed"}
 
        :else
-       (let [result (send-command-and-wait state command-chan :ping {} timeout-ms)]
+       (let [result
+             (send-command-and-wait state command-chan :ping {} timeout-ms)]
          (cond
            (:error result)
            {:status :timeout}

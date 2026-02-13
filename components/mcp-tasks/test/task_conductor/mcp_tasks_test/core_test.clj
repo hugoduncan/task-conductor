@@ -236,7 +236,8 @@
     (testing "with :comment"
       (testing "adds --comment flag"
         (is (= ["complete" "--task-id" "42" "--comment" "Fixed via PR"]
-               (core/build-complete-args {:task-id 42 :comment "Fixed via PR"})))))))
+               (core/build-complete-args
+                {:task-id 42 :comment "Fixed via PR"})))))))
 
 ;;; build-update-args tests
 
@@ -259,7 +260,8 @@
 
     (testing "with :meta"
       (testing "adds --meta flag with JSON"
-        (let [result (core/build-update-args {:task-id 42 :meta {:priority "high"}})]
+        (let [result
+              (core/build-update-args {:task-id 42 :meta {:priority "high"}})]
           (is (= "update" (first result)))
           (is (some #{"--meta"} result))
           (is (some #(= "{\"priority\":\"high\"}" %) result)))))
@@ -267,13 +269,16 @@
     (testing "with :relations"
       (testing "adds --relations flag with JSON"
         (let [result (core/build-update-args {:task-id 42
-                                              :relations [{:id 1 :relates-to 10 :as-type "blocked-by"}]})]
+                                              :relations [{:id 1
+                                                           :relates-to 10
+                                                           :as-type "blocked-by"}]})]
           (is (some #{"--relations"} result)))))
 
     (testing "with :shared-context"
       (testing "adds --shared-context flag"
         (is (= ["update" "--task-id" "42" "--shared-context" "Key discovery"]
-               (core/build-update-args {:task-id 42 :shared-context "Key discovery"})))))
+               (core/build-update-args
+                {:task-id 42 :shared-context "Key discovery"})))))
 
     (testing "with :pr-num"
       (testing "adds --pr-num flag with stringified value"
@@ -331,31 +336,37 @@
             (when-let [task-id (:id (:task result))]
               (testing "update-task"
                 (testing "modifies task fields"
-                  (let [update-result (core/update-task {:project-dir project-dir
-                                                         :task-id task-id
-                                                         :description "Updated desc"})]
-                    (is (not (:error update-result)) (str "update failed: " (:stderr update-result)))
+                  (let [update-result
+                        (core/update-task {:project-dir project-dir
+                                           :task-id task-id
+                                           :description "Updated desc"})]
+                    (is
+                     (not (:error update-result))
+                     (str "update failed: " (:stderr update-result)))
                     (is (map? (:task update-result))))))
 
               (testing "complete-task"
                 (testing "marks task as complete"
-                  (let [complete-result (core/complete-task {:project-dir project-dir
-                                                             :task-id task-id
-                                                             :comment "Done"})]
+                  (let [complete-result (core/complete-task
+                                         {:project-dir project-dir
+                                          :task-id task-id
+                                          :comment "Done"})]
                     (is (not (:error complete-result)))
                     (is (= "closed" (:status (:task complete-result)))))))
 
               (testing "reopen-task"
                 (testing "reopens a closed task"
-                  (let [reopen-result (core/reopen-task {:project-dir project-dir
-                                                         :task-id task-id})]
+                  (let [reopen-result (core/reopen-task
+                                       {:project-dir project-dir
+                                        :task-id task-id})]
                     (is (not (:error reopen-result)))
                     (is (= "open" (:status (:task reopen-result)))))))
 
               (testing "delete-task"
                 (testing "removes the task"
-                  (let [delete-result (core/delete-task {:project-dir project-dir
-                                                         :task-id task-id})]
+                  (let [delete-result (core/delete-task
+                                       {:project-dir project-dir
+                                        :task-id task-id})]
                     (is (not (:error delete-result)))))))))))))
 
 (deftest ^:integration why-blocked-integration-test

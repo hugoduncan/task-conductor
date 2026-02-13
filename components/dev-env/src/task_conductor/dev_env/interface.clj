@@ -104,7 +104,10 @@
   [dev-env session-id hook-map]
   (reduce-kv
    (fn [acc hook-type callback]
-     (assoc acc hook-type (register-hook dev-env session-id hook-type callback)))
+     (assoc
+      acc
+      hook-type
+      (register-hook dev-env session-id hook-type callback)))
    {}
    hook-map))
 

@@ -70,10 +70,14 @@
   "Get blocking information for a task. Requires :task/id and :task/project-dir."
   [{:task/keys [id project-dir]}]
   {::pco/input [:task/id :task/project-dir]
-   ::pco/output [:task/blocked-by :task/blocking-reason (pco/? :task/blocking-error)]}
+   ::pco/output [:task/blocked-by
+                 :task/blocking-reason
+                 (pco/? :task/blocking-error)]}
   (let [result (interface/why-blocked {:project-dir project-dir :task-id id})]
     (if (:error result)
-      {:task/blocking-error result :task/blocked-by nil :task/blocking-reason nil}
+      {:task/blocking-error result
+       :task/blocked-by nil
+       :task/blocking-reason nil}
       (prefix-keys result))))
 
 ;;; Mutations
@@ -82,7 +86,14 @@
   "Create a new task. Returns :task/result with created task or error."
   [params]
   {::pco/output [:task/result]}
-  (let [{:task/keys [project-dir category title description type parent-id prepend]} params
+  (let [{:task/keys
+         [project-dir
+          category
+          title
+          description
+          type
+          parent-id
+          prepend]} params
         opts (cond-> {:project-dir project-dir
                       :category category
                       :title title}

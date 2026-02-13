@@ -81,12 +81,14 @@
                  (sc/state {:id :running}
                            (sc/on-entry {}
                                         ;; Start the dev-env session
-                                        (sc/action {:expr `(dev-env-resolvers/dev-env-start-session!
-                                                            {:dev-env/id ~dev-env-id
-                                                             :dev-env/session-id "test-session"
-                                                             :dev-env/opts {:dir "/tmp"}})}))
+                                        (sc/action
+                                         {:expr `(dev-env-resolvers/dev-env-start-session!
+                                                  {:dev-env/id ~dev-env-id
+                                                   :dev-env/session-id "test-session"
+                                                   :dev-env/opts {:dir "/tmp"}})}))
                            ;; Transition to completed on :session-closed event
-                           (sc/transition {:event :session-closed :target :completed}))
+                           (sc/transition
+                            {:event :session-closed :target :completed}))
                  (sc/state {:id :completed})))
 
 (defn orchestrator-with-hook-chart
@@ -101,19 +103,22 @@
                  (sc/state {:id :running}
                            (sc/on-entry {}
                                         ;; Start session
-                                        (sc/action {:expr `(dev-env-resolvers/dev-env-start-session!
-                                                            {:dev-env/id ~dev-env-id
-                                                             :dev-env/session-id "test-session"
-                                                             :dev-env/opts {:dir "/tmp"}})})
+                                        (sc/action
+                                         {:expr `(dev-env-resolvers/dev-env-start-session!
+                                                  {:dev-env/id ~dev-env-id
+                                                   :dev-env/session-id "test-session"
+                                                   :dev-env/opts {:dir "/tmp"}})})
                                         ;; Register hook - needs session-id injected via escape hatch
                                         (sc/action {:expr (fn [_env _data]
                                                             (graph/query
                                                              [`(resolvers/engine-register-dev-env-hook!
                                                                 {:dev-env/id ~dev-env-id
                                                                  :dev-env/hook-type :on-close
-                                                                 :engine/session-id ~(deref session-id-atom)
+                                                                 :engine/session-id ~(deref
+                                                                                      session-id-atom)
                                                                  :engine/event :session-closed})]))}))
-                           (sc/transition {:event :session-closed :target :completed}))
+                           (sc/transition
+                            {:event :session-closed :target :completed}))
                  (sc/state {:id :completed})))
 
 ;;; Tests
@@ -145,7 +150,9 @@
               dev-env-id (dev-env-registry/register! mock-dev-env :mock)
               session-id-atom (atom nil)]
           ;; Register chart and start session
-          (sc/register! ::hook-chart (orchestrator-with-hook-chart dev-env-id session-id-atom))
+          (sc/register!
+           ::hook-chart
+           (orchestrator-with-hook-chart dev-env-id session-id-atom))
           (let [sid (sc/start! ::hook-chart)]
             ;; Store session-id for hook registration
             (reset! session-id-atom sid)
@@ -170,12 +177,16 @@
         (let [mock-dev-env (make-mock-dev-env)
               dev-env-id (dev-env-registry/register! mock-dev-env :mock)]
           ;; Set up transcript
-          (set-transcript! mock-dev-env "test-session" "User: Hello\nAssistant: Hi")
+          (set-transcript!
+           mock-dev-env
+           "test-session"
+           "User: Hello\nAssistant: Hi")
 
           ;; Query via EQL - mutations return under the mutation key
-          (let [result (graph/query [`(dev-env-resolvers/dev-env-query-transcript!
-                                       {:dev-env/id ~dev-env-id
-                                        :dev-env/session-id "test-session"})])]
+          (let [result (graph/query
+                        [`(dev-env-resolvers/dev-env-query-transcript!
+                           {:dev-env/id ~dev-env-id
+                            :dev-env/session-id "test-session"})])]
             (is (= "User: Hello\nAssistant: Hi"
                    (get-in result [`dev-env-resolvers/dev-env-query-transcript!
                                    :dev-env/transcript])))))))))
@@ -201,35 +212,45 @@
                              (sc/initial {}
                                          (sc/transition {:target :idle}))
                              (sc/state {:id :idle}
-                                       (sc/transition {:event :start :target :running}))
+                                       (sc/transition
+                                        {:event :start :target :running}))
                              (sc/state {:id :running}
                                        (sc/on-entry {}
                                                     ;; Start session
-                                                    (sc/action {:expr `(dev-env-resolvers/dev-env-start-session!
-                                                                        {:dev-env/id ~dev-env-id
-                                                                         :dev-env/session-id "full-test"
-                                                                         :dev-env/opts {}})})
+                                                    (sc/action
+                                                     {:expr `(dev-env-resolvers/dev-env-start-session!
+                                                              {:dev-env/id ~dev-env-id
+                                                               :dev-env/session-id "full-test"
+                                                               :dev-env/opts {}})})
                                                     ;; Register hook
-                                                    (sc/action {:expr (fn [_env _data]
-                                                                        (graph/query
-                                                                         [`(resolvers/engine-register-dev-env-hook!
-                                                                            {:dev-env/id ~dev-env-id
-                                                                             :dev-env/hook-type :on-close
-                                                                             :engine/session-id ~(deref session-id-atom)
-                                                                             :engine/event :session-closed})]))}))
-                                       (sc/transition {:event :session-closed :target :completed}))
+                                                    (sc/action
+                                                     {:expr (fn [_env _data]
+                                                              (graph/query
+                                                               [`(resolvers/engine-register-dev-env-hook!
+                                                                  {:dev-env/id ~dev-env-id
+                                                                   :dev-env/hook-type :on-close
+                                                                   :engine/session-id ~(deref
+                                                                                        session-id-atom)
+                                                                   :engine/event :session-closed})]))}))
+                                       (sc/transition
+                                        {:event :session-closed
+                                         :target :completed}))
                              (sc/state {:id :completed}
                                        (sc/on-entry {}
                                                     ;; Query transcript
-                                                    (sc/action {:expr (fn [_env _data]
-                                                                        (let [result (graph/query
-                                                                                      [`(dev-env-resolvers/dev-env-query-transcript!
-                                                                                         {:dev-env/id ~dev-env-id
-                                                                                          :dev-env/session-id "full-test"})])]
-                                                                          (reset! captured-transcript
-                                                                                  (get-in result
-                                                                                          [`dev-env-resolvers/dev-env-query-transcript!
-                                                                                           :dev-env/transcript]))))}))))]
+                                                    (sc/action
+                                                     {:expr (fn [_env _data]
+                                                              (let [result
+                                                                    (graph/query
+                                                                     [`(dev-env-resolvers/dev-env-query-transcript!
+                                                                        {:dev-env/id ~dev-env-id
+                                                                         :dev-env/session-id "full-test"})])]
+                                                                (reset!
+                                                                 captured-transcript
+                                                                 (get-in
+                                                                  result
+                                                                  [`dev-env-resolvers/dev-env-query-transcript!
+                                                                   :dev-env/transcript]))))}))))]
 
           (sc/register! ::full-chart full-chart)
           (let [sid (sc/start! ::full-chart)]

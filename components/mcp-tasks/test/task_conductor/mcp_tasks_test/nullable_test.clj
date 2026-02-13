@@ -42,7 +42,8 @@
           (tasks/with-nullable-mcp-tasks nullable
             (is (= resp1 (tasks/list-tasks {:project-dir "/p"})))
             (is (= resp2 (tasks/complete-task {:project-dir "/p" :task-id 1})))
-            (is (= resp3 (tasks/reopen-task {:project-dir "/p" :task-id 1})))))))
+            (is
+             (= resp3 (tasks/reopen-task {:project-dir "/p" :task-id 1})))))))
 
     (testing "when responses exhausted"
       (testing "returns error"
@@ -139,7 +140,8 @@
   (testing "nullable isolation"
     (testing "different nullables track separately"
       (let [nullable1 (tasks/make-nullable {:responses [{:tasks []}]})
-            nullable2 (tasks/make-nullable {:responses [{:tasks []} {:tasks []}]})]
+            nullable2 (tasks/make-nullable
+                       {:responses [{:tasks []} {:tasks []}]})]
         (tasks/with-nullable-mcp-tasks nullable1
           (tasks/list-tasks {:project-dir "/p1"}))
         (tasks/with-nullable-mcp-tasks nullable2

@@ -41,7 +41,9 @@
   (swap! call-log conj [:mutation :test/mutate! data])
   {:test/result (str "processed:" data)})
 
-(graph/defmutation test-capture-session! [{:engine/keys [session-id] :test/keys [data]}]
+(graph/defmutation
+  test-capture-session!
+  [{:engine/keys [session-id] :test/keys [data]}]
   {::pco/output [:test/result]}
   (swap! call-log conj [:mutation :test/capture-session! session-id data])
   {:test/result {:session-id session-id :data data}})
@@ -137,8 +139,9 @@
                            (sc/transition {:event :go :target :active}))
                  (sc/state {:id :active}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.statechart-engine.eql-action-test/test-capture-session!
-                                                            {:test/data "injected"})})))))
+                                        (sc/action
+                                         {:expr '(task-conductor.statechart-engine.eql-action-test/test-capture-session!
+                                                  {:test/data "injected"})})))))
 
 (defn no-params-chart
   "Chart with action that calls mutation without params."
@@ -150,7 +153,8 @@
                            (sc/transition {:event :go :target :active}))
                  (sc/state {:id :active}
                            (sc/on-entry {}
-                                        (sc/action {:expr '(task-conductor.statechart-engine.eql-action-test/test-no-params!)})))))
+                                        (sc/action
+                                         {:expr '(task-conductor.statechart-engine.eql-action-test/test-no-params!)})))))
 
 ;;; Tests
 
@@ -269,14 +273,16 @@
                              (sc/initial {}
                                          (sc/transition {:target :idle}))
                              (sc/state {:id :idle}
-                                       (sc/transition {:event :check :target :checked}))
+                                       (sc/transition
+                                        {:event :check :target :checked}))
                              (sc/state {:id :checked}
                                        (sc/on-entry {}
                                                     (sc/action
                                                      {:expr (fn [_env _data]
-                                                              (reset! captured-sessions
-                                                                      (graph/query
-                                                                       [:engine/sessions])))}))))]
+                                                              (reset!
+                                                               captured-sessions
+                                                               (graph/query
+                                                                [:engine/sessions])))}))))]
           (sc/register! ::intro-chart introspect-chart)
           (let [sid (sc/start! ::intro-chart)]
             (sc/send! sid :check)
@@ -292,14 +298,16 @@
       (with-clean-state
         (let [simple-chart (sc/statechart {}
                                           (sc/initial {}
-                                                      (sc/transition {:target :done}))
+                                                      (sc/transition
+                                                       {:target :done}))
                                           (sc/final {:id :done}))
               spawner-chart
               (sc/statechart {}
                              (sc/initial {}
                                          (sc/transition {:target :idle}))
                              (sc/state {:id :idle}
-                                       (sc/transition {:event :spawn :target :spawned}))
+                                       (sc/transition
+                                        {:event :spawn :target :spawned}))
                              (sc/state {:id :spawned}
                                        (sc/on-entry {}
                                                     (sc/action
@@ -323,7 +331,8 @@
                            (sc/transition {:event :go :target :bad}))
                  (sc/state {:id :bad}
                            (sc/on-entry {}
-                                        (sc/action {:expr "unsupported-string"})))))
+                                        (sc/action
+                                         {:expr "unsupported-string"})))))
 
 (deftest session-id-injection-test
   ;; Verifies that mutations executed from statechart actions receive
@@ -350,7 +359,9 @@
           (sc/send! sid :go)
           (is (= 1 (count @call-log)))
           (let [[_type _name session-id] (first @call-log)]
-            (is (= sid session-id) "Session ID injected for param-less mutation")))))))
+            (is
+             (= sid session-id)
+             "Session ID injected for param-less mutation")))))))
 
 (deftest unknown-expression-type-test
   ;; Verifies EQLExecutionModel throws on unsupported expression types.

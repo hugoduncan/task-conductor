@@ -150,7 +150,9 @@
          wmem       (sp/start! processor env chart-name
                                {::sc/session-id session-id})
          init-state (::sc/configuration wmem)
-         init-entry {:state init-state :event nil :timestamp (java.time.Instant/now)}
+         init-entry {:state init-state
+                     :event nil
+                     :timestamp (java.time.Instant/now)}
          max-size   (:max-history-size opts)
          init-data  (assoc (:data opts) :session-id session-id)]
      (swap! sessions assoc session-id wmem)
@@ -178,13 +180,20 @@
     (locking lock
       (if-let [wmem (get @sessions session-id)]
         (let [processor  (::sc/processor env)
-              new-wmem   (sp/process-event! processor env wmem (evts/new-event event))
+              new-wmem   (sp/process-event!
+                          processor
+                          env
+                          wmem
+                          (evts/new-event event))
               new-state  (::sc/configuration new-wmem)
-              new-entry  {:state new-state :event event :timestamp (java.time.Instant/now)}
+              new-entry  {:state new-state
+                          :event event
+                          :timestamp (java.time.Instant/now)}
               max-size   (get @history-limits session-id)]
           (swap! sessions assoc session-id new-wmem)
           (swap! histories update session-id
-                 (fn [entries] (trim-history (conj entries new-entry) max-size)))
+                 (fn [entries]
+                   (trim-history (conj entries new-entry) max-size)))
           new-state)
         ;; Session was stopped while we held the lock
         (throw (ex-info "Session not found"
@@ -268,7 +277,9 @@
           statechart  (get-statechart chart-name)
           config      (::sc/configuration wmem)
           all-events  (reduce (fn [events state-id]
-                                (into events (events-for-state statechart state-id)))
+                                (into
+                                 events
+                                 (events-for-state statechart state-id)))
                               #{}
                               config)]
       all-events)

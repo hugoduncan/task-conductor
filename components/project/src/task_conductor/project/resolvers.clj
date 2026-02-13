@@ -229,13 +229,17 @@
                             (execute/derive-task-state
                              (task->execute-map task)))
                 new-open-children (when (= :story task-type)
-                                    (execute/count-open-children children-maps))]
+                                    (execute/count-open-children
+                                     children-maps))]
             (if (no-progress? pre-skill-state new-state
                               pre-skill-open-children new-open-children)
               ;; No progress - store Claude session-id and escalate
               (do
                 (sc/update-data! session-id
-                                 #(assoc % :last-claude-session-id (:session-id result)))
+                                 #(assoc
+                                   %
+                                   :last-claude-session-id
+                                   (:session-id result)))
                 (sc/send! session-id :no-progress))
               ;; Progress made - send new state as event
               (sc/send! session-id new-state))))))
@@ -291,7 +295,9 @@
                      (fn [d]
                        (cond-> (assoc d :pre-skill-state current-derived-state)
                          (some? open-children-count)
-                         (assoc :pre-skill-open-children open-children-count))))))
+                         (assoc
+                          :pre-skill-open-children
+                          open-children-count))))))
 
 (graph/defmutation invoke-skill!
   "Invoke a skill via claude-cli based on current statechart state.
@@ -320,7 +326,10 @@
                           (let [result @(:result-promise handle)]
                             (on-skill-complete session-id result))
                           (finally
-                            (swap! active-skill-threads disj (Thread/currentThread)))))
+                            (swap!
+                             active-skill-threads
+                             disj
+                             (Thread/currentThread)))))
         thread (Thread/startVirtualThread completion-fn)]
     (swap! active-skill-threads conj thread)
     {:invoke-skill/status :started}))
@@ -350,7 +359,9 @@
                          :dev-env/opts ~(cond-> {:dir project-dir
                                                  :task-id task-id}
                                           last-claude-session-id
-                                          (assoc :claude-session-id last-claude-session-id))})])
+                                          (assoc
+                                           :claude-session-id
+                                           last-claude-session-id))})])
         ;; Register on-close hook to resume workflow when human finishes
         (when dev-env-instance
           (dev-env/register-hook dev-env-instance session-id :on-close

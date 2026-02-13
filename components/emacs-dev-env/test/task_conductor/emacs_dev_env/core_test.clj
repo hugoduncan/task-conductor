@@ -20,7 +20,9 @@
                             (let [cmd# (:command result#)]
                               (when (= :register-hook (:command cmd#))
                                 (core/send-response
-                                 dev-env# (:command-id cmd#) {:status :ok})))))))]
+                                 dev-env#
+                                 (:command-id cmd#)
+                                 {:status :ok})))))))]
      (try
        (Thread/sleep 30)  ; Let responder start
        ~@body
