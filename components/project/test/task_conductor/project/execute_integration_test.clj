@@ -181,17 +181,15 @@
               (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 100})])
-                    execute-result (get result `resolvers/execute!)]
+                    execute-result (get result `resolvers/execute!)
+                    session-id (:execute/session-id execute-result)]
 
-                (is (string? (:execute/session-id execute-result)))
+                (is (string? session-id))
                 (is (= :unrefined (:execute/initial-state execute-result)))
                 (is (nil? (:execute/error execute-result)))
 
                 ;; Verify session is in :idle state
-                (is
-                 (contains?
-                  (sc/current-state (:execute/session-id execute-result))
-                  :idle))))))))
+                (is (contains? (sc/current-state session-id) :idle))))))))
 
     (testing "starts session for refined task"
       (with-integration-state
@@ -217,12 +215,10 @@
               (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 102})])
-                    execute-result (get result `resolvers/execute!)]
+                    execute-result (get result `resolvers/execute!)
+                    initial-state (:execute/initial-state execute-result)]
 
-                (is
-                 (=
-                  :wait-pr-merge
-                  (:execute/initial-state execute-result)))))))))))
+                (is (= :wait-pr-merge initial-state))))))))))
 
 ;;; Skill Invocation Tests
 
@@ -256,20 +252,17 @@
 
                 ;; Send initial state event to trigger skill
                 (sc/send! session-id :unrefined)
-                (is (contains?
-                     (sc/current-state session-id)
-                     :unrefined))
+                (is (contains? (sc/current-state session-id) :unrefined))
 
                 ;; Wait for skill invocation
                 (resolvers/await-skill-threads!)
 
                 ;; Verify claude-cli Nullable was invoked
-                (let [invs (claude-cli/invocations
-                            cli-nullable)]
+                (let [invs (claude-cli/invocations cli-nullable)
+                      inv-opts (:opts (first invs))
+                      prompt (:prompt inv-opts)]
                   (is (= 1 (count invs)))
-                  (is (= "/mcp-tasks:refine-task (MCP)"
-                         (:prompt
-                          (:opts (first invs))))))))))))))
+                  (is (= "/mcp-tasks:refine-task (MCP)" prompt)))))))))))
 
 ;;; Error Path Tests
 
@@ -333,8 +326,8 @@
                 (resolvers/await-skill-threads!)
 
                 ;; Should be escalated
-                (is
-                 (contains? (sc/current-state session-id) :escalated))))))))))
+                (let [state (sc/current-state session-id)]
+                  (is (contains? state :escalated)))))))))))
 
 ;;; Story Tests
 
@@ -370,10 +363,10 @@
               (let [result (graph/query [`(resolvers/execute!
                                            {:task/project-dir "/test"
                                             :task/id 400})])
-                    execute-result (get result `resolvers/execute!)]
+                    execute-result (get result `resolvers/execute!)
+                    initial-state (:execute/initial-state execute-result)]
 
-                (is
-                 (= :has-tasks (:execute/initial-state execute-result)))))))))
+                (is (= :has-tasks initial-state))))))))
 
     (testing "derives :done for story with all children complete"
       (with-integration-state
@@ -479,9 +472,8 @@
                 (let [hist (sc/history session-id)
                       events (set (map :event hist))]
                   ;; Should have seen :has-tasks events (children executing)
-                  (is
-                   (contains? events :has-tasks)
-                   "Should execute child tasks")
+                  (is (contains? events :has-tasks)
+                      "Should execute child tasks")
                   ;; Eventually progressed to done or beyond
                   (is (or (contains? events :done)
                           (contains? events :awaiting-pr)
@@ -518,14 +510,10 @@
                 (resolvers/await-skill-threads!)
 
                 ;; Verify invocation was tracked with correct options
-                (let [invs (claude-cli/invocations cli-nullable)]
+                (let [invs (claude-cli/invocations cli-nullable)
+                      inv (first invs)
+                      inv-opts (:opts inv)]
                   (is (= 1 (count invs)))
-                  (is (= "/test" (:dir (:opts (first invs)))))
-                  (is
-                   (=
-                    "/mcp-tasks:refine-task (MCP)"
-                    (:prompt (:opts (first invs)))))
-                  (is
-                   (instance?
-                    java.time.Instant
-                    (:timestamp (first invs)))))))))))))
+                  (is (= "/test" (:dir inv-opts)))
+                  (is (= "/mcp-tasks:refine-task (MCP)" (:prompt inv-opts)))
+                  (is (instance? java.time.Instant (:timestamp inv))))))))))))

@@ -283,16 +283,12 @@
             (reset! session-id-atom sid)
 
             ;; 1. Verify initial state
-            (is (= #{:idle}
-                   (sc/current-state sid)))
+            (is (= #{:idle} (sc/current-state sid)))
 
             ;; 2. Start the flow
             (sc/send! sid :start)
-            (is (= #{:running}
-                   (sc/current-state sid)))
-            (is (= 1
-                   (count
-                    @(:sessions mock-dev-env))))
+            (is (= #{:running} (sc/current-state sid)))
+            (is (= 1 (count @(:sessions mock-dev-env))))
 
             ;; 3. Set transcript before completion
             (set-transcript!
@@ -309,7 +305,5 @@
               :reason :user-exit})
 
             ;; 5. Verify transition and transcript
-            (is (= #{:completed}
-                   (sc/current-state sid)))
-            (is (= "Task completed"
-                   @captured-transcript))))))))
+            (is (= #{:completed} (sc/current-state sid)))
+            (is (= "Task completed" @captured-transcript))))))))
