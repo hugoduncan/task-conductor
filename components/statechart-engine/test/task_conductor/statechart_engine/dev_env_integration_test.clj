@@ -204,11 +204,11 @@
   ;; Complete integration test: statechart orchestrates
   ;; dev-env session lifecycle.
   ;; 1. Start in :idle state
-  ;; 2. On :start, enter :running, start dev-env
-  ;;    session, register hook
+  ;; 2. On :start, enter :running,
+  ;;    start dev-env session, register hook
   ;; 3. Dev-env completes, fires :on-close hook
-  ;; 4. Receives :session-closed, transitions to
-  ;;    :completed
+  ;; 4. Receives :session-closed,
+  ;;    transitions to :completed
   ;; 5. Query transcript shows expected content
   (testing "full orchestration flow"
     (testing "complete dev-env lifecycle via statechart"
