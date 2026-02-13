@@ -446,16 +446,13 @@
                             ;; Pairs of (pre-skill, on-complete)
                             ;; showing progress per cycle
                             :list (concat
-                                   [three-open]           ; execute!
-                                   [three-open
-                                    two-open]
-                                                 ; cycle 1: 3->2 (progress)
-                                   [two-open
-                                    one-open]
-                                                 ; cycle 2: 2->1 (progress)
-                                   [one-open
-                                    all-closed]
-                                                 ; cycle 3: 1->0 (->done)
+                                   [three-open]  ; execute!
+                                   [three-open   ; cycle 1:
+                                    two-open]    ;   3->2 (progress)
+                                   [two-open     ; cycle 2:
+                                    one-open]    ;   2->1 (progress)
+                                   [one-open     ; cycle 3:
+                                    all-closed]  ;   1->0 (->done)
                                    (repeat 10 all-closed))}})]
           (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
