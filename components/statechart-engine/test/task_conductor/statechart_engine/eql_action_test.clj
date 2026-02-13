@@ -1,6 +1,7 @@
 (ns task-conductor.statechart-engine.eql-action-test
   ;; Integration tests for EQL-based action execution in statecharts.
-  ;; Tests that action :expr expressions route correctly through EQLExecutionModel:
+  ;; Tests that action :expr expressions route
+  ;; correctly through EQLExecutionModel:
   ;; - vector → EQL query
   ;; - list with symbol → mutation
   ;; - fn → direct call (escape hatch)
@@ -79,15 +80,17 @@
 (defn mutation-action-chart
   "Chart with on-entry action that executes mutation."
   []
-  (sc/statechart {}
-                 (sc/initial {}
-                             (sc/transition {:target :idle}))
-                 (sc/state {:id :idle}
-                           (sc/transition {:event :go :target :active}))
-                 (sc/state {:id :active}
-                           (sc/on-entry {}
-                                        (sc/action {:expr `(test-mutate!
-                                                            {:test/data "hello"})})))))
+  (let [expr `(test-mutate! {:test/data "hello"})]
+    (sc/statechart {}
+                   (sc/initial {}
+                               (sc/transition {:target :idle}))
+                   (sc/state {:id :idle}
+                             (sc/transition
+                              {:event :go :target :active}))
+                   (sc/state {:id :active}
+                             (sc/on-entry {}
+                                          (sc/action
+                                           {:expr expr}))))))
 
 (defn fn-escape-chart
   "Chart with on-entry action using function escape hatch."
@@ -104,18 +107,19 @@
 (defn multi-action-chart
   "Chart with multiple actions in sequence."
   []
-  (sc/statechart {}
-                 (sc/initial {}
-                             (sc/transition {:target :idle}))
-                 (sc/state {:id :idle}
-                           (sc/transition {:event :go :target :active}))
-                 (sc/state {:id :active}
-                           (sc/on-entry {}
-                                        (sc/action {:expr [:test/value]})
-                                        (sc/action {:expr `(test-mutate!
-                                                            {:test/data "first"})})
-                                        (sc/action {:expr `(test-mutate!
-                                                            {:test/data "second"})})))))
+  (let [m-first `(test-mutate! {:test/data "first"})
+        m-second `(test-mutate! {:test/data "second"})]
+    (sc/statechart {}
+                   (sc/initial {}
+                               (sc/transition {:target :idle}))
+                   (sc/state {:id :idle}
+                             (sc/transition
+                              {:event :go :target :active}))
+                   (sc/state {:id :active}
+                             (sc/on-entry {}
+                                          (sc/action {:expr [:test/value]})
+                                          (sc/action {:expr m-first})
+                                          (sc/action {:expr m-second}))))))
 
 (defn error-action-chart
   "Chart with action that queries resolver that throws."
@@ -129,32 +133,42 @@
                            (sc/on-entry {}
                                         (sc/action {:expr [:test/error]})))))
 
+(def ^:private capture-session-sym
+  'task-conductor.statechart-engine.eql-action-test/test-capture-session!)
+
+(def ^:private no-params-sym
+  'task-conductor.statechart-engine.eql-action-test/test-no-params!)
+
 (defn session-id-injection-chart
   "Chart with action that captures injected session-id."
   []
-  (sc/statechart {}
-                 (sc/initial {}
-                             (sc/transition {:target :idle}))
-                 (sc/state {:id :idle}
-                           (sc/transition {:event :go :target :active}))
-                 (sc/state {:id :active}
-                           (sc/on-entry {}
-                                        (sc/action
-                                         {:expr '(task-conductor.statechart-engine.eql-action-test/test-capture-session!
-                                                  {:test/data "injected"})})))))
+  (let [expr (list capture-session-sym
+                   {:test/data "injected"})]
+    (sc/statechart {}
+                   (sc/initial {}
+                               (sc/transition {:target :idle}))
+                   (sc/state {:id :idle}
+                             (sc/transition
+                              {:event :go :target :active}))
+                   (sc/state {:id :active}
+                             (sc/on-entry {}
+                                          (sc/action
+                                           {:expr expr}))))))
 
 (defn no-params-chart
-  "Chart with action that calls mutation without params."
+  "Chart with action calling mutation without params."
   []
-  (sc/statechart {}
-                 (sc/initial {}
-                             (sc/transition {:target :idle}))
-                 (sc/state {:id :idle}
-                           (sc/transition {:event :go :target :active}))
-                 (sc/state {:id :active}
-                           (sc/on-entry {}
-                                        (sc/action
-                                         {:expr '(task-conductor.statechart-engine.eql-action-test/test-no-params!)})))))
+  (let [expr (list no-params-sym)]
+    (sc/statechart {}
+                   (sc/initial {}
+                               (sc/transition {:target :idle}))
+                   (sc/state {:id :idle}
+                             (sc/transition
+                              {:event :go :target :active}))
+                   (sc/state {:id :active}
+                             (sc/on-entry {}
+                                          (sc/action
+                                           {:expr expr}))))))
 
 ;;; Tests
 
@@ -229,7 +243,8 @@
 
 (deftest error-propagation-test
   ;; Verifies errors from EQL queries are handled by the statechart framework.
-  ;; Fulcrologic statecharts catch action errors and send :error.execution events
+  ;; Fulcrologic statecharts catch action errors
+  ;; and send :error.execution events
   ;; rather than propagating exceptions. The state transition still completes.
   (testing "error propagation"
     (testing "resolver error is handled internally, transition completes"
@@ -268,21 +283,24 @@
     (testing "can query engine sessions from within action"
       (with-clean-state
         (let [captured-sessions (atom nil)
+              action-fn
+              (fn [_env _data]
+                (reset!
+                 captured-sessions
+                 (graph/query [:engine/sessions])))
               introspect-chart
               (sc/statechart {}
                              (sc/initial {}
-                                         (sc/transition {:target :idle}))
+                                         (sc/transition
+                                          {:target :idle}))
                              (sc/state {:id :idle}
                                        (sc/transition
-                                        {:event :check :target :checked}))
+                                        {:event :check
+                                         :target :checked}))
                              (sc/state {:id :checked}
                                        (sc/on-entry {}
                                                     (sc/action
-                                                     {:expr (fn [_env _data]
-                                                              (reset!
-                                                               captured-sessions
-                                                               (graph/query
-                                                                [:engine/sessions])))}))))]
+                                                     {:expr action-fn}))))]
           (sc/register! ::intro-chart introspect-chart)
           (let [sid (sc/start! ::intro-chart)]
             (sc/send! sid :check)
@@ -296,23 +314,28 @@
   (testing "engine mutation in action"
     (testing "can start another session from within action"
       (with-clean-state
-        (let [simple-chart (sc/statechart {}
-                                          (sc/initial {}
-                                                      (sc/transition
-                                                       {:target :done}))
-                                          (sc/final {:id :done}))
+        (let [simple-chart
+              (sc/statechart {}
+                             (sc/initial {}
+                                         (sc/transition
+                                          {:target :done}))
+                             (sc/final {:id :done}))
+              spawn-expr
+              `(resolvers/engine-start!
+                {:engine/chart-id ::spawnable})
               spawner-chart
               (sc/statechart {}
                              (sc/initial {}
-                                         (sc/transition {:target :idle}))
+                                         (sc/transition
+                                          {:target :idle}))
                              (sc/state {:id :idle}
                                        (sc/transition
-                                        {:event :spawn :target :spawned}))
+                                        {:event :spawn
+                                         :target :spawned}))
                              (sc/state {:id :spawned}
                                        (sc/on-entry {}
                                                     (sc/action
-                                                     {:expr `(resolvers/engine-start!
-                                                              {:engine/chart-id ::spawnable})}))))]
+                                                     {:expr spawn-expr}))))]
           (sc/register! ::spawnable simple-chart)
           (sc/register! ::spawner spawner-chart)
           (let [sid (sc/start! ::spawner)]
@@ -403,7 +426,8 @@
         (sc/register! ::unknown-chart (unknown-expr-chart))
         (let [sid (sc/start! ::unknown-chart)]
           (is (= #{:idle} (sc/current-state sid)))
-          ;; The statechart framework catches action errors and transitions anyway
+          ;; The statechart framework catches action
+          ;; errors and transitions anyway
           (sc/send! sid :go)
           (is (= #{:bad} (sc/current-state sid))
-              "State transition completes (framework catches action errors)"))))))
+              "Transition completes despite action error"))))))

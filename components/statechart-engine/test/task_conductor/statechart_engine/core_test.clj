@@ -197,7 +197,8 @@
                               (core/available-events "missing")))))))
 
 (deftest history-test
-  ;; Tests history tracking: initial state recording, transition tracking, and cleanup.
+  ;; Tests history tracking: initial state recording,
+  ;; transition tracking, and cleanup.
   (testing "history"
     (testing "records initial state on session start"
       (with-clean-engine

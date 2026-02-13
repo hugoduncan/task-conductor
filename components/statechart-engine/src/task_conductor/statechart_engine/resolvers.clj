@@ -49,8 +49,10 @@
 
 ;;; Dev-env Hook Registration
 
-(defonce ^{:doc "Map of [dev-env-id hook-type] to {:hook-id :engine-session-id :event}."
-           :private true}
+(defonce
+  ^{:doc "Map of [dev-env-id hook-type] to
+  {:hook-id :engine-session-id :event}."
+    :private true}
   dev-env-hooks
   (atom {}))
 
@@ -74,7 +76,8 @@
   (if-let [dev-env (dev-env-registry/get-dev-env id)]
     (let [callback (fn [_context]
                      (core/send! session-id event))
-          ;; session-id is used both as the statechart session and dev-env session
+          ;; session-id is used both as the statechart
+          ;; session and dev-env session
           hook-id (dev-env/register-hook dev-env session-id hook-type callback)]
       (swap! dev-env-hooks assoc [id hook-type]
              {:hook-id hook-id
@@ -112,7 +115,8 @@
 
 (defn register-resolvers!
   "Register all engine resolvers and mutations with pathom-graph.
-   Called automatically on namespace load. Can be called again after graph reset."
+   Called automatically on namespace load.
+   Can be called again after graph reset."
   []
   (graph/register! all-operations))
 

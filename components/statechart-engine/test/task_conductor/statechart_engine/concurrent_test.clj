@@ -1,6 +1,7 @@
 (ns task-conductor.statechart-engine.concurrent-test
-  ;; Verify thread-safety when multiple sessions are accessed concurrently.
-  ;; Tests concurrent data updates, event sends, and session lifecycle operations.
+  ;; Verify thread-safety when multiple sessions are
+  ;; accessed concurrently. Tests concurrent data
+  ;; updates, event sends, and session lifecycle.
   (:require
    [clojure.test :refer [deftest is testing]]
    [com.fulcrologic.statecharts.elements :refer [state transition]]
@@ -166,7 +167,8 @@
 ;;; Cross-Session Data Isolation Tests
 
 (deftest session-data-isolation-test
-  ;; Verify that concurrent operations don't cause data leakage between sessions.
+  ;; Verify that concurrent operations don't cause
+  ;; data leakage between sessions.
   (testing "session data isolation"
     (testing "under concurrent access"
       (with-clean-engine

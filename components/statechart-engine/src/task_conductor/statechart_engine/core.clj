@@ -1,6 +1,7 @@
 (ns task-conductor.statechart-engine.core
   "Core statechart engine implementation.
-  Provides singleton environment for registering statecharts and managing sessions.
+  Provides singleton environment for registering
+  statecharts and managing sessions.
   Actions execute EQL through Pathom (pathom-graph component)."
   (:require
    [com.fulcrologic.statecharts :as sc]
@@ -73,10 +74,14 @@
   Each entry is {:state config :event event :timestamp inst}."} histories
   (atom {}))
 
-(defonce ^{:doc "Map of session-id to max history size (nil = unlimited)."} history-limits
+(defonce
+  ^{:doc "Map of session-id to max history size (nil = unlimited)."}
+  history-limits
   (atom {}))
 
-(defonce ^{:doc "Map of session-id to lock object for serializing sends."} session-locks
+(defonce
+  ^{:doc "Map of session-id to lock object for serializing sends."}
+  session-locks
   (atom {}))
 
 ;;; Internal Helpers
@@ -288,7 +293,8 @@
 
 (defn history
   "Returns the state transition history for a session.
-  Returns [{:state config :event event :timestamp inst} ...] in chronological order.
+  Returns [{:state config :event event :timestamp inst} ...]
+  in chronological order.
   With optional n parameter, returns only the last n entries.
   Throws if session doesn't exist."
   ([session-id]

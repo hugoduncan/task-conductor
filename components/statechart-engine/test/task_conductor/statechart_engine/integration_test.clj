@@ -1,7 +1,9 @@
 (ns task-conductor.statechart-engine.integration-test
-  ;; Integration tests for the statechart engine using a realistic traffic light scenario.
-  ;; Tests multiple states, history pseudo-state, entry/exit actions, introspection, and
-  ;; concurrent sessions.
+  ;; Integration tests for the statechart engine
+  ;; using a realistic traffic light scenario.
+  ;; Tests multiple states, history pseudo-state,
+  ;; entry/exit actions, introspection,
+  ;; and concurrent sessions.
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.statechart-engine.interface :as sc]
