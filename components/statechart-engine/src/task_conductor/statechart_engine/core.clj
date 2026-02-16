@@ -98,10 +98,13 @@
 (defn- notify-listeners!
   "Notify all transition listeners of a state change."
   [session-id from-state to-state event]
-  (doseq [[_key f] @transition-listeners]
+  (doseq [[key f] @transition-listeners]
     (try
       (f session-id from-state to-state event)
-      (catch Exception _))))
+      (catch Exception e
+        (binding [*out* *err*]
+          (println "WARN: transition listener" key
+                   "threw:" (.getMessage e)))))))
 
 (defonce ^{:doc "Map of session-id to data model values."} session-data
   (atom {}))
