@@ -9,7 +9,8 @@
   - run-story! starts session and returns session-id + state
   - run-task! starts session and returns session-id + state
   - run-task! with failing task returns error map
-  - status returns current-state and history for active session"
+  - status returns current-state and history for active session
+  - status returns error map for missing session"
   (:require
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.core :as agent-runner]
@@ -181,7 +182,8 @@
 ;;; status Tests
 
 (deftest status-test
-  ;; Verify status returns current-state and history for an active session.
+  ;; Verify status returns current-state and history for an active session,
+  ;; and an error map for a missing session.
   (testing "status"
     (testing "returns current-state and history for active session"
       (with-agent-runner-state
@@ -197,4 +199,16 @@
                 (is (set? (:current-state s))
                     "current-state is a set of keywords")
                 (is (vector? (:history s))
-                    "history is a vector")))))))))
+                    "history is a vector")))))))
+
+    (testing "returns error map for missing session"
+      (with-agent-runner-state
+        (let [s (agent-runner/status "nonexistent-session")]
+          (is (= "nonexistent-session" (:session-id s))
+              "preserves session-id")
+          (is (= :session-not-found (get-in s [:error :error]))
+              "returns :session-not-found error")
+          (is (nil? (:current-state s))
+              "no current-state on error")
+          (is (nil? (:history s))
+              "no history on error"))))))

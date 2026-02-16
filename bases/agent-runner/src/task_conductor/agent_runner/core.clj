@@ -86,8 +86,14 @@
 
 (defn status
   "Returns the current status of a session.
-   Returns {:session-id :current-state :history}."
+   Returns {:session-id :current-state :history}, or
+   {:session-id :error} when the session does not exist."
   [session-id]
-  {:session-id session-id
-   :current-state (sc/current-state session-id)
-   :history (sc/history session-id)})
+  (try
+    {:session-id session-id
+     :current-state (sc/current-state session-id)
+     :history (sc/history session-id)}
+    (catch Exception e
+      {:session-id session-id
+       :error {:error :session-not-found
+               :message (ex-message e)}})))
