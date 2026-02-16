@@ -70,12 +70,16 @@
 
 (defn run-story!
   "Start supervised execution of a story.
+   Kept separate from run-task! to allow divergence when story
+   execution adds child-task orchestration.
    Returns {:session-id :state :error}."
   [project-dir story-id]
   (execute-and-start! project-dir story-id))
 
 (defn run-task!
   "Start supervised execution of a standalone task.
+   Kept separate from run-story! as standalone tasks skip
+   child-task orchestration.
    Returns {:session-id :state :error}."
   [project-dir task-id]
   (execute-and-start! project-dir task-id))
