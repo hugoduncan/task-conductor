@@ -6,6 +6,7 @@
 
   Test coverage:
   - bootstrap! loads resolvers and registers transition listener
+  - run-story! starts session and returns session-id + state
   - run-task! starts session and returns session-id + state
   - run-task! with failing task returns error map
   - status returns current-state and history for active session"
@@ -102,6 +103,30 @@
         (let [removed (sc/remove-transition-listener!
                        ::agent-runner/transition-log)]
           (is (= ::agent-runner/transition-log removed)))))))
+
+;;; run-story! Tests
+
+(deftest run-story-test
+  ;; Verify run-story! starts a statechart session via execute! and sends
+  ;; the initial-state event. Mirrors run-task! but exercises the separate
+  ;; entry point that will diverge when story execution adds child-task
+  ;; orchestration.
+  (testing "run-story!"
+    (testing "starts session and returns session-id + state"
+      (with-agent-runner-state
+        (let [mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses
+                                         {:type :story})})
+              cli-nullable (claude-cli/make-nullable)]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
+              (let [result (agent-runner/run-story! "/test" 50)]
+                (is (string? (:session-id result))
+                    "returns a session-id string")
+                (is (some? (:state result))
+                    "returns non-nil state")
+                (is (nil? (:error result))
+                    "returns no error")))))))))
 
 ;;; run-task! Tests
 
