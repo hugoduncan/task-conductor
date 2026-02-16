@@ -343,3 +343,65 @@
           (core/stop! session-id)
           (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not found"
                                 (core/get-data session-id))))))))
+
+;;; Transition Listener Tests
+
+(deftest add-transition-listener!-test
+  ;; Tests that transition listeners receive callbacks on state changes.
+  (testing "add-transition-listener!"
+    (testing "calls listener on state transition"
+      (with-clean-engine
+        (let [calls (atom [])]
+          (core/add-transition-listener!
+           ::test-listener
+           (fn [sid from to evt]
+             (swap! calls conj {:sid sid :from from :to to :event evt})))
+          (core/register! ::listen-chart simple-chart)
+          (let [session-id (core/start! ::listen-chart)]
+            (core/send! session-id :toggle)
+            (is (= 1 (count @calls)))
+            (let [{:keys [sid from to event]} (first @calls)]
+              (is (= session-id sid))
+              (is (contains? from :off))
+              (is (contains? to :on))
+              (is (= :toggle event)))))))
+
+    (testing "calls listener for each transition"
+      (with-clean-engine
+        (let [calls (atom [])]
+          (core/add-transition-listener!
+           ::multi-listener
+           (fn [sid _from _to evt]
+             (swap! calls conj {:sid sid :event evt})))
+          (core/register! ::multi-chart simple-chart)
+          (let [session-id (core/start! ::multi-chart)]
+            (core/send! session-id :toggle)
+            (core/send! session-id :toggle)
+            (is (= 2 (count @calls)))))))
+
+    (testing "does not fail when listener throws"
+      (with-clean-engine
+        (core/add-transition-listener!
+         ::bad-listener
+         (fn [_ _ _ _] (throw (ex-info "boom" {}))))
+        (core/register! ::error-chart simple-chart)
+        (let [session-id (core/start! ::error-chart)
+              state (core/send! session-id :toggle)]
+          (is (contains? state :on)))))))
+
+(deftest remove-transition-listener!-test
+  ;; Tests that removed listeners stop receiving callbacks.
+  (testing "remove-transition-listener!"
+    (testing "stops calling removed listener"
+      (with-clean-engine
+        (let [calls (atom [])]
+          (core/add-transition-listener!
+           ::removable
+           (fn [_ _ _ _] (swap! calls conj :called)))
+          (core/register! ::remove-chart simple-chart)
+          (let [session-id (core/start! ::remove-chart)]
+            (core/send! session-id :toggle)
+            (is (= 1 (count @calls)))
+            (core/remove-transition-listener! ::removable)
+            (core/send! session-id :toggle)
+            (is (= 1 (count @calls)))))))))

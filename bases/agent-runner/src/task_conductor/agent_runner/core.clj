@@ -20,10 +20,21 @@
    'task-conductor.project.resolvers
    'task-conductor.statechart-engine.resolvers])
 
+(defn- log-transition
+  "Log a state transition at info level."
+  [session-id from-state to-state event]
+  (println "[agent-runner]"
+           {:session-id session-id
+            :from from-state
+            :to to-state
+            :event event}))
+
 (defn bootstrap!
-  "Log which namespaces were loaded and verify the graph is operational.
+  "Log which namespaces were loaded, register transition logging,
+   and verify the graph is operational.
    Returns a map with :namespaces loaded and :graph-operational? status."
   []
+  (sc/add-transition-listener! ::transition-log log-transition)
   (let [operational? (try
                        (some? (graph/env))
                        (catch Exception _ false))]
@@ -63,3 +74,11 @@
    Returns {:session-id :state :error}."
   [project-dir task-id]
   (execute-and-start! project-dir task-id))
+
+(defn status
+  "Returns the current status of a session.
+   Returns {:session-id :current-state :history}."
+  [session-id]
+  {:session-id session-id
+   :current-state (sc/current-state session-id)
+   :history (sc/history session-id)})
