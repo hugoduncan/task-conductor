@@ -32,7 +32,7 @@
   Resets all registries, graph, engine, and transition listeners.
   Registers all required resolvers and statecharts."
   [& body]
-  `(do
+  `(try
      (engine/reset-engine!)
      (graph/reset-graph!)
      (registry/clear!)
@@ -45,17 +45,16 @@
      (dev-env-resolvers/register-resolvers!)
      (mcp-tasks-resolvers/register-resolvers!)
      (resolvers/register-resolvers!)
-     (try
-       ~@body
-       (finally
-         (resolvers/await-skill-threads!)
-         (resolvers/reset-skill-threads!)
-         (sc/remove-transition-listener! ::agent-runner/transition-log)
-         (engine/reset-engine!)
-         (graph/reset-graph!)
-         (registry/clear!)
-         (dev-env-registry/clear!)
-         (engine-resolvers/reset-dev-env-hooks!)))))
+     ~@body
+     (finally
+       (resolvers/await-skill-threads!)
+       (resolvers/reset-skill-threads!)
+       (sc/remove-transition-listener! ::agent-runner/transition-log)
+       (engine/reset-engine!)
+       (graph/reset-graph!)
+       (registry/clear!)
+       (dev-env-registry/clear!)
+       (engine-resolvers/reset-dev-env-hooks!))))
 
 ;;; Test Data Builders
 
