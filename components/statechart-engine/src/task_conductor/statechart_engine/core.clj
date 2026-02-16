@@ -84,10 +84,27 @@
   session-locks
   (atom {}))
 
+(defonce
+  ^{:doc "Map of listener-key to callback fn.
+  Callbacks receive (session-id from-state to-state event)."}
+  transition-listeners
+  (atom {}))
+
 ;;; Internal Helpers
 
 (defn- generate-session-id []
   (str (java.util.UUID/randomUUID)))
+
+(defn- notify-listeners!
+  "Notify all transition listeners of a state change."
+  [session-id from-state to-state event]
+  (doseq [[key f] @transition-listeners]
+    (try
+      (f session-id from-state to-state event)
+      (catch Exception e
+        (binding [*out* *err*]
+          (println "WARN: transition listener" key
+                   "threw:" (.getMessage e)))))))
 
 (defonce ^{:doc "Map of session-id to data model values."} session-data
   (atom {}))
@@ -184,7 +201,8 @@
   (if-let [lock (get @session-locks session-id)]
     (locking lock
       (if-let [wmem (get @sessions session-id)]
-        (let [processor  (::sc/processor env)
+        (let [from-state (::sc/configuration wmem)
+              processor  (::sc/processor env)
               new-wmem   (sp/process-event!
                           processor
                           env
@@ -199,6 +217,7 @@
           (swap! histories update session-id
                  (fn [entries]
                    (trim-history (conj entries new-entry) max-size)))
+          (notify-listeners! session-id from-state new-state event)
           new-state)
         ;; Session was stopped while we held the lock
         (throw (ex-info "Session not found"
@@ -229,7 +248,25 @@
   (reset! histories {})
   (reset! history-limits {})
   (reset! session-data {})
-  (reset! session-locks {}))
+  (reset! session-locks {})
+  (reset! transition-listeners {}))
+
+;;; Transition Listener API
+
+(defn add-transition-listener!
+  "Register a callback for state transitions.
+  Callback receives (session-id from-state to-state event).
+  Returns listener-key."
+  [listener-key callback]
+  (swap! transition-listeners assoc listener-key callback)
+  listener-key)
+
+(defn remove-transition-listener!
+  "Remove a previously registered transition listener.
+  Returns listener-key."
+  [listener-key]
+  (swap! transition-listeners dissoc listener-key)
+  listener-key)
 
 ;;; Introspection API
 

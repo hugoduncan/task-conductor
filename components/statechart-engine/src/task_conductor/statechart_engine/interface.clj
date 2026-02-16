@@ -168,6 +168,19 @@
   Throws if session doesn't exist."
   core/history)
 
+;;; Transition Listener Functions
+
+(def add-transition-listener!
+  "Register a callback for state transitions.
+  Callback receives (session-id from-state to-state event).
+  Returns listener-key."
+  core/add-transition-listener!)
+
+(def remove-transition-listener!
+  "Remove a previously registered transition listener.
+  Returns listener-key."
+  core/remove-transition-listener!)
+
 ;;; Session Data Functions
 
 (def get-data
