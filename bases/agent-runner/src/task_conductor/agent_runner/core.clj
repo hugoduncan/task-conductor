@@ -3,6 +3,7 @@
    Requiring this namespace loads all component resolvers and statecharts
    via auto-registration on namespace load."
   (:require
+   [clojure.string :as str]
    [task-conductor.claude-cli.resolvers]
    [task-conductor.dev-env.resolvers]
    [task-conductor.mcp-tasks.resolvers]
@@ -12,13 +13,16 @@
    [task-conductor.statechart-engine.interface :as sc]
    [task-conductor.statechart-engine.resolvers]))
 
-(def ^:private resolver-namespaces
-  "Namespaces loaded for resolver auto-registration."
-  ['task-conductor.claude-cli.resolvers
-   'task-conductor.dev-env.resolvers
-   'task-conductor.mcp-tasks.resolvers
-   'task-conductor.project.resolvers
-   'task-conductor.statechart-engine.resolvers])
+(defn- resolver-namespaces
+  "Derives resolver namespaces from loaded task-conductor namespaces.
+   Avoids maintaining a separate list that duplicates the :require form."
+  []
+  (into []
+        (comp (map ns-name)
+              (filter #(let [s (str %)]
+                         (and (str/starts-with? s "task-conductor.")
+                              (str/ends-with? s ".resolvers")))))
+        (all-ns)))
 
 (defn- log-transition
   "Log a state transition at info level."
@@ -37,11 +41,12 @@
   (sc/add-transition-listener! ::transition-log log-transition)
   (let [operational? (try
                        (some? (graph/env))
-                       (catch Exception _ false))]
+                       (catch Exception _ false))
+        ns-list     (resolver-namespaces)]
     (println "[agent-runner] Bootstrap complete:"
-             (count resolver-namespaces) "resolver namespaces,"
+             (count ns-list) "resolver namespaces,"
              "graph operational:" operational?)
-    {:namespaces resolver-namespaces
+    {:namespaces ns-list
      :graph-operational? operational?}))
 
 (defn- execute-and-start!
