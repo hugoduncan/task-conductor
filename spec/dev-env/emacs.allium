@@ -223,6 +223,7 @@ rule HandleStartSession {
     let session_id = params.session_id
     let dir = params.opts.dir or project_dir or cwd
     let claude_session_id = params.opts.claude_session_id?
+    let task_id = params.opts.task_id?               -- used for buffer naming
     requires: session_id exists
     ensures:
         if session_buffers.get(session_id).live:

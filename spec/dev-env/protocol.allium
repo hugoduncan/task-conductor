@@ -31,6 +31,11 @@ value CallbackContext {
     reason: user_exit | error | timeout | idle
 }
 
+value SessionOpts {
+    dir: String                                     -- working directory
+    claude_session_id: String?                      -- CLI session to resume
+}
+
 
 -- Entities
 
@@ -88,12 +93,14 @@ config {
 --- Session Lifecycle
 
 rule StartSession {
-    when: StartSessionRequested(dev_env, claude_session_id, dir)
+    -- session_id is caller-provided (e.g. ExecutionSession UUID).
+    when: StartSessionRequested(dev_env, session_id, opts: SessionOpts)
     requires: dev_env.is_connected
     ensures: Session.created(
+        id: session_id,
         dev_env: dev_env,
-        claude_session_id: claude_session_id,
-        dir: dir,
+        claude_session_id: opts.claude_session_id,
+        dir: opts.dir,
         status: starting
     )
 }
@@ -120,7 +127,8 @@ rule SessionResumesFromIdle {
 }
 
 rule CloseSession {
-    when: CloseSessionRequested(dev_env, session)
+    when: CloseSessionRequested(dev_env, session_id)
+    let session = Session with id = session_id
     requires: session.status in [starting, active, idle]
     let session_hooks = session.hooks
     ensures: session_hooks.each(h => not exists h)
@@ -140,7 +148,8 @@ rule SessionClosedByEvent {
 --- Hook Management
 
 rule RegisterHook {
-    when: RegisterHookRequested(session, hook_type, callback)
+    when: RegisterHookRequested(dev_env, session_id, hook_type, callback)
+    let session = Session with id = session_id
     requires: session.status in [starting, active, idle]
     requires: hook_type in [on_close, on_idle]
     ensures: Hook.created(
@@ -175,8 +184,11 @@ rule FireOnIdleHooks {
 
 rule RegisterDevEnv {
     when: RegisterDevEnvRequested(dev_env, type, meta)
+    let id = new_dev_env_id                         -- generated string, e.g. "dev-env-12345"
+    ensures: dev_env.id = id
     ensures: dev_env.type = type
     ensures: dev_env.meta = meta
+    ensures: result = id
 }
 
 rule UnregisterDevEnv {
@@ -186,10 +198,12 @@ rule UnregisterDevEnv {
 
 rule SelectDevEnv {
     -- Select the first connected dev-env.
+    -- Returns the dev-env entry or nil if none available.
     when: SelectDevEnvRequested(registry)
     let candidates = registry.available
-    requires: candidates.count > 0
-    ensures: DevEnvSelected(candidates.first)
+    ensures: result =
+        if candidates.count > 0: candidates.first
+        else: nil
 }
 
 --- Health
@@ -207,16 +221,18 @@ rule Ping {
 --- Querying
 
 rule QueryTranscript {
-    when: QueryTranscriptRequested(dev_env, session)
+    when: QueryTranscriptRequested(dev_env, session_id)
     requires: dev_env.is_connected
-    ensures: TranscriptReturned(session, session.transcript)
+    let session = Session with id = session_id
+    ensures: result = session.transcript
 }
 
 rule QueryEvents {
     -- Planned: not yet implemented.
-    when: QueryEventsRequested(dev_env, session)
+    when: QueryEventsRequested(dev_env, session_id)
     requires: dev_env.is_connected
-    ensures: EventsReturned(session, session.events)
+    let session = Session with id = session_id
+    ensures: result = session.events
 }
 
 deferred QueryEvents.implementation    -- planned, not yet implemented
@@ -257,13 +273,13 @@ surface SessionControl {
             session.claude_session_id
 
     provides:
-        StartSessionRequested(dev_env, claude_session_id, dir)
-        CloseSessionRequested(dev_env, session)
+        StartSessionRequested(dev_env, session_id, opts)
+        CloseSessionRequested(dev_env, session_id)
             when session.status in [starting, active, idle]
-        RegisterHookRequested(session, hook_type, callback)
+        RegisterHookRequested(dev_env, session_id, hook_type, callback)
             when session.status in [starting, active, idle]
-        QueryTranscriptRequested(dev_env, session)
-        QueryEventsRequested(dev_env, session)
+        QueryTranscriptRequested(dev_env, session_id)
+        QueryEventsRequested(dev_env, session_id)
 }
 
 
