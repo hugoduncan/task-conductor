@@ -50,7 +50,7 @@ value TransitionRecord {
     session_id: String
     from_state: TaskState
     to_state: TaskState
-    event: TaskState
+    event: String                                   -- TaskState value or control event (:error, :no_progress)
     timestamp: Timestamp
 }
 
