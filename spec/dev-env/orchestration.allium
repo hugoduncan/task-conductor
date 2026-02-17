@@ -556,3 +556,4 @@ open_question "Should escalation retry dev-env selection after a timeout, or rem
 open_question "Should the system track skill invocation history (which skills ran, duration, outcome) for debugging?"
 open_question "Should wait_pr_merge poll for merge status, or rely entirely on external events?"
 open_question "Should on-complete override be part of SkillSpec or a separate statechart mechanism?"
+open_question "TaskStatechart and StoryStatechart share most structure (idle, unrefined, wait_pr_merge, merging_pr, complete, escalated are identical; others differ only in skill config and transitions). Could a single parameterized statechart with task_type-specific skill lookup and an optional has_tasks state replace both?"
