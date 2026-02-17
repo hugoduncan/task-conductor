@@ -110,39 +110,31 @@ rule RunStory {
 
 rule ExecuteAndStart {
     -- Shared execution sequence.
-    -- 1. Call orchestration's execute! mutation via the pathom graph
-    -- 2. On success, send initial-state event to start the statechart
-    -- 3. Return session-id and current state
+    -- Calls orchestration's execute! mutation via the pathom graph once,
+    -- then branches on whether the mutation succeeded or returned an error.
     when: ExecuteAndStartRequested(project_dir, task_id)
     let mutation_result = PathomGraph.mutate(
         orchestration/Execute,
         { project_dir: project_dir, task_id: task_id }
     )
-    requires: mutation_result.error = nil
-    ensures: orchestration/ExecutionSession.statechart.send(
-        mutation_result.session_id,
-        mutation_result.initial_state
-    )
-    ensures: result = {
-        session_id: mutation_result.session_id,
-        state: mutation_result.initial_state,
-        error: nil
-    }
-}
 
-rule ExecuteAndStartFailed {
-    -- Error path: execute! mutation returned an error.
-    when: ExecuteAndStartRequested(project_dir, task_id)
-    let mutation_result = PathomGraph.mutate(
-        orchestration/Execute,
-        { project_dir: project_dir, task_id: task_id }
-    )
-    requires: mutation_result.error != nil
-    ensures: result = {
-        session_id: nil,
-        state: nil,
-        error: mutation_result.error
-    }
+    when mutation_result.error = nil:
+        ensures: orchestration/ExecutionSession.statechart.send(
+            mutation_result.session_id,
+            mutation_result.initial_state
+        )
+        ensures: result = {
+            session_id: mutation_result.session_id,
+            state: mutation_result.initial_state,
+            error: nil
+        }
+
+    when mutation_result.error != nil:
+        ensures: result = {
+            session_id: nil,
+            state: nil,
+            error: mutation_result.error
+        }
 }
 
 
