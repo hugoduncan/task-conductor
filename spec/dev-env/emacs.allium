@@ -1,0 +1,516 @@
+-- Emacs DevEnv Implementation Specification
+--
+-- Emacs-specific implementation of the DevEnv protocol.
+-- Two-process architecture: JVM orchestrator ↔ Emacs UI, bridged via
+-- nREPL.  The JVM queues commands on a core.async channel; Emacs polls
+-- the channel, dispatches commands to claude-code.el, and sends
+-- responses back through nREPL.
+
+use protocol
+
+
+-- External Entities
+
+external entity CiderConnection {
+    -- CIDER nREPL connection from Emacs to the JVM.
+    connected: Boolean
+}
+
+external entity ClaudeCodeBuffer {
+    -- An Emacs buffer running claude-code.el with an interactive
+    -- Claude CLI session.
+    name: String
+    live: Boolean
+    directory: String
+}
+
+
+-- Config
+
+config {
+    command_channel_capacity: Integer = 32
+    poll_interval: Duration = 0.5.seconds
+    poll_timeout: Duration = 5.seconds          -- per-poll await on JVM channel
+    idle_debounce: Duration = 0.5.seconds
+    transcript_limit: Bytes = 100.kilobytes     -- max transcript response size
+}
+
+
+-- Entities
+
+entity EmacsDevEnv extends DevEnv {
+    -- JVM-side state (held in an atom)
+    command_chan: Channel<CommandRequest>        -- core.async channel, bounded
+    pending_commands: Map<String, Promise>       -- command_id -> response promise
+    sessions: Map<String, SessionState>          -- session_id -> session tracking
+    hooks: Map<String, HookEntry>               -- hook_id -> hook callback data
+
+    -- Emacs-side state (held in elisp vars)
+    project_dir: String?                        -- CIDER session context directory
+    poll_timer: Timer?                          -- repeating timer driving poll loop
+    polling: Boolean                            -- overlap guard for async polls
+    session_buffers: Map<String, ClaudeCodeBuffer>  -- session_id -> buffer
+    session_hooks: Map<String, HookData>        -- session_id -> hook registrations
+}
+
+value SessionState {
+    -- Subset of protocol Session.status (starting | active | idle | closed).
+    -- The JVM side only tracks starting and active; idle and closed are
+    -- detected by Emacs hooks (BellAdvice, OnCloseHandler) and delivered
+    -- as events rather than stored as state.
+    status: starting | active
+}
+
+value HookEntry {
+    type: on_close | on_idle
+    callback: Function                          -- opaque JVM callback
+    session_id: String
+}
+
+value HookData {
+    -- Emacs-side hook tracking per session.
+    on_idle: IdleHookData?
+    on_close: CloseHookData?
+}
+
+value IdleHookData {
+    hook_id: String
+    timer: Timer?                               -- debounce timer, cancelled on each bell
+}
+
+value CloseHookData {
+    hook_id: String
+}
+
+value CommandRequest {
+    command_id: String                          -- UUID
+    command: ping | start_session | register_hook
+           | query_transcript | query_events | close_session
+    params: Map
+    response_promise: Promise                   -- delivered by send_response
+}
+
+
+-- Rules
+
+--- Command/Response Bridge
+--
+-- The core async pattern: JVM blocks on a promise while Emacs polls
+-- the channel, dispatches, and delivers the response.
+
+rule SendCommandAndWait {
+    -- JVM side: enqueue command and block until Emacs responds or timeout.
+    when: CommandRequested(emacs_dev_env, command, params, timeout)
+    let request = CommandRequest.created(
+        command_id: new_uuid,
+        command: command,
+        params: params,
+        response_promise: new_promise
+    )
+    ensures: emacs_dev_env.command_chan.enqueued(request)
+    ensures: block_until(
+        request.response_promise.delivered
+        or elapsed(timeout)
+    )
+}
+
+rule CommandTimeout {
+    -- When response times out, clean up the pending command to prevent
+    -- late delivery to a stale promise.
+    when: SendCommandAndWait.timed_out(emacs_dev_env, command_id)
+    ensures: emacs_dev_env.pending_commands.remove(command_id)
+    ensures: result = {error: timeout, message: "Response timeout"}
+}
+
+rule ReceiveCommand {
+    -- Emacs side: take next command from channel (called via nREPL).
+    -- Moves response_promise to pending_commands map before returning
+    -- the command to Emacs (promise is not serialisable over nREPL).
+    when: AwaitCommandRequested(emacs_dev_env, timeout)
+    ensures:
+        if emacs_dev_env.command_chan.closed:
+            result = {status: closed}
+        else if emacs_dev_env.command_chan.take_within(timeout) -> request:
+            emacs_dev_env.pending_commands.put(request.command_id, request.response_promise)
+            result = {status: ok, command: request.without(:response_promise)}
+        else:
+            result = {status: timeout}
+}
+
+rule DeliverResponse {
+    -- Emacs side: deliver response for a command (called via nREPL).
+    when: SendResponseRequested(emacs_dev_env, command_id, response)
+    let pending = emacs_dev_env.pending_commands.get(command_id)
+    ensures:
+        if pending exists:
+            pending.deliver(response)
+            emacs_dev_env.pending_commands.remove(command_id)
+            result = true
+        else:
+            -- Late response after timeout cleanup; log and discard.
+            result = false
+}
+
+
+--- Poll Loop (Emacs side)
+--
+-- Timer-driven loop that polls the JVM channel for commands.
+-- Uses async nREPL eval to avoid blocking the Emacs event loop.
+
+rule StartPollLoop {
+    when: PollLoopStartRequested(emacs_dev_env)
+    requires: emacs_dev_env.poll_timer = nil
+    ensures: emacs_dev_env.polling = false
+    ensures: emacs_dev_env.poll_timer = repeating_timer(
+        interval: config.poll_interval,
+        action: PollIteration
+    )
+}
+
+rule StopPollLoop {
+    when: PollLoopStopRequested(emacs_dev_env)
+    ensures: emacs_dev_env.poll_timer.cancelled
+    ensures: emacs_dev_env.poll_timer = nil
+    ensures: emacs_dev_env.polling = false
+}
+
+rule PollIteration {
+    -- Single poll cycle.  Skipped if a previous poll is still in flight.
+    when: PollTimerFired(emacs_dev_env)
+    requires: emacs_dev_env.dev_env_id exists
+    requires: emacs_dev_env.polling = false
+    ensures: emacs_dev_env.polling = true
+    ensures: async_nrepl_eval(
+        "await-command-by-id(dev_env_id, config.poll_timeout)",
+        callback: PollCallback
+    )
+}
+
+rule PollCallback {
+    -- Process poll response.  Always clears the polling flag.
+    when: PollResponseReceived(emacs_dev_env, response)
+    ensures: emacs_dev_env.polling = false
+    ensures:
+        match response.status:
+            ok    -> DispatchCommand(response.command)
+            timeout -> noop                     -- normal, wait for next tick
+            closed  -> StopPollLoop(emacs_dev_env)
+                       emacs_dev_env.dev_env_id = nil
+            error   -> log_error(response.message)
+}
+
+
+--- Command Dispatch (Emacs side)
+
+rule DispatchCommand {
+    -- Route command to handler, send response back to JVM.
+    when: CommandReceived(command)
+    let response = match command.command:
+        ping              -> {status: ok}
+        start_session     -> HandleStartSession(command.params)
+        register_hook     -> HandleRegisterHook(command.params)
+        query_transcript  -> HandleQueryTranscript(command.params)
+        query_events      -> {error: not_implemented}
+        close_session     -> HandleCloseSession(command.params)
+        _                 -> {error: unknown_command}
+    ensures: SendResponseRequested(emacs_dev_env, command.command_id, response)
+}
+
+deferred query_events.emacs_handler              -- returns not_implemented
+
+
+--- Session Management (Emacs side)
+
+rule HandleStartSession {
+    -- Start or reuse a Claude session in Emacs.
+    when: StartSessionCommand(params)
+    let session_id = params.session_id
+    let dir = params.opts.dir or project_dir or cwd
+    let claude_session_id = params.opts.claude_session_id?
+    let task_id = params.opts.task_id?               -- used for buffer naming
+    requires: session_id exists
+    ensures:
+        if session_buffers.get(session_id).live:
+            -- Reuse existing buffer.
+            result = {status: ok, buffer_name: existing.name}
+        else:
+            -- Launch claude-code in dir, optionally with --resume.
+            let buffer = claude_code_start(dir, resume: claude_session_id)
+            session_buffers.put(session_id, buffer)
+            result = {status: ok, buffer_name: buffer.name,
+                      resumed: claude_session_id exists}
+}
+
+rule HandleCloseSession {
+    -- Kill buffer (triggers on_close hook), remove session, clean up hooks.
+    when: CloseSessionCommand(params)
+    let session_id = params.session_id
+    requires: session_id exists
+    let buffer = session_buffers.get(session_id)
+    ensures:
+        if buffer exists and buffer.live:
+            buffer.kill                         -- triggers kill-buffer-hook
+        session_buffers.remove(session_id)
+        CleanupSessionHooks(session_id)
+        result = {status: ok}
+}
+
+
+--- Hook Management (Emacs side)
+
+rule HandleRegisterHook {
+    when: RegisterHookCommand(params)
+    let session_id = params.session_id
+    let hook_type = params.hook_type
+    requires: session_id exists
+    requires: hook_type in [on_idle, on_close]
+    let buffer = session_buffers.get(session_id)
+    requires: buffer exists and buffer.live
+    let hook_id = new_uuid
+    ensures:
+        match hook_type:
+            on_idle  -> SetupOnIdleHook(session_id, hook_id)
+            on_close -> SetupOnCloseHook(session_id, hook_id)
+        result = {status: ok, hook_id: hook_id}
+}
+
+
+--- Idle Detection
+--
+-- Idle = Claude is waiting for user input.  Detected via advice on
+-- claude-code--notify (bell notification).  Debounced to avoid
+-- duplicate events from rapid bell sequences.
+
+rule SetupOnIdleHook {
+    when: IdleHookSetupRequested(session_id, hook_id)
+    ensures: session_hooks[session_id].on_idle = IdleHookData{
+        hook_id: hook_id,
+        timer: nil
+    }
+    ensures: advice_added(claude_code_notify, BellAdvice)
+        -- Advice is added once; idempotent if already present.
+}
+
+rule BellAdvice {
+    -- Wraps claude-code--notify.  When bell fires in a tracked session
+    -- buffer, triggers debounced idle detection.
+    when: claude_code_notify_called(buffer)
+    let session_id = session_for_buffer(buffer)
+    requires: session_id exists
+    requires: session_hooks[session_id].on_idle exists
+    ensures: DebouncedIdleEvent(session_id)
+}
+
+rule DebouncedIdleEvent {
+    -- Cancel any existing debounce timer, start a new one.
+    when: BellDetected(session_id)
+    let idle_data = session_hooks[session_id].on_idle
+    ensures:
+        if idle_data.timer exists:
+            idle_data.timer.cancelled
+    ensures: idle_data.timer = delayed_timer(
+        delay: config.idle_debounce,
+        action: SendHookEvent(on_idle, session_id, idle)
+    )
+}
+
+
+--- Close Detection
+--
+-- Detected via kill-buffer-hook on the session buffer.
+
+rule SetupOnCloseHook {
+    when: CloseHookSetupRequested(session_id, hook_id)
+    let buffer = session_buffers.get(session_id)
+    requires: buffer exists and buffer.live
+    ensures: session_hooks[session_id].on_close = CloseHookData{
+        hook_id: hook_id
+    }
+    ensures: buffer.kill_buffer_hook += OnCloseHandler
+}
+
+rule OnCloseHandler {
+    -- Fires when a tracked session buffer is killed.
+    when: buffer_killed(buffer)
+    let session_id = session_for_buffer(buffer)
+    requires: session_id exists
+    requires: session_hooks[session_id].on_close exists
+    ensures: SendHookEvent(on_close, session_id, user_exit)
+}
+
+
+--- Hook Event Delivery
+
+rule SendHookEvent {
+    -- Emacs → JVM: notify of session lifecycle event via sync nREPL.
+    when: HookEventTriggered(hook_type, session_id, reason)
+    ensures: nrepl_sync_eval(
+        send_hook_event_by_id(dev_env_id, hook_type, session_id, reason)
+    )
+    -- Errors are caught and logged, never propagated to caller.
+}
+
+rule InvokeHook {
+    -- JVM side: invoke all registered callbacks for the hook type.
+    when: HookEventReceived(emacs_dev_env, hook_type, context)
+    for hook in emacs_dev_env.hooks with type = hook_type:
+        ensures: hook.callback(context)
+        -- Exceptions in callbacks are caught and logged.
+}
+
+
+--- Hook Cleanup
+
+rule CleanupSessionHooks {
+    -- Remove all hook state for a session.
+    when: SessionHookCleanupRequested(session_id)
+    let hooks = session_hooks[session_id]
+    ensures:
+        if hooks.on_idle.timer exists:
+            hooks.on_idle.timer.cancelled
+    ensures: session_hooks.remove(session_id)
+    ensures:
+        -- Remove bell advice when no sessions have on_idle hooks.
+        if no session in session_hooks has on_idle:
+            advice_removed(claude_code_notify, BellAdvice)
+}
+
+
+--- Transcript Query
+
+rule HandleQueryTranscript {
+    when: QueryTranscriptCommand(params)
+    let session_id = params.session_id
+    requires: session_id exists
+    let buffer = session_buffers.get(session_id)
+    requires: buffer exists and buffer.live
+    let raw_content = buffer.text
+    let stripped = strip_ansi_codes(raw_content)
+    let transcript =
+        if stripped.size > config.transcript_limit:
+            stripped.suffix(config.transcript_limit)    -- keep tail
+        else:
+            stripped
+    ensures: result = {status: ok, transcript: transcript}
+}
+
+
+--- Lifecycle
+
+rule Connect {
+    -- User-initiated: M-x task-conductor-dev-env-connect
+    requires: CiderConnection.connected
+    requires: emacs_dev_env.dev_env_id = nil    -- not already connected
+    ensures: emacs_dev_env.project_dir = current_directory
+    ensures: emacs_dev_env.dev_env_id = nrepl_sync_eval(register_emacs_dev_env)
+    ensures: StartPollLoop(emacs_dev_env)
+}
+
+rule Disconnect {
+    -- User-initiated: M-x task-conductor-dev-env-disconnect
+    requires: emacs_dev_env.dev_env_id exists
+    ensures: StopPollLoop(emacs_dev_env)
+    ensures: nrepl_sync_eval(unregister_emacs_dev_env(dev_env_id))
+    ensures: emacs_dev_env.dev_env_id = nil
+    ensures: emacs_dev_env.project_dir = nil
+    ensures: emacs_dev_env.session_buffers.clear
+    ensures: emacs_dev_env.session_hooks.clear
+}
+
+rule Shutdown {
+    -- JVM side: close channel and reset all state.
+    when: ShutdownRequested(emacs_dev_env)
+    ensures: emacs_dev_env.command_chan.closed
+    ensures: emacs_dev_env.hooks.clear
+    ensures: emacs_dev_env.sessions.clear
+    ensures: emacs_dev_env.pending_commands.clear
+    ensures: emacs_dev_env.is_connected = false
+}
+
+
+--- nREPL Communication
+
+rule SyncEval {
+    -- Emacs evaluates a Clojure form synchronously via CIDER.
+    -- Uses project_dir as default-directory for session context.
+    -- Result is parsed from EDN to plist.
+    when: SyncEvalRequested(form)
+    requires: CiderConnection.connected
+    ensures: result = parse_edn(cider_sync_eval(form))
+    -- On nREPL error: signals elisp error.
+}
+
+rule AsyncEval {
+    -- Emacs evaluates a Clojure form asynchronously via CIDER.
+    -- Used only by the poll loop to avoid blocking Emacs.
+    when: AsyncEvalRequested(form, callback)
+    requires: CiderConnection.connected
+    ensures: cider_async_eval(form, callback)
+}
+
+
+--- ID-based nREPL API
+--
+-- Emacs calls these functions using the dev_env_id string.
+-- Each looks up the EmacsDevEnv in the Registry, then delegates.
+
+rule ByIdDispatch {
+    -- Pattern used by await-command-by-id, send-response-by-id,
+    -- send-hook-event-by-id, ping-by-id.
+    when: ByIdCallRequested(dev_env_id, operation, args)
+    let dev_env = Registry.get(dev_env_id)
+    ensures:
+        if dev_env exists:
+            operation(dev_env, args)
+        else:
+            result = {error: not_found, message: "Dev-env not found"}
+}
+
+
+--- Health Check
+
+rule EmacsPing {
+    -- Extends protocol Ping with Emacs-specific checks.
+    when: PingRequested(emacs_dev_env)
+    requires: emacs_dev_env.is_connected
+    requires: emacs_dev_env.command_chan exists
+    ensures: SendCommandAndWait(emacs_dev_env, ping, {}, config.ping_timeout)
+    -- Timeout → {status: timeout}
+    -- Success → {status: ok}
+}
+
+
+-- Surfaces
+
+surface EmacsUserCommands {
+    -- Interactive Emacs commands for the user.
+    for consumer: EmacsUser
+
+    provides:
+        Connect
+            when CiderConnection.connected
+            and emacs_dev_env.dev_env_id = nil
+        Disconnect
+            when emacs_dev_env.dev_env_id exists
+}
+
+surface EmacsNreplApi {
+    -- nREPL-callable functions for Emacs to interact with JVM state.
+    -- All functions accept dev_env_id as first argument.
+    for consumer: EmacsPollLoop
+
+    context dev_env: EmacsDevEnv
+
+    provides:
+        AwaitCommandRequested(dev_env, timeout)
+        SendResponseRequested(dev_env, command_id, response)
+        SendHookEvent(hook_type, session_id, reason)
+        PingRequested(dev_env)
+}
+
+
+-- Open Questions
+
+open_question "Should Emacs-side session_buffers track session status (starting/active/idle) independently from the JVM?"
+open_question "Should the poll loop back off (increase interval) after consecutive timeouts to reduce nREPL traffic?"
+open_question "Should transcript query support a start offset for incremental reads?"
