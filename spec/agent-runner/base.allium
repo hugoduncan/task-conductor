@@ -171,8 +171,17 @@ rule QueryStatusNotFound {
 
 -- Surfaces
 
+surface BootstrapApi {
+    -- System lifecycle: initialize the engine before any execution.
+    -- Global scope — called once, affects all subsequent sessions.
+    for consumer: Operator
+
+    provides:
+        BootstrapRequested
+}
+
 surface AgentRunnerApi {
-    -- Public API for starting and monitoring agent execution.
+    -- Session-scoped API for starting and monitoring agent execution.
     for consumer: Operator
 
     exposes:
@@ -180,7 +189,6 @@ surface AgentRunnerApi {
             QueryStatusRequested(session.id)
 
     provides:
-        BootstrapRequested
         RunTaskRequested(project_dir, task_id)
         RunStoryRequested(project_dir, story_id)
         QueryStatusRequested(session_id)
