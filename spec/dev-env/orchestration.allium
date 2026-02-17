@@ -22,7 +22,7 @@ external entity Task {
     meta: Map?                                  -- contains :refined key when refined
     pr_num: Integer?                            -- GitHub PR number
     code_reviewed: Timestamp?                   -- ISO-8601 when reviewed
-    pr_merged: Boolean?                         -- true when PR merged
+    pr_merged: Boolean?                         -- true when PR merged (externally computed, not from mcp-tasks)
 }
 
 external entity ClaudeCli {
@@ -42,7 +42,7 @@ value TaskData {
     meta: Map?
     pr_num: Integer?
     code_reviewed: Timestamp?
-    pr_merged: Boolean?
+    pr_merged: Boolean?                        -- externally computed, not from mcp-tasks
 
     -- Derived
     is_refined: meta contains :refined
