@@ -54,6 +54,10 @@ entity EmacsDevEnv extends DevEnv {
 }
 
 value SessionState {
+    -- Subset of protocol Session.status (starting | active | idle | closed).
+    -- The JVM side only tracks starting and active; idle and closed are
+    -- detected by Emacs hooks (BellAdvice, OnCloseHandler) and delivered
+    -- as events rather than stored as state.
     status: starting | active
 }
 
