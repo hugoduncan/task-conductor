@@ -7,6 +7,10 @@
 -- Implementations (Emacs, terminal, etc.) spawn the Claude CLI process
 -- directly. The JVM is notified of lifecycle events but does not own
 -- the process.
+--
+-- Naming: allium uses snake_case (session_id, claude_session_id) per
+-- language convention.  The Clojure implementation uses the equivalent
+-- kebab-case (:session-id, :claude-session-id).
 
 
 -- External Entities
