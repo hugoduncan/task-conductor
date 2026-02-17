@@ -386,7 +386,12 @@ rule Execute {
 rule InvokeSkill {
     -- Called by statechart entry actions.
     when: InvokeSkillRequested(session: ExecutionSession, skill: SkillSpec)
-    -- Store on_complete override if skill specifies one
+    -- Unconditionally assign on_complete from skill.  When the skill has
+    -- no on_complete (most skills), this clears any value from a prior
+    -- invocation.  In practice, the only skill with on_complete is
+    -- merge_pr_skill (on_complete: complete), which is terminal — so no
+    -- subsequent skill ever inherits a stale value.  The unconditional
+    -- assignment makes this safe by construction.
     ensures: session.on_complete = skill.on_complete
     -- Snapshot current state for no-progress detection
     ensures: StorePreSkillState(session)
