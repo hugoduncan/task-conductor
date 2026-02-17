@@ -152,6 +152,9 @@ rule QueryStatus {
 
 rule QueryStatusNotFound {
     -- Session does not exist or has been stopped.
+    -- Note: spec models this as a nil-state guard; implementation uses
+    -- try/catch around statechart-engine/current-state which throws
+    -- when the session-id is unknown.  The intent is equivalent.
     when: QueryStatusRequested(session_id)
     requires: orchestration/ExecutionSession.statechart_state(session_id) = nil
     ensures: result = SessionStatus {
