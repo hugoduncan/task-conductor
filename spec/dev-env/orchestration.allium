@@ -407,7 +407,7 @@ rule StorePreSkillState {
     let current_state = if session.task_type = story:
         DeriveStoryState(task, children) else: DeriveTaskState(task)
     let open_count = if session.task_type = story:
-        children with status not in [closed, done, deleted] . count
+        children with status not in [closed, deleted] . count
     else: nil
     ensures: session.pre_skill_state = current_state
     ensures: session.pre_skill_open_children = open_count
@@ -457,7 +457,7 @@ rule NoProgress {
     let is_has_tasks = new_state = has_tasks
     ensures: result =
         if was_has_tasks and is_has_tasks:
-            let new_open_count = children with status not in [closed, done, deleted] . count
+            let new_open_count = children with status not in [closed, deleted] . count
             session.pre_skill_open_children = new_open_count
         else:
             session.pre_skill_state = new_state
