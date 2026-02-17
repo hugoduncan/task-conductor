@@ -177,11 +177,9 @@ surface BootstrapApi {
 
 surface AgentRunnerApi {
     -- Session-scoped API for starting and monitoring agent execution.
+    -- QueryStatus accepts any session_id; QueryStatusNotFound handles
+    -- unknown sessions rather than requiring session existence upfront.
     for consumer: Operator
-
-    exposes:
-        for session in orchestration/ExecutionSession:
-            QueryStatusRequested(session.id)
 
     provides:
         RunTaskRequested(project_dir, task_id)
@@ -268,8 +266,7 @@ surface IntrospectionApi {
         QueryRegisteredCharts
         QueryActiveSessionIds
         QueryResolverCatalog
-        for session in orchestration/ExecutionSession:
-            QueryStatusRequested(session.id)
+        QueryStatusRequested(session_id)
 
     provides:
         QueryRegisteredCharts
