@@ -1,0 +1,295 @@
+-- Agent Runner Base Specification
+--
+-- Composition layer that wires orchestration, dev-env protocol, and the
+-- pathom graph into a running system.  The agent-runner owns bootstrap
+-- (namespace discovery, transition listener, graph verification) and
+-- exposes the public API: run-task!, run-story!, status.
+--
+-- The EQL execution model is central: statechart entry actions become
+-- pathom mutations, resolver namespaces self-register on load, and the
+-- graph is the single execution substrate for all side effects.
+--
+-- This spec documents what exists today in agent-runner core.clj and
+-- articulates the Engine intent: where the system is heading.
+
+use orchestration
+use protocol
+
+
+-- External Entities
+
+external entity PathomGraph {
+    -- The shared Pathom3 graph.  Resolvers and mutations auto-register
+    -- on namespace load via pathom-graph component macros.
+    env: Map                                    -- graph environment, nil when not operational
+}
+
+external entity Namespace {
+    -- A loaded Clojure namespace containing resolvers or mutations.
+    name: String
+}
+
+
+-- Value Types
+
+value BootstrapResult {
+    -- Returned by Bootstrap rule.
+    namespaces: List<String>                    -- resolver namespace names discovered
+    graph_operational: Boolean                  -- true when graph/env returns non-nil
+}
+
+value SessionStatus {
+    -- Returned by QueryStatus rule.
+    session_id: String
+    current_state: Set<TaskState>               -- active states from statechart engine
+    history: List<TransitionRecord>             -- ordered transition log
+    error: Map?                                 -- present when session not found
+}
+
+value TransitionRecord {
+    session_id: String
+    from_state: TaskState
+    to_state: TaskState
+    event: String                                   -- TaskState value or control event (:error, :no_progress)
+    timestamp: Timestamp
+}
+
+
+-- Rules
+
+--- Bootstrap
+--
+-- Wiring the system: discover resolver namespaces, register transition
+-- logging, verify the graph is operational.  Must be called once before
+-- any execution.
+
+rule Bootstrap {
+    -- Discovers all loaded task-conductor.*.resolvers namespaces,
+    -- registers a transition listener for logging, and verifies the
+    -- pathom graph is operational.
+    when: BootstrapRequested
+    let resolver_ns = all loaded Namespace
+        with name starts_with "task-conductor."
+        and name ends_with ".resolvers"
+    ensures: TransitionListenerRegistered(LogTransition)
+    ensures: result = BootstrapResult {
+        namespaces: resolver_ns.each(ns => ns.name),
+        graph_operational: PathomGraph.env != nil
+    }
+}
+
+rule LogTransition {
+    -- Logs every statechart transition at info level.
+    -- Registered once during bootstrap, fires for all sessions.
+    when: TransitionOccurred(session_id, from_state, to_state, event)
+    ensures: logged(session_id, from_state, to_state, event)
+}
+
+
+--- Execution Entry Points
+--
+-- Public API for starting supervised execution.  Both run-task and
+-- run-story delegate to a shared execute-and-start sequence that
+-- calls the orchestration Execute rule via EQL mutation, then sends
+-- the initial state event to the statechart.
+
+rule RunTask {
+    -- Start supervised execution of a standalone task.
+    when: RunTaskRequested(project_dir, task_id)
+    ensures: ExecuteAndStart(project_dir, task_id)
+}
+
+rule RunStory {
+    -- Start supervised execution of a story.
+    -- Currently identical to RunTask; kept separate to allow divergence
+    -- when story execution adds child-task orchestration beyond what
+    -- the orchestration statechart provides.
+    when: RunStoryRequested(project_dir, story_id)
+    ensures: ExecuteAndStart(project_dir, story_id)
+}
+
+rule ExecuteAndStart {
+    -- Shared execution sequence.
+    -- Calls orchestration's execute! mutation via the pathom graph once,
+    -- then branches on whether the mutation succeeded or returned an error.
+    when: ExecuteAndStartRequested(project_dir, task_id)
+    let mutation_result = PathomGraph.mutate(
+        orchestration/Execute,
+        { project_dir: project_dir, task_id: task_id }
+    )
+
+    when mutation_result.error = nil:
+        ensures: orchestration/ExecutionSession.statechart.send(
+            mutation_result.session_id,
+            mutation_result.initial_state
+        )
+        ensures: result = {
+            session_id: mutation_result.session_id,
+            state: mutation_result.initial_state,
+            error: nil
+        }
+
+    when mutation_result.error != nil:
+        ensures: result = {
+            session_id: nil,
+            state: nil,
+            error: mutation_result.error
+        }
+}
+
+
+--- Session Introspection
+
+rule QueryStatus {
+    -- Query the current state and transition history of a session.
+    when: QueryStatusRequested(session_id)
+    ensures: result = SessionStatus {
+        session_id: session_id,
+        current_state: orchestration/ExecutionSession.statechart_state(session_id),
+        history: orchestration/ExecutionSession.history(session_id)
+    }
+}
+
+rule QueryStatusNotFound {
+    -- Session does not exist or has been stopped.
+    -- Note: spec models this as a nil-state guard; implementation uses
+    -- try/catch around statechart-engine/current-state which throws
+    -- when the session-id is unknown.  The intent is equivalent.
+    when: QueryStatusRequested(session_id)
+    requires: orchestration/ExecutionSession.statechart_state(session_id) = nil
+    ensures: result = SessionStatus {
+        session_id: session_id,
+        error: { error: session_not_found }
+    }
+}
+
+
+-- Surfaces
+
+surface BootstrapApi {
+    -- System lifecycle: initialize the engine before any execution.
+    -- Global scope — called once, affects all subsequent sessions.
+    for consumer: Operator
+
+    provides:
+        BootstrapRequested
+}
+
+surface AgentRunnerApi {
+    -- Session-scoped API for starting and monitoring agent execution.
+    -- QueryStatus accepts any session_id; QueryStatusNotFound handles
+    -- unknown sessions rather than requiring session existence upfront.
+    for consumer: Operator
+
+    provides:
+        RunTaskRequested(project_dir, task_id)
+        RunStoryRequested(project_dir, story_id)
+        QueryStatusRequested(session_id)
+}
+
+
+--- Engine Intent
+--
+-- The agent-runner is the Engine: statecharts + EQL + pathom composed
+-- into a programmable execution substrate.  What exists today (bootstrap,
+-- execute-and-start, status) is the first layer.  The intent below
+-- captures what the Engine is becoming.
+--
+-- Core invariant: capability grows by adding resolvers and mutations
+-- to the pathom graph, not by changing the engine.  The engine is the
+-- fixed point; the graph is the growth surface.
+--
+-- EQL is the universal interface.  Every action the system takes —
+-- fetching task data, invoking skills, querying status — is an EQL
+-- expression evaluated against the pathom graph.  Statechart entry
+-- actions are EQL mutations.  Status queries are EQL reads.  The AI
+-- agent and the human operator use the same query surface.
+
+--- Introspection
+--
+-- Engine queries Engine.  The system can describe its own registered
+-- charts, active sessions, resolver catalog, and transition history
+-- through the same EQL interface used for task execution.
+
+value ChartInfo {
+    -- Metadata about a registered statechart.
+    name: String                                    -- e.g. :execute/task
+    states: Set<String>                             -- state names in the chart
+    initial_state: String
+}
+
+value ResolverInfo {
+    -- Metadata about a registered pathom resolver or mutation.
+    name: String                                    -- fully qualified symbol
+    input: Set<String>                              -- required input attributes
+    output: Set<String>                             -- provided output attributes
+}
+
+deferred QueryRegisteredCharts                      -- list all registered statecharts as List<ChartInfo>
+deferred QueryActiveSessionIds                      -- list all active session ids
+deferred QueryResolverCatalog                       -- list all registered resolvers/mutations as List<ResolverInfo>
+
+--- Graph Emergence
+--
+-- The pathom graph is the growth surface.  Adding a resolver namespace
+-- extends what the system can do without touching the engine core.
+-- This is already true today: resolver namespaces self-register on load,
+-- and bootstrap discovers them dynamically.
+--
+-- Future extensions (git history, external APIs, knowledge base) follow
+-- the same pattern: add resolvers, the graph grows, the engine routes.
+
+deferred GitHistoryResolvers                        -- git log, diff, blame as EQL attributes
+deferred GitKnowledgeResolvers                      -- git object (blob, tree, commit) access via EQL
+deferred ExternalApiResolvers                       -- openapi/martian-backed resolvers for external services
+
+--- Memory
+--
+-- Memory = Query + Introspection + History + Knowledge.
+-- When the engine can query its own state (introspection), the git
+-- history (history), and git objects (knowledge), through a single
+-- EQL interface — it has memory.  The AI agent can recover context
+-- across sessions by querying what happened before.
+
+deferred MemoryQuery                                -- unified EQL query spanning introspection + git history + knowledge
+
+
+-- Intended Surfaces
+
+surface IntrospectionApi {
+    -- AI dev tools and the engine itself query system structure.
+    for consumer: Developer
+
+    deferred
+
+    exposes:
+        QueryRegisteredCharts
+        QueryActiveSessionIds
+        QueryResolverCatalog
+        QueryStatusRequested(session_id)
+
+    provides:
+        QueryRegisteredCharts
+        QueryActiveSessionIds
+        QueryResolverCatalog
+}
+
+surface GraphCatalog {
+    -- Browse the resolver graph: what inputs produce what outputs.
+    for consumer: Developer
+
+    deferred
+
+    exposes:
+        QueryResolverCatalog
+}
+
+
+-- Open Questions
+
+open_question "Should bootstrap verify that specific resolver namespaces are loaded, or is dynamic discovery sufficient?"
+open_question "Should status expose the full ExecutionSession (project_dir, pre_skill_state, etc.) beyond current-state and history?"
+open_question "Should run-task! and run-story! be unified into a single run! with task-type dispatch, since the orchestration statechart already handles both?"
+open_question "Should introspection queries be available during bootstrap, or only after the graph is operational?"
+open_question "Should the resolver catalog include resolver dependencies (which resolvers feed into which), enabling graph visualization?"
+open_question "Should Memory query results be cached across sessions, or always re-derived from git and system state?"
