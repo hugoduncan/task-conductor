@@ -114,18 +114,18 @@ rule ExecuteAndStart {
     -- 2. On success, send initial-state event to start the statechart
     -- 3. Return session-id and current state
     when: ExecuteAndStartRequested(project_dir, task_id)
-    let result = PathomGraph.mutate(
+    let mutation_result = PathomGraph.mutate(
         orchestration/Execute,
         { project_dir: project_dir, task_id: task_id }
     )
-    requires: result.error = nil
+    requires: mutation_result.error = nil
     ensures: orchestration/ExecutionSession.statechart.send(
-        result.session_id,
-        result.initial_state
+        mutation_result.session_id,
+        mutation_result.initial_state
     )
     ensures: result = {
-        session_id: result.session_id,
-        state: result.initial_state,
+        session_id: mutation_result.session_id,
+        state: mutation_result.initial_state,
         error: nil
     }
 }
@@ -133,15 +133,15 @@ rule ExecuteAndStart {
 rule ExecuteAndStartFailed {
     -- Error path: execute! mutation returned an error.
     when: ExecuteAndStartRequested(project_dir, task_id)
-    let result = PathomGraph.mutate(
+    let mutation_result = PathomGraph.mutate(
         orchestration/Execute,
         { project_dir: project_dir, task_id: task_id }
     )
-    requires: result.error != nil
+    requires: mutation_result.error != nil
     ensures: result = {
         session_id: nil,
         state: nil,
-        error: result.error
+        error: mutation_result.error
     }
 }
 
