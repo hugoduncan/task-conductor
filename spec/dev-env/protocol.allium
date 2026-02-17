@@ -1,0 +1,275 @@
+-- DevEnv Protocol Specification
+--
+-- Abstract contract for hosting interactive Claude CLI sessions.
+-- When a non-interactive CLI session needs human input, the orchestrator
+-- launches an interactive session via a dev-env implementation.
+--
+-- Implementations (Emacs, terminal, etc.) spawn the Claude CLI process
+-- directly. The JVM is notified of lifecycle events but does not own
+-- the process.
+
+
+-- External Entities
+
+external entity ClaudeSession {
+    -- A Claude CLI session, managed outside this spec.
+    id: String
+}
+
+external entity Event {
+    -- Raw session event, structure implementation-defined.
+    type: String
+    timestamp: Timestamp
+}
+
+
+-- Value Types
+
+value CallbackContext {
+    session_id: String
+    timestamp: Timestamp
+    reason: user_exit | error | timeout | idle
+}
+
+
+-- Entities
+
+entity DevEnv {
+    id: String
+    type: String                                    -- e.g. "emacs", "terminal"
+
+    -- Derived
+    is_connected: Boolean                           -- implementation-specific health check
+}
+
+entity Session {
+    id: String
+    dev_env: DevEnv
+    claude_session_id: String                       -- the Claude CLI session being resumed
+    dir: String                                     -- working directory
+    status: starting | active | idle | closed
+    close_reason: user_exit | error | timeout?      -- set when session closes
+
+    -- Relationships
+    hooks: Hook for this session
+
+    -- Derived
+    transcript: String?                             -- implementation-provided
+    events: List<Event>?                            -- implementation-provided
+}
+
+entity Hook {
+    id: String
+    session: Session
+    type: on_close | on_idle
+    -- callback is opaque and implementation-defined; not modelled as a field
+}
+
+entity Registry {
+    -- Singleton: manages all dev-env instances.
+    entries: DevEnv for this registry
+
+    -- Derived
+    available: entries with is_connected = true
+}
+
+
+-- Config
+
+config {
+    command_response_timeout: Duration = 30.seconds
+    ping_timeout: Duration = 5.seconds
+    await_timeout: Duration = 60.seconds
+}
+
+
+-- Rules
+
+--- Session Lifecycle
+
+rule StartSession {
+    when: StartSessionRequested(dev_env, claude_session_id, dir)
+    requires: dev_env.is_connected
+    ensures: Session.created(
+        dev_env: dev_env,
+        claude_session_id: claude_session_id,
+        dir: dir,
+        status: starting
+    )
+}
+
+rule SessionBecomeActive {
+    -- Session transitions to active once the dev-env confirms it is running.
+    when: session: Session.status becomes starting
+    ensures: session.status = active
+    -- Note: in practice, the dev-env implementation signals this transition.
+    -- Modelled here as immediate for the protocol contract.
+}
+
+rule SessionBecomesIdle {
+    -- Session transitions to idle when waiting for user input.
+    when: SessionIdleDetected(session)
+    requires: session.status = active
+    ensures: session.status = idle
+}
+
+rule SessionResumesFromIdle {
+    when: SessionActivityDetected(session)
+    requires: session.status = idle
+    ensures: session.status = active
+}
+
+rule CloseSession {
+    when: CloseSessionRequested(dev_env, session)
+    requires: session.status in [starting, active, idle]
+    let session_hooks = session.hooks
+    ensures: session_hooks.each(h => not exists h)
+    ensures: session.status = closed
+}
+
+rule SessionClosedByEvent {
+    -- Session closed externally (user exit, error, timeout).
+    when: SessionClosedExternally(session, reason)
+    requires: session.status in [starting, active, idle]
+    let session_hooks = session.hooks
+    ensures: session.close_reason = reason
+    ensures: session_hooks.each(h => not exists h)
+    ensures: session.status = closed
+}
+
+--- Hook Management
+
+rule RegisterHook {
+    when: RegisterHookRequested(session, hook_type, callback)
+    requires: session.status in [starting, active, idle]
+    requires: hook_type in [on_close, on_idle]
+    ensures: Hook.created(
+        session: session,
+        type: hook_type,
+        callback: callback
+    )
+}
+
+rule FireOnCloseHooks {
+    -- When a session closes, fire all on_close hooks before cleanup.
+    when: session: Session.status becomes closed
+    for hook in session.hooks with type = on_close:
+        ensures: HookFired(hook, CallbackContext{
+            session_id: session.id,
+            timestamp: now,
+            reason: session.close_reason
+        })
+}
+
+rule FireOnIdleHooks {
+    when: session: Session.status becomes idle
+    for hook in session.hooks with type = on_idle:
+        ensures: HookFired(hook, CallbackContext{
+            session_id: session.id,
+            timestamp: now,
+            reason: idle
+        })
+}
+
+--- Registry
+
+rule RegisterDevEnv {
+    when: RegisterDevEnvRequested(dev_env, type, meta)
+    ensures: dev_env.type = type
+    ensures: dev_env.meta = meta
+}
+
+rule UnregisterDevEnv {
+    when: UnregisterDevEnvRequested(dev_env)
+    ensures: not exists dev_env
+}
+
+rule SelectDevEnv {
+    -- Select the first connected dev-env.
+    when: SelectDevEnvRequested(registry)
+    let candidates = registry.available
+    requires: candidates.count > 0
+    ensures: DevEnvSelected(candidates.first)
+}
+
+--- Health
+
+rule Ping {
+    -- Lightweight health check.
+    when: PingRequested(dev_env)
+    ensures:
+        if dev_env.is_connected:
+            PingSucceeded(dev_env)
+        else:
+            PingFailed(dev_env)
+}
+
+--- Querying
+
+rule QueryTranscript {
+    when: QueryTranscriptRequested(dev_env, session)
+    requires: dev_env.is_connected
+    ensures: TranscriptReturned(session, session.transcript)
+}
+
+rule QueryEvents {
+    -- Planned: not yet implemented.
+    when: QueryEventsRequested(dev_env, session)
+    requires: dev_env.is_connected
+    ensures: EventsReturned(session, session.events)
+}
+
+deferred QueryEvents.implementation    -- planned, not yet implemented
+
+
+-- Surfaces
+
+surface DevEnvRegistry {
+    -- EQL query surface for discovering and selecting dev-envs.
+    for consumer: Orchestrator
+
+    context registry: Registry
+
+    exposes:
+        for entry in registry.entries:
+            entry.id
+            entry.type
+            entry.is_connected
+
+    provides:
+        RegisterDevEnvRequested(dev_env, type, meta)
+        UnregisterDevEnvRequested(dev_env)
+        SelectDevEnvRequested(registry)
+        PingRequested(dev_env)
+            when dev_env in registry.entries
+}
+
+surface SessionControl {
+    -- EQL mutation surface for managing sessions.
+    for consumer: Orchestrator
+
+    context dev_env: DevEnv with is_connected = true
+
+    exposes:
+        for session in Session with dev_env = dev_env:
+            session.id
+            session.status
+            session.claude_session_id
+
+    provides:
+        StartSessionRequested(dev_env, claude_session_id, dir)
+        CloseSessionRequested(dev_env, session)
+            when session.status in [starting, active, idle]
+        RegisterHookRequested(session, hook_type, callback)
+            when session.status in [starting, active, idle]
+        QueryTranscriptRequested(dev_env, session)
+        QueryEventsRequested(dev_env, session)
+}
+
+
+-- Open Questions
+
+open_question "Should dev-env selection use ping-based health checks or trust cached connected? status?"
+open_question "Should hook cleanup happen before or after on_close hooks fire? Current: hooks fire then are removed."
+open_question "Should QueryEvents return structured event types or raw maps?"
+open_question "Session idle detection — should the protocol define a standard idle timeout, or leave entirely to implementations?"
