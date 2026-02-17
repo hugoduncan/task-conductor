@@ -9,7 +9,8 @@
 -- pathom mutations, resolver namespaces self-register on load, and the
 -- graph is the single execution substrate for all side effects.
 --
--- This spec documents what exists today in agent-runner core.clj.
+-- This spec documents what exists today in agent-runner core.clj and
+-- articulates the Engine intent: where the system is heading.
 
 use orchestration
 use protocol
@@ -186,8 +187,109 @@ surface AgentRunnerApi {
 }
 
 
+--- Engine Intent
+--
+-- The agent-runner is the Engine: statecharts + EQL + pathom composed
+-- into a programmable execution substrate.  What exists today (bootstrap,
+-- execute-and-start, status) is the first layer.  The intent below
+-- captures what the Engine is becoming.
+--
+-- Core invariant: capability grows by adding resolvers and mutations
+-- to the pathom graph, not by changing the engine.  The engine is the
+-- fixed point; the graph is the growth surface.
+--
+-- EQL is the universal interface.  Every action the system takes —
+-- fetching task data, invoking skills, querying status — is an EQL
+-- expression evaluated against the pathom graph.  Statechart entry
+-- actions are EQL mutations.  Status queries are EQL reads.  The AI
+-- agent and the human operator use the same query surface.
+
+--- Introspection
+--
+-- Engine queries Engine.  The system can describe its own registered
+-- charts, active sessions, resolver catalog, and transition history
+-- through the same EQL interface used for task execution.
+
+value ChartInfo {
+    -- Metadata about a registered statechart.
+    name: String                                    -- e.g. :execute/task
+    states: Set<String>                             -- state names in the chart
+    initial_state: String
+}
+
+value ResolverInfo {
+    -- Metadata about a registered pathom resolver or mutation.
+    name: String                                    -- fully qualified symbol
+    input: Set<String>                              -- required input attributes
+    output: Set<String>                             -- provided output attributes
+}
+
+deferred QueryRegisteredCharts                      -- list all registered statecharts as List<ChartInfo>
+deferred QueryActiveSessionIds                      -- list all active session ids
+deferred QueryResolverCatalog                       -- list all registered resolvers/mutations as List<ResolverInfo>
+
+--- Graph Emergence
+--
+-- The pathom graph is the growth surface.  Adding a resolver namespace
+-- extends what the system can do without touching the engine core.
+-- This is already true today: resolver namespaces self-register on load,
+-- and bootstrap discovers them dynamically.
+--
+-- Future extensions (git history, external APIs, knowledge base) follow
+-- the same pattern: add resolvers, the graph grows, the engine routes.
+
+deferred GitHistoryResolvers                        -- git log, diff, blame as EQL attributes
+deferred GitKnowledgeResolvers                      -- git object (blob, tree, commit) access via EQL
+deferred ExternalApiResolvers                       -- openapi/martian-backed resolvers for external services
+
+--- Memory
+--
+-- Memory = Query + Introspection + History + Knowledge.
+-- When the engine can query its own state (introspection), the git
+-- history (history), and git objects (knowledge), through a single
+-- EQL interface — it has memory.  The AI agent can recover context
+-- across sessions by querying what happened before.
+
+deferred MemoryQuery                                -- unified EQL query spanning introspection + git history + knowledge
+
+
+-- Intended Surfaces
+
+surface IntrospectionApi {
+    -- AI dev tools and the engine itself query system structure.
+    for consumer: Developer
+
+    deferred
+
+    exposes:
+        QueryRegisteredCharts
+        QueryActiveSessionIds
+        QueryResolverCatalog
+        for session in orchestration/ExecutionSession:
+            QueryStatusRequested(session.id)
+
+    provides:
+        QueryRegisteredCharts
+        QueryActiveSessionIds
+        QueryResolverCatalog
+}
+
+surface GraphCatalog {
+    -- Browse the resolver graph: what inputs produce what outputs.
+    for consumer: Developer
+
+    deferred
+
+    exposes:
+        QueryResolverCatalog
+}
+
+
 -- Open Questions
 
 open_question "Should bootstrap verify that specific resolver namespaces are loaded, or is dynamic discovery sufficient?"
 open_question "Should status expose the full ExecutionSession (project_dir, pre_skill_state, etc.) beyond current-state and history?"
 open_question "Should run-task! and run-story! be unified into a single run! with task-type dispatch, since the orchestration statechart already handles both?"
+open_question "Should introspection queries be available during bootstrap, or only after the graph is operational?"
+open_question "Should the resolver catalog include resolver dependencies (which resolvers feed into which), enabling graph visualization?"
+open_question "Should Memory query results be cached across sessions, or always re-derived from git and system state?"
