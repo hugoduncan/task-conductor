@@ -1,0 +1,553 @@
+-- Orchestration Specification
+--
+-- Statechart-driven execution of tasks and stories.  The orchestrator
+-- derives state from mcp-tasks data, starts a statechart session, and
+-- invokes skills (Claude CLI) for each state's entry action.  When a
+-- skill makes no progress, the system escalates to a dev-env for human
+-- intervention.
+--
+-- State derivation is pure: task data in, state keyword out.
+-- Statecharts route events; entry actions trigger side effects.
+
+use protocol
+
+
+-- External Entities
+
+external entity Task {
+    -- An mcp-tasks task or story.  Fields relevant to state derivation.
+    id: Integer
+    type: task | story
+    status: open | in_progress | blocked | done | closed | deleted
+    meta: Map?                                  -- contains :refined key when refined
+    pr_num: Integer?                            -- GitHub PR number
+    code_reviewed: Timestamp?                   -- ISO-8601 when reviewed
+    pr_merged: Boolean?                         -- true when PR merged
+}
+
+external entity ClaudeCli {
+    -- Claude CLI process, managed by claude-cli component.
+    -- Returns result-promise that delivers on completion.
+    session_id: String?                         -- Claude conversation UUID
+    exit_code: Integer
+    error: Map?
+}
+
+
+-- Value Types
+
+value TaskData {
+    -- Unnamespaced projection of Task fields used by state derivation.
+    status: open | in_progress | blocked | done | closed
+    meta: Map?
+    pr_num: Integer?
+    code_reviewed: Timestamp?
+    pr_merged: Boolean?
+
+    -- Derived
+    is_refined: meta contains :refined
+}
+
+value SkillSpec {
+    -- Identifies which skill to invoke for a statechart state.
+    name: String                                -- e.g. "mcp-tasks:refine-task (MCP)"
+    on_complete: TaskState?                     -- if set, send this event instead of re-deriving
+}
+
+
+-- Entities
+
+entity ExecutionSession {
+    -- Tracks a running statechart execution.
+    -- Stored in statechart session data, keyed by session-id.
+    id: String                                  -- UUID, same as statechart session-id
+    project_dir: String                         -- worktree path for skill invocation
+    task_id: Integer
+    task_type: task | story
+
+    -- Skill progress tracking
+    pre_skill_state: TaskState?                 -- derived state before skill ran
+    pre_skill_open_children: Integer?           -- open children count before skill (stories only)
+    last_claude_session_id: String?             -- for resume on escalation
+    on_complete: TaskState?                     -- override event for terminal actions
+
+    -- Derived
+    statechart_state: TaskState                 -- current state from statechart engine
+}
+
+
+-- Enums
+
+-- TaskState covers both task and story execution.
+-- Task uses all except has_tasks; story uses all.
+enum TaskState {
+    idle
+    unrefined
+    refined
+    has_tasks                                   -- story only
+    done
+    awaiting_pr
+    wait_pr_merge
+    merging_pr
+    complete
+    escalated
+}
+
+
+-- Config
+
+config {
+    -- Skill specs per state.  Entry actions look up the skill for the
+    -- current state and invoke it.
+
+    -- Task skills
+    task_refine_skill: SkillSpec = { name: "mcp-tasks:refine-task (MCP)" }
+    task_execute_skill: SkillSpec = { name: "mcp-tasks:execute-task (MCP)" }
+    task_review_skill: SkillSpec = { name: "mcp-tasks:review-task-implementation (MCP)" }
+    task_create_pr_skill: SkillSpec = { name: "mcp-tasks:create-task-pr (MCP)" }
+
+    -- Story skills
+    story_create_tasks_skill: SkillSpec = { name: "mcp-tasks:create-story-tasks (MCP)" }
+    story_execute_child_skill: SkillSpec = { name: "mcp-tasks:execute-story-child (MCP)" }
+    story_review_skill: SkillSpec = { name: "mcp-tasks:review-story-implementation (MCP)" }
+    story_create_pr_skill: SkillSpec = { name: "mcp-tasks:create-story-pr (MCP)" }
+
+    -- Shared
+    merge_pr_skill: SkillSpec = { name: "squash-merge-on-gh", on_complete: complete }
+}
+
+
+-- Rules
+
+--- State Derivation
+--
+-- Pure functions: task data in, state keyword out.
+-- No side effects, no external queries.
+-- The statechart does NOT drive derivation; derivation drives the statechart.
+
+rule DeriveTaskState {
+    -- Derive execution state for a standalone task.
+    -- Evaluated in priority order (first match wins).
+    when: DeriveTaskStateRequested(task_data: TaskData)
+    ensures: result =
+        if task_data.status = closed:                                    complete
+        else if task_data.pr_num exists and task_data.pr_merged:         complete
+        else if task_data.pr_num exists:                                 wait_pr_merge
+        else if task_data.status = done and task_data.code_reviewed exists: awaiting_pr
+        else if task_data.status = done:                                 done
+        else if task_data.is_refined:                                    refined
+        else:                                                            unrefined
+}
+
+rule DeriveStoryState {
+    -- Derive execution state for a story with children.
+    -- Children filtering: deleted tasks are excluded from consideration.
+    -- Children complete: all active children have status done or closed.
+    when: DeriveStoryStateRequested(story_data: TaskData, children: List<TaskData>)
+    let active = children with status not in [deleted]
+    let all_complete = active.count > 0
+                       and active.each(c => c.status in [done, closed])
+    let has_incomplete = active.count > 0
+                         and active.any(c => c.status not in [done, closed])
+    ensures: result =
+        if story_data.status = closed:                                      complete
+        else if story_data.pr_num exists and story_data.pr_merged:          complete
+        else if story_data.pr_num exists:                                   wait_pr_merge
+        else if all_complete and story_data.code_reviewed exists:            awaiting_pr
+        else if all_complete:                                               done
+        else if has_incomplete:                                             has_tasks
+        else if story_data.is_refined:                                      refined
+        else:                                                               unrefined
+}
+
+
+--- Statechart Definitions
+--
+-- Two statecharts: one for tasks, one for stories.
+-- States match DeriveTaskState/DeriveStoryState return values.
+-- Transitions triggered by sending derived state as event.
+-- Entry actions invoke skills; escalated invokes dev-env handoff.
+
+--- TaskExecution Statechart
+--
+-- idle → unrefined → refined → done → awaiting_pr → wait_pr_merge → merging_pr → complete
+-- Any state with an entry action can transition to escalated on :error or :no_progress.
+-- Escalated can transition to any non-terminal state (re-derived after human intervention).
+
+rule TaskStatechart {
+    -- Registered as :execute/task in the statechart engine.
+    -- Initial state: idle.
+
+    -- idle: hub state, accepts any derived state as initial transition
+    state idle {
+        on unrefined -> unrefined
+        on refined -> refined
+        on done -> done
+        on awaiting_pr -> awaiting_pr
+        on wait_pr_merge -> wait_pr_merge
+        on complete -> complete
+    }
+
+    -- unrefined: needs refinement
+    state unrefined {
+        entry: InvokeSkill(config.task_refine_skill)
+        on refined -> refined
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    -- refined: ready for execution
+    state refined {
+        entry: InvokeSkill(config.task_execute_skill)
+        on done -> done
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    -- done: executed, awaiting code review
+    state done {
+        entry: InvokeSkill(config.task_review_skill)
+        on awaiting_pr -> awaiting_pr
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    -- awaiting_pr: reviewed, needs PR creation
+    state awaiting_pr {
+        entry: InvokeSkill(config.task_create_pr_skill)
+        on wait_pr_merge -> wait_pr_merge
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    -- wait_pr_merge: PR created, waiting for external merge event
+    state wait_pr_merge {
+        -- No entry action; waits for external trigger.
+        on merge_pr -> merging_pr
+        on complete -> complete
+        on error -> escalated
+    }
+
+    -- merging_pr: squash-merging the PR on GitHub
+    state merging_pr {
+        entry: InvokeSkill(config.merge_pr_skill)
+        on complete -> complete
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    -- complete: terminal
+    final complete
+
+    -- escalated: human intervention needed
+    state escalated {
+        entry: EscalateToDevEnv(session)
+        on unrefined -> unrefined
+        on refined -> refined
+        on done -> done
+        on awaiting_pr -> awaiting_pr
+        on wait_pr_merge -> wait_pr_merge
+        on complete -> complete
+    }
+}
+
+--- StoryExecution Statechart
+--
+-- Extends task statechart with has_tasks state for child iteration.
+-- refined entry creates story tasks (not executes).
+-- has_tasks entry executes next child; can loop back to itself.
+-- done entry reviews entire story; can loop back to has_tasks.
+
+rule StoryStatechart {
+    -- Registered as :execute/story in the statechart engine.
+    -- Initial state: idle.
+
+    state idle {
+        on unrefined -> unrefined
+        on refined -> refined
+        on has_tasks -> has_tasks
+        on done -> done
+        on awaiting_pr -> awaiting_pr
+        on wait_pr_merge -> wait_pr_merge
+        on complete -> complete
+    }
+
+    state unrefined {
+        entry: InvokeSkill(config.task_refine_skill)
+        on refined -> refined
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    -- refined: creates child tasks (not executes)
+    state refined {
+        entry: InvokeSkill(config.story_create_tasks_skill)
+        on has_tasks -> has_tasks
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    -- has_tasks: execute next incomplete child, can self-loop
+    state has_tasks {
+        entry: InvokeSkill(config.story_execute_child_skill)
+        on has_tasks -> has_tasks
+        on done -> done
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    -- done: all children complete, review entire story
+    state done {
+        entry: InvokeSkill(config.story_review_skill)
+        on has_tasks -> has_tasks                   -- review found issues
+        on awaiting_pr -> awaiting_pr
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    state awaiting_pr {
+        entry: InvokeSkill(config.story_create_pr_skill)
+        on wait_pr_merge -> wait_pr_merge
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    state wait_pr_merge {
+        on merge_pr -> merging_pr
+        on complete -> complete
+        on error -> escalated
+    }
+
+    state merging_pr {
+        entry: InvokeSkill(config.merge_pr_skill)
+        on complete -> complete
+        on error -> escalated
+        on no_progress -> escalated
+    }
+
+    final complete
+
+    state escalated {
+        entry: EscalateToDevEnv(session)
+        on unrefined -> unrefined
+        on refined -> refined
+        on has_tasks -> has_tasks
+        on done -> done
+        on awaiting_pr -> awaiting_pr
+        on wait_pr_merge -> wait_pr_merge
+        on complete -> complete
+    }
+}
+
+
+--- Execute! Command
+--
+-- Entry point: starts automated execution of a task or story.
+
+rule Execute {
+    -- 1. Call mcp-tasks work-on to get worktree path
+    -- 2. Fetch task data via EQL
+    -- 3. Derive initial state
+    -- 4. Start statechart session
+    -- 5. Select dev-env and register on-idle hook
+    -- 6. Send initial state as first event
+    when: ExecuteRequested(project_dir, task_id)
+    let worktree = WorkOn(project_dir, task_id)
+    requires: worktree.error = nil
+    let task = FetchTask(worktree.path, task_id)
+    requires: task.error = nil
+    let is_story = task.type = story
+    let children = if is_story: FetchChildren(worktree.path, task_id) else: []
+    let chart = if is_story: StoryStatechart else: TaskStatechart
+    let session = ExecutionSession.created(
+        project_dir: worktree.path,
+        task_id: task_id,
+        task_type: task.type
+    )
+    let initial_state = if is_story:
+        DeriveStoryState(task, children)
+    else:
+        DeriveTaskState(task)
+    ensures: chart.started(session)
+    ensures:
+        let dev_env = SelectDevEnv(Registry)
+        if dev_env exists:
+            RegisterDevEnvHook(dev_env, session, on_idle, complete)
+    ensures: chart.send(session, initial_state)
+}
+
+
+--- Skill Invocation
+--
+-- Entry actions invoke skills via Claude CLI.  The invocation is async:
+-- the rule returns immediately; a background thread awaits completion
+-- and triggers the next transition.
+
+rule InvokeSkill {
+    -- Called by statechart entry actions.
+    when: InvokeSkillRequested(session: ExecutionSession, skill: SkillSpec)
+    -- Store on_complete override if skill specifies one
+    ensures: session.on_complete = skill.on_complete
+    -- Snapshot current state for no-progress detection
+    ensures: StorePreSkillState(session)
+    -- Launch CLI with skill as prompt
+    let handle = ClaudeCli.invoke(prompt: "/" + skill.name, dir: session.project_dir)
+    -- Await result asynchronously; on delivery trigger OnSkillComplete
+    ensures: async { OnSkillComplete(session, handle.result) }
+}
+
+rule StorePreSkillState {
+    -- Snapshot derived state and open children count before skill runs.
+    -- Derives from task data (not statechart state) because entry actions
+    -- execute before the statechart session atom updates.
+    when: StorePreSkillStateRequested(session: ExecutionSession)
+    let task = FetchTask(session.project_dir, session.task_id)
+    let children = if session.task_type = story:
+        FetchChildren(session.project_dir, session.task_id) else: []
+    let current_state = if session.task_type = story:
+        DeriveStoryState(task, children) else: DeriveTaskState(task)
+    let open_count = if session.task_type = story:
+        children with status not in [closed, done, deleted] . count
+    else: nil
+    ensures: session.pre_skill_state = current_state
+    ensures: session.pre_skill_open_children = open_count
+}
+
+
+--- Skill Completion
+
+rule OnSkillComplete {
+    -- Handle skill result.  Re-derives state and checks for progress.
+    -- Guards against session stopped during skill execution.
+    when: SkillCompleted(session: ExecutionSession, result: ClaudeCli)
+    requires: session.statechart_state exists        -- session still alive
+    ensures:
+        if result.error exists:
+            session.statechart.send(error)
+
+        else if session.on_complete exists:
+            -- Terminal action (e.g. merge): send predetermined event
+            session.statechart.send(session.on_complete)
+
+        else:
+            -- Re-derive state and check progress
+            let task = FetchTask(session.project_dir, session.task_id)
+            let children = if session.task_type = story:
+                FetchChildren(session.project_dir, session.task_id) else: []
+            let new_state = if session.task_type = story:
+                DeriveStoryState(task, children) else: DeriveTaskState(task)
+            if NoProgress(session, new_state, children):
+                session.last_claude_session_id = result.session_id
+                session.statechart.send(no_progress)
+            else:
+                session.statechart.send(new_state)
+}
+
+
+--- No-Progress Detection
+
+rule NoProgress {
+    -- Determines whether a skill made any forward progress.
+    -- For most states: new derived state == pre-skill state means no progress.
+    -- For has_tasks: state unchanged AND open children count unchanged.
+    -- The open-children check prevents false positives when a child task
+    -- completes but more remain (state stays has_tasks, but progress was made).
+    when: NoProgressCheck(session: ExecutionSession, new_state: TaskState, children: List<TaskData>)
+    let was_has_tasks = session.pre_skill_state = has_tasks
+    let is_has_tasks = new_state = has_tasks
+    ensures: result =
+        if was_has_tasks and is_has_tasks:
+            let new_open_count = children with status not in [closed, done, deleted] . count
+            session.pre_skill_open_children = new_open_count
+        else:
+            session.pre_skill_state = new_state
+}
+
+
+--- Escalation
+--
+-- When no progress is detected or an error occurs, the statechart
+-- transitions to :escalated.  The entry action hands off to a dev-env
+-- for human intervention.
+
+rule EscalateToDevEnv {
+    -- Select a dev-env, start an interactive session, register on-close
+    -- hook to resume the statechart when the human finishes.
+    when: EscalateRequested(session: ExecutionSession)
+    let dev_env = SelectDevEnv(Registry)
+    requires: dev_env exists
+    let opts = {
+        dir: session.project_dir,
+        task_id: session.task_id
+    }
+    -- If we have a Claude session-id from a no-progress skill,
+    -- pass it for conversation resumption.
+    let opts = if session.last_claude_session_id exists:
+        opts with claude_session_id = session.last_claude_session_id
+    else: opts
+    ensures: StartSession(dev_env, session.id, opts)
+    ensures: RegisterHook(dev_env, session.id, on_close, OnDevEnvClose(session))
+}
+
+rule EscalateNoDevEnv {
+    -- No dev-env available.  Session remains in escalated state.
+    when: EscalateRequested(session: ExecutionSession)
+    requires: SelectDevEnv(Registry) = nil
+    ensures: result = { error: no_dev_env, message: "No dev-env available for escalation" }
+}
+
+rule OnDevEnvClose {
+    -- Human closed the dev-env session.  Re-derive state and resume
+    -- the statechart from wherever the human left the task.
+    -- Guards against session stopped while dev-env was open.
+    when: DevEnvSessionClosed(session: ExecutionSession)
+    requires: session.statechart_state exists         -- session still alive
+    let task = FetchTask(session.project_dir, session.task_id)
+    let children = if session.task_type = story:
+        FetchChildren(session.project_dir, session.task_id) else: []
+    let new_state = if session.task_type = story:
+        DeriveStoryState(task, children) else: DeriveTaskState(task)
+    ensures: session.statechart.send(new_state)
+}
+
+
+--- Dev-Env Hook Bridge
+--
+-- Connects dev-env hooks to statechart events.
+-- Used by Execute to register on-idle → :complete events.
+
+rule RegisterDevEnvHook {
+    -- Register a dev-env hook that sends a statechart event when fired.
+    when: RegisterDevEnvHookRequested(dev_env, session: ExecutionSession, hook_type, event)
+    ensures: RegisterHook(dev_env, session.id, hook_type,
+        callback: fn(context) => session.statechart.send(event))
+}
+
+
+-- Surfaces
+
+surface ExecutionStatus {
+    -- Introspection surface for monitoring execution sessions.
+    for consumer: Operator
+
+    exposes:
+        for session in ExecutionSession:
+            session.id
+            session.task_id
+            session.task_type
+            session.project_dir
+            session.statechart_state
+            session.pre_skill_state
+            session.last_claude_session_id
+
+    provides:
+        ExecuteRequested(project_dir, task_id)
+}
+
+
+-- Open Questions
+
+open_question "Should escalation retry dev-env selection after a timeout, or remain stuck until manually resolved?"
+open_question "Should the system track skill invocation history (which skills ran, duration, outcome) for debugging?"
+open_question "Should wait_pr_merge poll for merge status, or rely entirely on external events?"
+open_question "Should on-complete override be part of SkillSpec or a separate statechart mechanism?"
