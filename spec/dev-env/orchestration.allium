@@ -34,6 +34,16 @@ external entity ClaudeCli {
 }
 
 
+-- External Operations
+-- EQL queries and mutations provided by the pathom graph.
+-- These are used by Execute, StorePreSkillState, OnSkillComplete, and
+-- OnDevEnvClose but implemented in the mcp-tasks and project components.
+
+deferred WorkOn                                        -- mutation: sets up worktree for task, returns {path, error?}
+deferred FetchTask                                     -- query: fetches task data by (path, task_id), returns TaskData with {type, error?}
+deferred FetchChildren                                 -- query: fetches child tasks for (path, task_id), returns List<TaskData>
+
+
 -- Value Types
 
 value TaskData {
