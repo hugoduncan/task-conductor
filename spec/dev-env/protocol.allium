@@ -34,6 +34,9 @@ value CallbackContext {
 value SessionOpts {
     dir: String                                     -- working directory
     claude_session_id: String?                      -- CLI session to resume
+    -- Note: The Clojure protocol also accepts :on-started callback in opts.
+    -- Omitted here: opaque fn values are implementation-level wiring,
+    -- not part of the domain contract.
 }
 
 
