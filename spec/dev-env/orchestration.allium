@@ -110,7 +110,8 @@ config {
     -- Skill specs per state.  Entry actions look up the skill for the
     -- current state and invoke it.
 
-    -- Task skills
+    -- Task skills (task_refine_skill is also used by story statechart's
+    -- unrefined state — both types share the same refine-task action)
     task_refine_skill: SkillSpec = { name: "mcp-tasks:refine-task (MCP)" }
     task_execute_skill: SkillSpec = { name: "mcp-tasks:execute-task (MCP)" }
     task_review_skill: SkillSpec = { name: "mcp-tasks:review-task-implementation (MCP)" }
