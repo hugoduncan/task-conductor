@@ -502,7 +502,7 @@ rule EscalateToDevEnv {
         opts with claude_session_id = session.last_claude_session_id
     else: opts
     ensures: StartSession(dev_env, session.id, opts)
-    ensures: RegisterHook(dev_env, session.id, on_close, OnDevEnvClose(session))
+    ensures: RegisterHook(dev_env, session.id, on_close, OnDevEnvClose(session, _context))
 }
 
 rule EscalateNoDevEnv {
@@ -516,7 +516,7 @@ rule OnDevEnvClose {
     -- Human closed the dev-env session.  Re-derive state and resume
     -- the statechart from wherever the human left the task.
     -- Guards against session stopped while dev-env was open.
-    when: DevEnvSessionClosed(session: ExecutionSession)
+    when: DevEnvSessionClosed(session: ExecutionSession, _context: Map)
     requires: session.statechart_state exists         -- session still alive
     let task = FetchTask(session.project_dir, session.task_id)
     let children = if session.task_type = story:
