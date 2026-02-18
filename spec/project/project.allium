@@ -254,7 +254,7 @@ rule InvokeSkillMutation {
         on_complete: TaskState?                    -- optional predetermined event
     })
     implements: orchestration.InvokeSkill
-    ensures: result = { status: started }
+    ensures: result = { status: started, error: Map? }
 }
 
 rule EscalateToDevEnvMutation {
