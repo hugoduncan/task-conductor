@@ -1,0 +1,322 @@
+-- Project Component Specification
+--
+-- Project registry + EQL wiring for orchestration.
+-- Manages a set of registered projects (keyed by canonical filesystem path)
+-- and provides the concrete execute!, invoke-skill!, and escalate-to-dev-env!
+-- mutations that the orchestration statechart entry actions call.
+--
+-- Additive to orchestration.allium: this spec supplies the implementation
+-- details for Execute, InvokeSkill, and EscalateToDevEnv rules without
+-- duplicating state derivation, statechart definitions, or abstract
+-- execution rules already specified there.
+--
+-- Naming: allium uses snake_case; the Clojure implementation uses kebab-case.
+
+use orchestration
+
+
+-- External Entities
+
+external entity PathomGraph {
+    -- The shared Pathom3 graph.  Resolvers and mutations auto-register
+    -- on namespace load via pathom-graph component macros.
+    env: Map
+}
+
+external entity FileSystem {
+    -- Path canonicalization via java.io.File.
+    -- Used by registry to resolve symlinks to absolute paths.
+}
+
+
+-- Value Types
+
+value RegistrationResult {
+    -- Returned by Register rule.
+    project: Project?                              -- present on success
+    error: path_not_found | not_a_directory
+         | duplicate_path | duplicate_name?        -- present on failure
+    message: String?
+}
+
+value UpdateResult {
+    -- Returned by UpdateProject rule.
+    project: Project?                              -- present on success
+    error: project_not_found | duplicate_name?     -- present on failure
+    message: String?
+}
+
+
+-- Entities
+
+entity Project {
+    path: String                                   -- canonical absolute filesystem path
+    name: String                                   -- unique display name
+
+    -- Derived
+    path_segment: FileSystem.file_name(path)       -- final segment of path
+}
+
+entity ProjectRegistry {
+    -- In-memory atom, keyed by canonical path.
+    -- Singleton: one registry per JVM.
+    entries: Map<String, Project>                   -- canonical path -> Project
+
+    -- Derived
+    all_projects: entries.values
+}
+
+
+-- Config
+
+config {
+    updatable_keys: Set<String> = { "name" }       -- only :project/name can be modified
+}
+
+
+-- Rules
+
+--- Registry Operations
+
+rule Canonicalize {
+    -- Resolve path to canonical absolute form via java.io.File.getCanonicalPath.
+    when: CanonicalizeRequested(path)
+    ensures: result = FileSystem.canonical_path(path)
+}
+
+rule ValidatePath {
+    -- Check path exists and is a directory.
+    when: ValidatePathRequested(path)
+    ensures: result =
+        if not FileSystem.exists(path):
+            { error: path_not_found, message: "Path does not exist: " + path }
+        else if not FileSystem.is_directory(path):
+            { error: not_a_directory, message: "Path is not a directory: " + path }
+        else:
+            nil
+}
+
+rule Register {
+    -- Create project at path.  Name defaults to final path segment.
+    -- Validates path, canonicalizes, checks path and name uniqueness.
+    when: RegisterRequested(registry, path, name?)
+    let canonical = Canonicalize(path)
+    let validation = ValidatePath(canonical)
+    requires: validation = nil
+    let effective_name = name or Project.path_segment(canonical)
+    requires: registry.entries.get(canonical) = nil
+        -- error: duplicate_path
+    requires: registry.all_projects.none(p => p.name = effective_name)
+        -- error: duplicate_name
+    let project = Project { path: canonical, name: effective_name }
+    ensures: registry.entries.put(canonical, project)
+    ensures: result = RegistrationResult { project: project }
+}
+
+rule Unregister {
+    -- Remove project by path.  Returns removed project or nil.
+    when: UnregisterRequested(registry, path)
+    let canonical = Canonicalize(path)
+    let existing = registry.entries.get(canonical)
+    ensures: registry.entries.remove(canonical)
+    ensures: result = existing
+}
+
+rule UpdateProject {
+    -- Update project name.  Only :project/name can be modified.
+    -- Checks name uniqueness against other projects.
+    when: UpdateProjectRequested(registry, path, updates)
+    let canonical = Canonicalize(path)
+    let existing = registry.entries.get(canonical)
+    requires: existing exists
+        -- error: project_not_found
+    let allowed = updates restricted to config.updatable_keys
+    let new_name = allowed.name
+    requires:
+        if new_name exists and new_name != existing.name:
+            registry.all_projects.none(p => p.name = new_name)
+            -- error: duplicate_name
+    let updated = existing merged with allowed
+    ensures: registry.entries.put(canonical, updated)
+    ensures: result = UpdateResult { project: updated }
+}
+
+rule GetByPath {
+    -- Lookup project by canonical path.
+    when: GetByPathRequested(registry, path)
+    let canonical = Canonicalize(path)
+    ensures: result = registry.entries.get(canonical)
+}
+
+rule GetByName {
+    -- Lookup project by name.
+    when: GetByNameRequested(registry, name)
+    ensures: result = registry.all_projects.first(p => p.name = name)
+}
+
+rule ListAll {
+    -- All registered projects.
+    when: ListAllRequested(registry)
+    ensures: result = registry.all_projects
+}
+
+rule ClearRegistry {
+    -- Reset registry.  Testing only.
+    when: ClearRegistryRequested(registry)
+    ensures: registry.entries = {}
+}
+
+
+--- EQL Resolvers
+
+rule ProjectByPathResolver {
+    -- Pathom resolver: given :project/path, provides :project/name.
+    when: PathomGraph.resolve(project_by_path, { path: String })
+    let project = GetByPath(ProjectRegistry, path)
+    ensures: result = { name: project.name or nil }
+}
+
+rule ProjectByNameResolver {
+    -- Pathom resolver: given :project/name, provides :project/path.
+    when: PathomGraph.resolve(project_by_name, { name: String })
+    let project = GetByName(ProjectRegistry, name)
+    ensures: result = { path: project.path or nil }
+}
+
+rule AllProjectsResolver {
+    -- Pathom resolver: provides :project/all (list of all projects).
+    when: PathomGraph.resolve(all_projects)
+    ensures: result = { all: ListAll(ProjectRegistry) }
+}
+
+
+--- EQL Mutations
+
+rule ProjectCreateMutation {
+    -- Pathom mutation: create a new project.
+    when: PathomGraph.mutate(project_create, { path: String, name: String? })
+    ensures: result = { result: Register(ProjectRegistry, path, name) }
+}
+
+rule ProjectUpdateMutation {
+    -- Pathom mutation: update project name.
+    when: PathomGraph.mutate(project_update, { path: String, name: String })
+    ensures: result = { result: UpdateProject(ProjectRegistry, path, { name: name }) }
+}
+
+rule ProjectDeleteMutation {
+    -- Pathom mutation: remove project by path.
+    when: PathomGraph.mutate(project_delete, { path: String })
+    ensures: result = { result: Unregister(ProjectRegistry, path) }
+}
+
+
+--- Namespace Registration
+
+rule RegisterResolversOnLoad {
+    -- All project resolvers and mutations auto-register with PathomGraph
+    -- when the resolver namespace is loaded.
+    when: Namespace("task-conductor.project.resolvers").loaded
+    ensures: PathomGraph.registered(
+        project_by_path, project_by_name, all_projects,
+        project_create, project_update, project_delete,
+        execute, invoke_skill, escalate_to_dev_env
+    )
+}
+
+rule RegisterStatechartsOnLoad {
+    -- Task and story statecharts register with the statechart engine
+    -- when the execute namespace is loaded.
+    when: Namespace("task-conductor.project.execute").loaded
+    ensures: StatechartEngine.registered(:execute/task, TaskStatechart)
+    ensures: StatechartEngine.registered(:execute/story, StoryStatechart)
+}
+
+
+--- Orchestration Mutations (EQL Wiring)
+--
+-- These mutations expose orchestration rules as Pathom mutations.
+-- See orchestration.allium for the full algorithms.
+
+rule ExecuteMutation {
+    -- EQL entry point for orchestration.Execute.
+    when: PathomGraph.mutate(execute, { project_dir: String, task_id: Integer })
+    implements: orchestration.Execute
+    ensures: result = { session_id: String, initial_state: TaskState, error: Map? }
+}
+
+rule InvokeSkillMutation {
+    -- EQL entry point for orchestration.InvokeSkill.
+    -- Returns immediately; background thread handles completion.
+    when: PathomGraph.mutate(invoke_skill, {
+        session_id: String,                        -- injected by statechart engine
+        skill: String,                             -- skill name to invoke
+        on_complete: TaskState?                    -- optional predetermined event
+    })
+    implements: orchestration.InvokeSkill
+    ensures: result = { status: started, error: Map? }
+}
+
+rule EscalateToDevEnvMutation {
+    -- EQL entry point for orchestration.EscalateToDevEnv.
+    when: PathomGraph.mutate(escalate_to_dev_env, { session_id: String })
+    implements: orchestration.EscalateToDevEnv
+    ensures: result = { status: escalated | no_dev_env, dev_env_id: String?, error: Map? }
+}
+
+
+-- Implementation Notes
+--
+-- Virtual thread tracking:
+--   active_skill_threads: atom holding Set<Thread> of running virtual threads.
+--   await_skill_threads!: blocks until all tracked threads complete, loops to
+--     catch cascading invocations where completing one skill triggers another.
+--   reset_skill_threads!: clears atom, called during test cleanup.
+--   bound_fn: conveys dynamic bindings to virtual thread, required for
+--     nullable testing infrastructure.
+--
+-- Guard against session-not-found:
+--   on_skill_complete and on_dev_env_close catch ExceptionInfo with
+--   :session-not-found error, silently ignoring it.  This handles the case
+--   where a session is stopped while an async operation is in flight.
+
+
+-- Surfaces
+
+surface ProjectRegistryApi {
+    -- CRUD operations for project management.
+    for consumer: Operator
+
+    context registry: ProjectRegistry
+
+    exposes:
+        for project in registry.all_projects:
+            project.path
+            project.name
+
+    provides:
+        RegisterRequested(registry, path, name?)
+        UnregisterRequested(registry, path)
+        UpdateProjectRequested(registry, path, updates)
+        GetByPathRequested(registry, path)
+        GetByNameRequested(registry, name)
+        ListAllRequested(registry)
+}
+
+surface ProjectExecutionApi {
+    -- Concrete execution mutations for the orchestration layer.
+    for consumer: Orchestrator
+
+    provides:
+        PathomGraph.mutate(execute, { project_dir, task_id })
+        PathomGraph.mutate(invoke_skill, { session_id, skill, on_complete? })
+        PathomGraph.mutate(escalate_to_dev_env, { session_id })
+}
+
+
+-- Open Questions
+
+open_question "Should the registry support metadata on projects (e.g. task-conductor config path, default branch)?"
+open_question "Should register! accept an idempotent option to return existing project instead of duplicate-path error?"
+open_question "Should execute! verify the statechart engine has the chart registered before calling start!?"
+open_question "Should invoke-skill! cap the number of concurrent virtual threads per session?"
