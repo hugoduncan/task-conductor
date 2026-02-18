@@ -233,115 +233,35 @@ rule RegisterStatechartsOnLoad {
 }
 
 
---- Orchestration Implementation: execute!
+--- Orchestration Mutations (EQL Wiring)
 --
--- Concrete wiring for orchestration's Execute rule.
--- WorkOn → FetchTask → DeriveInitialState → StartStatechart → RegisterDevEnvHook.
+-- These mutations expose orchestration rules as Pathom mutations.
+-- See orchestration.allium for the full algorithms.
 
 rule ExecuteMutation {
-    -- EQL mutation entry point.  Wires together mcp-tasks work-on,
-    -- task fetch, state derivation, statechart start, and dev-env hook.
+    -- EQL entry point for orchestration.Execute.
     when: PathomGraph.mutate(execute, { project_dir: String, task_id: Integer })
-
-    -- 1. Set up worktree via mcp-tasks
-    let worktree = WorkOn(project_dir, task_id)
-    requires: worktree.error = nil
-
-    -- 2. Fetch task data via EQL
-    let task = FetchTask(worktree.path, task_id)
-    requires: task.error = nil
-
-    -- 3. Determine task type and fetch children for stories
-    let is_story = task.type = story
-    let children = if is_story: FetchChildren(worktree.path, task_id) else: []
-
-    -- 4. Start statechart session
-    let chart_id = if is_story: :execute/story else: :execute/task
-    let session_id = StatechartEngine.start(chart_id, {
-        project_dir: worktree.path,
-        task_id: task_id,
-        task_type: if is_story: story else: task
-    })
-
-    -- 5. Derive initial state
-    let initial_state = if is_story:
-        DeriveStoryState(task, children)
-    else:
-        DeriveTaskState(task)
-
-    -- 6. Register dev-env on-idle hook if dev-env available
-    ensures:
-        let dev_env = SelectDevEnv(Registry)
-        if dev_env exists:
-            RegisterDevEnvHook(dev_env, session_id, on_idle, complete)
-
-    ensures: result = {
-        session_id: session_id,
-        initial_state: initial_state,
-        error: nil
-    }
+    implements: orchestration.Execute
+    ensures: result = { session_id: String, initial_state: TaskState, error: Map? }
 }
 
-
---- Orchestration Implementation: invoke-skill!
---
--- Virtual thread pattern for async skill invocation.
--- Stores on-complete + pre-skill state, launches Claude CLI, spawns
--- virtual thread that awaits result-promise then calls on-skill-complete.
-
 rule InvokeSkillMutation {
-    -- EQL mutation called from statechart entry actions.
+    -- EQL entry point for orchestration.InvokeSkill.
     -- Returns immediately; background thread handles completion.
     when: PathomGraph.mutate(invoke_skill, {
         session_id: String,                        -- injected by statechart engine
         skill: String,                             -- skill name to invoke
         on_complete: TaskState?                    -- optional predetermined event
     })
-
-    -- Store on_complete (clears any prior value when nil)
-    ensures: session.on_complete = on_complete
-
-    -- Snapshot state before skill runs
-    ensures: StorePreSkillState(session)
-
-    -- Launch Claude CLI with skill as prompt
-    let handle = ClaudeCli.invoke(prompt: "/" + skill, dir: session.project_dir)
-
-    -- Spawn virtual thread to await result
-    ensures: VirtualThread.start(bound_fn {
-        let result = handle.result_promise.await
-        OnSkillComplete(session, result)
-    })
-    ensures: active_skill_threads.add(current_thread)
-
+    implements: orchestration.InvokeSkill
     ensures: result = { status: started }
 }
 
-
---- Orchestration Implementation: escalate-to-dev-env!
-
 rule EscalateToDevEnvMutation {
-    -- EQL mutation called from statechart :escalated entry action.
-    -- Selects dev-env, starts interactive session, registers on-close hook.
+    -- EQL entry point for orchestration.EscalateToDevEnv.
     when: PathomGraph.mutate(escalate_to_dev_env, { session_id: String })
-    let data = StatechartEngine.get_data(session_id)
-    let dev_env = SelectDevEnv(Registry)
-
-    when dev_env exists:
-        let opts = { dir: data.project_dir, task_id: data.task_id }
-        let opts = if data.last_claude_session_id exists:
-            opts with claude_session_id = data.last_claude_session_id
-        else: opts
-        ensures: StartSession(dev_env, session_id, opts)
-        ensures: RegisterHook(dev_env, session_id, on_close,
-            callback: OnDevEnvClose(session_id))
-        ensures: result = { status: escalated, dev_env_id: dev_env.id }
-
-    when dev_env = nil:
-        ensures: result = {
-            status: no_dev_env,
-            error: { error: no_dev_env, message: "No dev-env available for escalation" }
-        }
+    implements: orchestration.EscalateToDevEnv
+    ensures: result = { status: escalated | no_dev_env, dev_env_id: String?, error: Map? }
 }
 
 
