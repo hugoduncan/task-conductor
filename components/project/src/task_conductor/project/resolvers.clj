@@ -352,7 +352,7 @@
    If a Claude session-id is available (from no-progress escalation),
    passes it to dev-env for conversation resumption."
   [{:engine/keys [session-id]}]
-  {::pco/output [:escalate/status :escalate/error]}
+  {::pco/output [:escalate/status :escalate/error :escalate/dev-env-id]}
   (let [data (sc/get-data session-id)
         {:keys [project-dir task-id last-claude-session-id]} data
         selected (graph/query [:dev-env/selected])
