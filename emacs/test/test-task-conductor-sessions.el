@@ -35,9 +35,11 @@
          (task-conductor-dev-env--cached-sessions nil)
          (task-conductor-dev-env--sessions (make-hash-table :test 'equal))
          (task-conductor-dev-env--dev-env-id nil))
-     (with-temp-buffer
-       (task-conductor-sessions-mode)
-       ,@body)))
+     (unwind-protect
+         (with-temp-buffer
+           (task-conductor-sessions-mode)
+           ,@body)
+       (clrhash task-conductor-dev-env--sessions))))
 
 ;;; Relative Time Formatting
 
