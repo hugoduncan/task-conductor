@@ -4,6 +4,7 @@
   statecharts and managing sessions.
   Actions execute EQL through Pathom (pathom-graph component)."
   (:require
+   [clojure.set :as set]
    [com.fulcrologic.statecharts :as sc]
    [com.fulcrologic.statecharts.chart :as chart]
    [com.fulcrologic.statecharts.protocols :as sp]
@@ -365,3 +366,30 @@
     (get (swap! session-data update session-id f) session-id)
     (throw (ex-info "Session not found"
                     {:error :session-not-found :session-id session-id}))))
+
+;;; Session Query API
+
+(defn query-sessions
+  "Query active sessions filtered by state.
+  Returns vec of maps with :session-id, :state, :task-id, :task-title,
+  and :entered-state-at for sessions whose current state intersects
+  the given state-filter set.
+
+  state-filter - set of state keywords to match (e.g. #{:escalated :idle})"
+  [state-filter]
+  (let [session-ids (keys @sessions)]
+    (into []
+          (keep
+           (fn [sid]
+             (let [current (state sid)
+                   matching (set/intersection current state-filter)]
+               (when (seq matching)
+                 (let [data (get @session-data sid)
+                       hist (get @histories sid)
+                       last-entry (peek hist)]
+                   {:session-id sid
+                    :state (first matching)
+                    :task-id (:task-id data)
+                    :task-title (:task-title data)
+                    :entered-state-at (:timestamp last-entry)})))))
+          session-ids)))
