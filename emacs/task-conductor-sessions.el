@@ -204,6 +204,13 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
     (cancel-timer task-conductor-sessions--refresh-timer)
     (setq task-conductor-sessions--refresh-timer nil)))
 
+(defun task-conductor-sessions--on-window-change ()
+  "Start or stop the auto-refresh timer based on buffer visibility.
+Added to `window-configuration-change-hook' as a buffer-local hook."
+  (if (task-conductor-sessions--buffer-visible-p)
+      (task-conductor-sessions--start-timer)
+    (task-conductor-sessions--stop-timer)))
+
 (defun task-conductor-sessions--kill-buffer-hook ()
   "Clean up when sessions buffer is killed."
   (task-conductor-sessions--stop-timer))
@@ -237,7 +244,9 @@ Called by the :notify-sessions-changed handler."
 \\{task-conductor-sessions-mode-map}"
   :group 'task-conductor-sessions
   (add-hook 'kill-buffer-hook
-            #'task-conductor-sessions--kill-buffer-hook nil t))
+            #'task-conductor-sessions--kill-buffer-hook nil t)
+  (add-hook 'window-configuration-change-hook
+            #'task-conductor-sessions--on-window-change nil t))
 
 ;;; Entry point
 

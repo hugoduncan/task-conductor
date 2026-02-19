@@ -177,6 +177,52 @@
             (should (eq first-timer task-conductor-sessions--refresh-timer))))
       (task-conductor-sessions--stop-timer))))
 
+;;; Visibility-based Timer
+
+(ert-deftest task-conductor-sessions-on-window-change-stops-when-invisible ()
+  ;; Timer stops when buffer is not visible in any window.
+  (let ((task-conductor-sessions--refresh-timer nil)
+        (task-conductor-sessions-refresh-interval 100)
+        (task-conductor-sessions--buffer-name "*tc-test-vis*"))
+    (let ((buf (get-buffer-create task-conductor-sessions--buffer-name)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buf
+              (task-conductor-sessions-mode))
+            (task-conductor-sessions--start-timer)
+            (should task-conductor-sessions--refresh-timer)
+            ;; Buffer not displayed in any window — hook should stop timer
+            (task-conductor-sessions--on-window-change)
+            (should-not task-conductor-sessions--refresh-timer))
+        (task-conductor-sessions--stop-timer)
+        (kill-buffer buf)))))
+
+(ert-deftest task-conductor-sessions-on-window-change-starts-when-visible ()
+  ;; Timer starts when buffer becomes visible.
+  (let ((task-conductor-sessions--refresh-timer nil)
+        (task-conductor-sessions-refresh-interval 100)
+        (task-conductor-sessions--buffer-name "*tc-test-vis2*"))
+    (let ((buf (get-buffer-create task-conductor-sessions--buffer-name)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buf
+              (task-conductor-sessions-mode))
+            ;; Display buffer in a window so it's visible
+            (display-buffer buf)
+            (should-not task-conductor-sessions--refresh-timer)
+            (task-conductor-sessions--on-window-change)
+            (should task-conductor-sessions--refresh-timer))
+        (task-conductor-sessions--stop-timer)
+        (delete-windows-on buf)
+        (kill-buffer buf)))))
+
+(ert-deftest task-conductor-sessions-mode-sets-window-hook ()
+  ;; Mode setup adds window-configuration-change-hook.
+  (with-sessions-buffer
+    (should (memq #'task-conductor-sessions--on-window-change
+                  (buffer-local-value 'window-configuration-change-hook
+                                      (current-buffer))))))
+
 ;;; Goto Session
 
 (ert-deftest task-conductor-sessions-goto-session-no-buffer ()
