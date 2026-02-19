@@ -454,9 +454,12 @@ hook if registered), removes from sessions table, and cleans up hooks."
 
 (defun task-conductor-dev-env--handle-notify-sessions-changed (params)
   "Handle :notify-sessions-changed notification from JVM.
-PARAMS contains :sessions, a list of session plists."
+PARAMS contains :sessions, a list of session plists.
+Updates cached sessions and re-renders the sessions buffer if live."
   (let ((sessions (plist-get params :sessions)))
     (setq task-conductor-dev-env--cached-sessions sessions)
+    (when (fboundp 'task-conductor-sessions-rerender-if-live)
+      (task-conductor-sessions-rerender-if-live))
     '(:status :ok)))
 
 (defun task-conductor-dev-env-query-sessions ()
