@@ -3,9 +3,11 @@
    Requiring this namespace loads all component resolvers and statecharts
    via auto-registration on namespace load."
   (:require
+   [clojure.set :as set]
    [clojure.string :as str]
    [task-conductor.claude-cli.resolvers]
    [task-conductor.dev-env.resolvers]
+   [task-conductor.emacs-dev-env.interface :as emacs-dev-env]
    [task-conductor.mcp-tasks.resolvers]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.execute]
@@ -33,12 +35,25 @@
             :to to-state
             :event event}))
 
+(def ^:private session-notify-states
+  "States that trigger session notification to dev-envs."
+  #{:escalated :idle})
+
+(defn- notify-on-session-state-change
+  "Push session data to all dev-envs when a session enters or leaves
+  an escalated/idle state."
+  [_session-id from-state to-state _event]
+  (when (or (seq (set/intersection from-state session-notify-states))
+            (seq (set/intersection to-state session-notify-states)))
+    (emacs-dev-env/notify-all-sessions-changed!)))
+
 (defn bootstrap!
   "Log which namespaces were loaded, register transition logging,
    and verify the graph is operational.
    Returns a map with :namespaces loaded and :graph-operational? status."
   []
   (sc/add-transition-listener! ::transition-log log-transition)
+  (sc/add-transition-listener! ::session-notify notify-on-session-state-change)
   (let [operational? (try
                        (some? (graph/env))
                        (catch Exception _ false))
