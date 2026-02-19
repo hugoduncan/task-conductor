@@ -41,11 +41,14 @@
 
 (defn- notify-on-session-state-change
   "Push session data to all dev-envs when a session enters or leaves
-  an escalated/idle state."
+  an escalated/idle state.  Skips when the relevant state set is
+  unchanged (e.g. sub-state transitions within :escalated)."
   [_session-id from-state to-state _event]
-  (when (or (seq (set/intersection from-state session-notify-states))
-            (seq (set/intersection to-state session-notify-states)))
-    (emacs-dev-env/notify-all-sessions-changed!)))
+  (let [from-relevant (set/intersection from-state session-notify-states)
+        to-relevant   (set/intersection to-state session-notify-states)]
+    (when (and (not= from-relevant to-relevant)
+               (or (seq from-relevant) (seq to-relevant)))
+      (emacs-dev-env/notify-all-sessions-changed!))))
 
 (defn bootstrap!
   "Log which namespaces were loaded, register transition logging,

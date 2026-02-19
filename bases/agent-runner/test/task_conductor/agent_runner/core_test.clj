@@ -139,12 +139,26 @@
           (with-redefs [emacs-dev-env/notify-all-sessions-changed!
                         (fn [] (swap! notified inc))]
             (agent-runner/bootstrap!)
-            ;; Invoke listener with states that don't include
-            ;; :escalated or :idle
             (let [listeners @engine/transition-listeners
                   listener (get listeners
                                 ::agent-runner/session-notify)]
               (listener "test" #{:running} #{:completed} :done)
+              (is (zero? @notified)))))))
+
+    (testing "does not fire for no-op transitions within same notify state"
+      (with-agent-runner-state
+        (let [notified (atom 0)]
+          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
+                        (fn [] (swap! notified inc))]
+            (agent-runner/bootstrap!)
+            (let [listeners @engine/transition-listeners
+                  listener (get listeners
+                                ::agent-runner/session-notify)]
+              ;; Both from and to contain :escalated
+              (listener "test"
+                        #{:escalated :sub-a}
+                        #{:escalated :sub-b}
+                        :internal)
               (is (zero? @notified)))))))))
 
 ;;; run-story! Tests
