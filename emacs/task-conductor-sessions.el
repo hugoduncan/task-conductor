@@ -1,6 +1,6 @@
 ;;; task-conductor-sessions.el --- Session viewer for task-conductor -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2025
+;; Copyright (C) 2026
 
 ;; Author: task-conductor contributors
 ;; Version: 0.1.0
