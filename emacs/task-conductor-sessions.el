@@ -145,17 +145,17 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
 (defun task-conductor-sessions-goto-session ()
   "Switch to the *claude:* buffer for the session at point."
   (interactive)
-  (when-let* ((section (magit-current-section))
-              (session (and (eq (oref section type)
-                                'task-conductor-sessions-entry)
-                            (oref section value))))
-    (let* ((session-id (plist-get session :session-id))
-           (buffer (and session-id
-                        (gethash session-id
-                                 task-conductor-dev-env--sessions))))
-      (if (and buffer (buffer-live-p buffer))
-          (pop-to-buffer buffer)
-        (message "No buffer for session %s" (or session-id "?"))))))
+  (when-let ((section (magit-current-section)))
+    (when-let ((session (and (eq (oref section type)
+                                 'task-conductor-sessions-entry)
+                             (oref section value))))
+      (let* ((session-id (plist-get session :session-id))
+             (buffer (and session-id
+                          (gethash session-id
+                                   task-conductor-dev-env--sessions))))
+        (if (and buffer (buffer-live-p buffer))
+            (pop-to-buffer buffer)
+          (message "No buffer for session %s" (or session-id "?")))))))
 
 (defun task-conductor-sessions-refresh ()
   "Refresh session list from JVM and re-render."
