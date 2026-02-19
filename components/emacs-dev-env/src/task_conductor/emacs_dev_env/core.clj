@@ -8,7 +8,7 @@
    [taoensso.timbre :as log]
    [task-conductor.dev-env.protocol :as protocol]
    [task-conductor.dev-env.registry :as generic-registry]
-   [task-conductor.statechart-engine.interface :as engine])
+   [task-conductor.pathom-graph.interface :as graph])
   (:import
    [java.util UUID]))
 
@@ -363,8 +363,10 @@
   [dev-env-id]
   (if (get-dev-env dev-env-id)
     {:status :ok
-     :sessions (engine/query-sessions #{:escalated :idle})}
-    {:status :error :message (str "Dev-env not found: " dev-env-id)}))
+     :sessions (:engine/active-sessions
+                (graph/query [:engine/active-sessions]))}
+    {:status :error
+     :message (str "Dev-env not found: " dev-env-id)}))
 
 (defn notify-sessions-changed!
   "Push session data to a specific dev-env via notification.
@@ -372,7 +374,9 @@
   [dev-env]
   (let [{:keys [command-chan connected?]} @(:state dev-env)]
     (when (and connected? command-chan)
-      (let [sessions (engine/query-sessions #{:escalated :idle})]
+      (let [sessions (:engine/active-sessions
+                      (graph/query
+                       [:engine/active-sessions]))]
         (send-notification command-chan
                            :notify-sessions-changed
                            {:sessions sessions})))))

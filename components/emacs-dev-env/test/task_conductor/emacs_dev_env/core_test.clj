@@ -5,7 +5,8 @@
    [clojure.test :refer [deftest is testing]]
    [task-conductor.dev-env.protocol :as protocol]
    [task-conductor.dev-env.registry :as generic-registry]
-   [task-conductor.emacs-dev-env.core :as core]))
+   [task-conductor.emacs-dev-env.core :as core]
+   [task-conductor.statechart-engine.resolvers :as resolvers]))
 
 (defmacro with-register-hook-responder
   "Spawn a thread that responds to :register-hook commands with success.
@@ -613,8 +614,9 @@
 ;;; Session Query Tests
 
 (deftest query-sessions-by-id-test
-  ;; Verify query-sessions-by-id validates dev-env and delegates
-  ;; to statechart-engine/query-sessions.
+  ;; Verify query-sessions-by-id validates dev-env and queries
+  ;; active sessions via pathom graph.
+  (resolvers/register-resolvers!)
   (testing "query-sessions-by-id"
     (testing "returns error for unknown dev-env-id"
       (let [result (core/query-sessions-by-id "nonexistent")]
@@ -633,6 +635,7 @@
 (deftest notification-test
   ;; Verify fire-and-forget notifications are delivered to Emacs
   ;; without requiring a response.
+  (resolvers/register-resolvers!)
   (testing "notifications"
     (testing "are delivered via await-command"
       (let [dev-env-id (core/register-emacs-dev-env)]
