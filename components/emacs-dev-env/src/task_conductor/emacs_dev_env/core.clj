@@ -65,7 +65,10 @@
                                :params params
                                :notification true})
       true)
-    false))
+    (do
+      (log/debug "Notification dropped, no command channel"
+                 {:command command-kw})
+      false)))
 
 (defrecord EmacsDevEnv [state]
   ;; state is an atom containing:
