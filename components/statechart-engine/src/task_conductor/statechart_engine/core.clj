@@ -375,6 +375,10 @@
   and :entered-state-at for sessions whose current state intersects
   the given state-filter set.
 
+  Each session returns a single :state — the filtered states are expected
+  to be mutually exclusive leaf states (e.g. :escalated, :idle).
+  If multiple states match, the lexicographically first is returned.
+
   state-filter - set of state keywords to match (e.g. #{:escalated :idle})"
   [state-filter]
   (let [session-ids (keys @sessions)]
@@ -388,7 +392,7 @@
                        hist (get @histories sid)
                        last-entry (peek hist)]
                    {:session-id sid
-                    :state (first matching)
+                    :state (first (sort matching))
                     :task-id (:task-id data)
                     :task-title (:task-title data)
                     :entered-state-at (:timestamp last-entry)})))))
