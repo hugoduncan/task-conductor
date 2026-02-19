@@ -157,16 +157,20 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
             (pop-to-buffer buffer)
           (message "No buffer for session %s" (or session-id "?")))))))
 
+(defun task-conductor-sessions--refresh ()
+  "Query JVM for sessions and re-render.  No user-facing message."
+  (if (not (task-conductor-dev-env--connected-p))
+      (task-conductor-sessions--render nil)
+    (task-conductor-dev-env-query-sessions)
+    (task-conductor-sessions--render task-conductor-dev-env--cached-sessions)))
+
 (defun task-conductor-sessions-refresh ()
   "Refresh session list from JVM and re-render."
   (interactive)
-  (if (not (task-conductor-dev-env--connected-p))
-      (progn
-        (task-conductor-sessions--render nil)
-        (message "Not connected to task-conductor"))
-    (task-conductor-dev-env-query-sessions)
-    (task-conductor-sessions--render task-conductor-dev-env--cached-sessions)
-    (message "Sessions refreshed")))
+  (task-conductor-sessions--refresh)
+  (if (task-conductor-dev-env--connected-p)
+      (message "Sessions refreshed")
+    (message "Not connected to task-conductor")))
 
 (defun task-conductor-sessions-quit ()
   "Quit the sessions buffer."
@@ -185,7 +189,7 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
   (when (task-conductor-sessions--buffer-visible-p)
     (with-current-buffer (get-buffer task-conductor-sessions--buffer-name)
       (condition-case err
-          (task-conductor-sessions-refresh)
+          (task-conductor-sessions--refresh)
         (error
          (message "task-conductor-sessions: auto-refresh error: %s"
                   (error-message-string err)))))))
