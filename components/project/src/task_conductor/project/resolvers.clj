@@ -399,6 +399,8 @@
       (if (contains? state :wait-pr-merge)
         (do
           (sc/send! session-id :merge-pr)
+          ;; nil :pr-merge/error required: Pathom expects all ::pco/output
+          ;; keys present even on success (see LEARNING.md).
           {:pr-merge/status :triggered
            :pr-merge/error nil})
         {:pr-merge/status :error
