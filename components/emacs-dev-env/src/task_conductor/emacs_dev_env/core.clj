@@ -635,7 +635,11 @@
   (project-registry/watch!
    ::project-notify
    (fn [_key _ref _old _new]
-     (notify-all-projects-changed!))))
+     (try
+       (notify-all-projects-changed!)
+       (catch Exception e
+         (log/warn "Failed to notify projects changed"
+                   {:error (.getMessage e)}))))))
 
 (defn remove-project-registry-watch!
   "Remove the project registry watch."
