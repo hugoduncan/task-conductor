@@ -258,7 +258,9 @@ Prompts for directory path and optional name."
       (let* ((project (oref section value))
              (path (plist-get project :project/path))
              (name (or (plist-get project :project/name) path)))
-        (mcp-tasks-browser-open path path name)))))
+        (if path
+            (mcp-tasks-browser-open path path name)
+          (message "No project path at point"))))))
 
 (defun task-conductor-project-quit ()
   "Quit the projects buffer."
