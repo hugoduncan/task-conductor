@@ -34,10 +34,11 @@
   {:engine/session-data (core/get-data session-id)})
 
 (graph/defresolver engine-active-sessions
-  "Sessions in escalated or idle states — those needing attention."
+  "Sessions needing attention: escalated, idle, or waiting for PR merge."
   []
   {::pco/output [:engine/active-sessions]}
-  {:engine/active-sessions (core/query-sessions #{:escalated :idle})})
+  {:engine/active-sessions
+   (core/query-sessions #{:escalated :idle :wait-pr-merge})})
 
 ;;; Mutations
 

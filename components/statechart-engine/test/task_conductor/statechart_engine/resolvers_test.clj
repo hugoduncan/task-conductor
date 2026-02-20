@@ -47,6 +47,38 @@
           (is (some #{s1} sessions))
           (is (some #{s2} sessions)))))))
 
+(defn wait-pr-merge-chart
+  "Statechart for testing: idle → wait-pr-merge."
+  []
+  (sc/statechart {}
+                 (sc/initial {}
+                             (sc/transition {:target :idle}))
+                 (sc/state {:id :idle}
+                           (sc/transition {:event :pr-ready
+                                           :target :wait-pr-merge}))
+                 (sc/state {:id :wait-pr-merge}
+                           (sc/transition {:event :merge-pr :target :done}))
+                 (sc/final {:id :done})))
+
+(deftest engine-active-sessions-resolver-test
+  ;; Verifies :engine/active-sessions includes :wait-pr-merge sessions.
+  (testing "engine-active-sessions resolver"
+    (testing "includes :wait-pr-merge sessions"
+      (with-clean-state
+        (sc/register! ::wait-chart (wait-pr-merge-chart))
+        (let [sid (sc/start! ::wait-chart
+                             {:data {:task-id 5
+                                     :task-title "PR job"
+                                     :pr-num 77
+                                     :branch "feat/pr"}})]
+          (sc/send! sid :pr-ready)
+          (let [result (graph/query [:engine/active-sessions])
+                sessions (:engine/active-sessions result)]
+            (is (= 1 (count sessions)))
+            (is (= :wait-pr-merge (:state (first sessions))))
+            (is (= 77 (:pr-num (first sessions))))
+            (is (= "feat/pr" (:branch (first sessions))))))))))
+
 (deftest engine-charts-resolver-test
   ;; Verifies :engine/charts returns list of registered chart names.
   (testing "engine-charts resolver"
