@@ -26,6 +26,20 @@
          :entered-state-at "2026-02-19T09:00:00Z"))
   "Sample session data for tests.")
 
+(defvar test-sessions-with-pr
+  (list
+   (list :session-id "sess-1" :state :escalated
+         :task-id 101 :task-title "Fix auth"
+         :entered-state-at "2026-02-19T10:00:00Z")
+   (list :session-id "sess-2" :state :idle
+         :task-id 102 :task-title "Add tests"
+         :entered-state-at "2026-02-19T10:30:00Z")
+   (list :session-id "sess-4" :state :wait-pr-merge
+         :task-id 104 :task-title "Add feature"
+         :pr-num 42 :branch "feat-branch"
+         :entered-state-at "2026-02-19T11:00:00Z"))
+  "Sample session data including a :wait-pr-merge session.")
+
 ;;; Test Helpers
 
 (defmacro with-sessions-buffer (&rest body)
@@ -73,23 +87,59 @@
   (should (string= "⏸" (task-conductor-sessions--state-icon :idle)))
   (should (string= "⏸" (task-conductor-sessions--state-icon "idle"))))
 
+(ert-deftest task-conductor-sessions-state-icon-wait-pr-merge ()
+  ;; Wait-pr-merge state shows merge icon.
+  (should (string= "🔀" (task-conductor-sessions--state-icon :wait-pr-merge)))
+  (should (string= "🔀" (task-conductor-sessions--state-icon "wait-pr-merge"))))
+
 (ert-deftest task-conductor-sessions-state-icon-unknown ()
   ;; Unknown state shows question mark.
   (should (string= "?" (task-conductor-sessions--state-icon :other))))
+
+;;; Format Session Heading
+
+(ert-deftest task-conductor-sessions-heading-shows-pr-info ()
+  ;; :wait-pr-merge heading includes PR number and branch.
+  (let* ((session (list :session-id "s1" :state :wait-pr-merge
+                        :task-id 42 :task-title "My feat"
+                        :pr-num 99 :branch "feat-x"
+                        :entered-state-at nil))
+         (heading (task-conductor-sessions--format-session-heading session)))
+    (should (string-match-p "PR #99" heading))
+    (should (string-match-p "feat-x" heading))
+    (should (string-match-p "🔀" heading))))
+
+(ert-deftest task-conductor-sessions-heading-no-pr-for-other-states ()
+  ;; Non :wait-pr-merge sessions do not show PR info even if present.
+  (let* ((session (list :session-id "s1" :state :escalated
+                        :task-id 42 :task-title "My feat"
+                        :pr-num 99 :branch "feat-x"
+                        :entered-state-at nil))
+         (heading (task-conductor-sessions--format-session-heading session)))
+    (should-not (string-match-p "PR #99" heading))))
 
 ;;; Partition By State
 
 (ert-deftest task-conductor-sessions-partition-empty ()
   ;; Empty list produces empty partitions.
   (let ((result (task-conductor-sessions--partition-by-state nil)))
-    (should (null (car result)))
-    (should (null (cdr result)))))
+    (should (null (plist-get result :escalated)))
+    (should (null (plist-get result :idle)))
+    (should (null (plist-get result :wait-pr-merge)))))
 
 (ert-deftest task-conductor-sessions-partition-mixed ()
   ;; Sessions are correctly partitioned by state.
   (let ((result (task-conductor-sessions--partition-by-state test-sessions-sample)))
-    (should (= 2 (length (car result))))   ; 2 escalated
-    (should (= 1 (length (cdr result)))))) ; 1 idle
+    (should (= 2 (length (plist-get result :escalated))))
+    (should (= 1 (length (plist-get result :idle))))
+    (should (= 0 (length (plist-get result :wait-pr-merge))))))
+
+(ert-deftest task-conductor-sessions-partition-with-pr-waiting ()
+  ;; :wait-pr-merge sessions are partitioned into their own group.
+  (let ((result (task-conductor-sessions--partition-by-state test-sessions-with-pr)))
+    (should (= 1 (length (plist-get result :escalated))))
+    (should (= 1 (length (plist-get result :idle))))
+    (should (= 1 (length (plist-get result :wait-pr-merge))))))
 
 ;;; Section Rendering
 
@@ -99,6 +149,7 @@
     (task-conductor-sessions--render nil)
     (should (string-match-p "Escalated (0)" (buffer-string)))
     (should (string-match-p "Idle (0)" (buffer-string)))
+    (should (string-match-p "PR Waiting (0)" (buffer-string)))
     (should (string-match-p "(none)" (buffer-string)))))
 
 (ert-deftest task-conductor-sessions-render-with-sessions ()
@@ -108,11 +159,23 @@
     (let ((content (buffer-string)))
       (should (string-match-p "Escalated (2)" content))
       (should (string-match-p "Idle (1)" content))
+      (should (string-match-p "PR Waiting (0)" content))
       (should (string-match-p "Fix auth" content))
       (should (string-match-p "Add tests" content))
       (should (string-match-p "Refactor DB" content))
       (should (string-match-p "⚡" content))
       (should (string-match-p "⏸" content)))))
+
+(ert-deftest task-conductor-sessions-render-with-pr-waiting ()
+  ;; Rendering :wait-pr-merge sessions shows PR Waiting group.
+  (with-sessions-buffer
+    (task-conductor-sessions--render test-sessions-with-pr)
+    (let ((content (buffer-string)))
+      (should (string-match-p "PR Waiting (1)" content))
+      (should (string-match-p "Add feature" content))
+      (should (string-match-p "PR #42" content))
+      (should (string-match-p "feat-branch" content))
+      (should (string-match-p "🔀" content)))))
 
 (ert-deftest task-conductor-sessions-render-root-section-exists ()
   ;; After render, magit-root-section is set.
@@ -144,6 +207,8 @@
                 #'task-conductor-sessions-refresh))
     (should (eq (lookup-key task-conductor-sessions-mode-map (kbd "q"))
                 #'task-conductor-sessions-quit))
+    (should (eq (lookup-key task-conductor-sessions-mode-map (kbd "m"))
+                #'task-conductor-sessions-merge-pr))
     (should (eq (lookup-key task-conductor-sessions-mode-map (kbd "RET"))
                 #'task-conductor-sessions-goto-session))))
 
@@ -269,6 +334,24 @@
                   (task-conductor-sessions-goto-session))
                 (should (eq popped-buf target-buf)))))
         (kill-buffer target-buf)))))
+
+;;; Merge PR
+
+(ert-deftest task-conductor-sessions-merge-pr-rejects-non-pr-session ()
+  ;; merge-pr signals error when session is not in :wait-pr-merge state.
+  (with-sessions-buffer
+    (task-conductor-sessions--render test-sessions-sample)
+    (goto-char (point-min))
+    (let ((entry-found nil))
+      (dolist (group (oref magit-root-section children))
+        (dolist (entry (oref group children))
+          (when (and (not entry-found)
+                     (eq (oref entry type) 'task-conductor-sessions-entry))
+            (setq entry-found entry))))
+      (when entry-found
+        (goto-char (oref entry-found start))
+        (should-error (task-conductor-sessions-merge-pr)
+                      :type 'user-error)))))
 
 ;;; Re-render on Push
 

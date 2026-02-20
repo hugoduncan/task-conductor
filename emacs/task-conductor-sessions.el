@@ -15,9 +15,9 @@
 
 ;;; Commentary:
 
-;; Displays Claude sessions in escalated or idle states using
-;; magit-section for a collapsible, navigable UI.  Session data comes
-;; from the JVM via the dev-env mechanism and is refreshed
+;; Displays Claude sessions in escalated, idle, or PR-waiting states
+;; using magit-section for a collapsible, navigable UI.  Session data
+;; comes from the JVM via the dev-env mechanism and is refreshed
 ;; automatically while the buffer is visible.
 ;;
 ;; Usage:
@@ -25,6 +25,7 @@
 ;;
 ;; Key bindings:
 ;;   RET - Switch to session's *claude:* buffer
+;;   m   - Trigger PR merge for :wait-pr-merge session at point
 ;;   g   - Refresh session list from JVM
 ;;   q   - Quit session viewer
 
@@ -86,31 +87,47 @@ Returns a string like \"3m ago\", \"1h ago\", \"2d ago\"."
   (pcase state
     ((or :escalated "escalated") "⚡")
     ((or :idle "idle") "⏸")
+    ((or :wait-pr-merge "wait-pr-merge") "🔀")
     (_ "?")))
 
 (defun task-conductor-sessions--format-session-heading (session)
-  "Format heading string for SESSION plist."
+  "Format heading string for SESSION plist.
+Shows PR number and branch for :wait-pr-merge sessions."
   (let ((task-id (plist-get session :task-id))
         (task-title (or (plist-get session :task-title) "untitled"))
         (state (plist-get session :state))
-        (entered (plist-get session :entered-state-at)))
-    (format "%s #%s %s  %s"
+        (entered (plist-get session :entered-state-at))
+        (pr-num (plist-get session :pr-num))
+        (branch (plist-get session :branch)))
+    (format "%s #%s %s%s  %s"
             (task-conductor-sessions--state-icon state)
             (if task-id (format "%s" task-id) "?")
             task-title
+            (if (and (or (eq state :wait-pr-merge)
+                        (equal state "wait-pr-merge"))
+                     (or pr-num branch))
+                (format "  %s%s"
+                        (if pr-num (format "PR #%s" pr-num) "")
+                        (if branch (format " %s" branch) ""))
+              "")
             (task-conductor-sessions--format-relative-time entered))))
 
 (defun task-conductor-sessions--partition-by-state (sessions)
-  "Partition SESSIONS list into (escalated . idle) cons cell."
-  (let (escalated idle)
+  "Partition SESSIONS into groups by state.
+Returns a plist (:escalated LIST :idle LIST :wait-pr-merge LIST)."
+  (let (escalated idle wait-pr-merge)
     (dolist (s sessions)
       (let ((state (plist-get s :state)))
         (cond
          ((or (eq state :escalated) (equal state "escalated"))
           (push s escalated))
          ((or (eq state :idle) (equal state "idle"))
-          (push s idle)))))
-    (cons (nreverse escalated) (nreverse idle))))
+          (push s idle))
+         ((or (eq state :wait-pr-merge) (equal state "wait-pr-merge"))
+          (push s wait-pr-merge)))))
+    (list :escalated (nreverse escalated)
+          :idle (nreverse idle)
+          :wait-pr-merge (nreverse wait-pr-merge))))
 
 (defun task-conductor-sessions--insert-session-entry (session)
   "Insert a magit-section entry for SESSION plist."
@@ -130,14 +147,15 @@ Returns a string like \"3m ago\", \"1h ago\", \"2d ago\"."
 (defun task-conductor-sessions--render (sessions)
   "Render SESSIONS into the current buffer.
 SESSIONS is a list of plists with :session-id, :state, :task-id,
-:task-title, :entered-state-at."
+:task-title, :entered-state-at, :pr-num, :branch."
   (let ((inhibit-read-only t)
         (parts (task-conductor-sessions--partition-by-state sessions)))
     (erase-buffer)
     (magit-insert-section (task-conductor-sessions-root)
       (magit-insert-heading "Claude Sessions\n")
-      (task-conductor-sessions--insert-group "Escalated" (car parts))
-      (task-conductor-sessions--insert-group "Idle" (cdr parts))))
+      (task-conductor-sessions--insert-group "Escalated" (plist-get parts :escalated))
+      (task-conductor-sessions--insert-group "Idle" (plist-get parts :idle))
+      (task-conductor-sessions--insert-group "PR Waiting" (plist-get parts :wait-pr-merge))))
   (goto-char (point-min)))
 
 ;;; Actions
@@ -171,6 +189,25 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
   (if (task-conductor-dev-env--connected-p)
       (message "Sessions refreshed")
     (message "Not connected to task-conductor")))
+
+(defun task-conductor-sessions-merge-pr ()
+  "Trigger PR merge for the :wait-pr-merge session at point."
+  (interactive)
+  (when-let ((section (magit-current-section)))
+    (when-let ((session (and (eq (oref section type)
+                                 'task-conductor-sessions-entry)
+                             (oref section value))))
+      (let ((state (plist-get session :state))
+            (session-id (plist-get session :session-id)))
+        (unless (or (eq state :wait-pr-merge) (equal state "wait-pr-merge"))
+          (user-error "Session is not in :wait-pr-merge state"))
+        (let ((result (task-conductor-dev-env--eval-sync
+                       (format "(let [r (task-conductor.pathom-graph.interface/query [`(task-conductor.project.resolvers/pr-merge! {:engine/session-id %S})])] (get r 'task-conductor.project.resolvers/pr-merge!))"
+                               session-id))))
+          (if (eq :triggered (plist-get result :pr-merge/status))
+              (message "PR merge triggered for session %s" session-id)
+            (message "PR merge failed: %s"
+                     (plist-get (plist-get result :pr-merge/error) :message))))))))
 
 (defun task-conductor-sessions-quit ()
   "Quit the sessions buffer."
@@ -237,6 +274,7 @@ Called by the :notify-sessions-changed handler."
     (set-keymap-parent map magit-section-mode-map)
     (define-key map (kbd "RET") #'task-conductor-sessions-goto-session)
     (define-key map (kbd "g") #'task-conductor-sessions-refresh)
+    (define-key map (kbd "m") #'task-conductor-sessions-merge-pr)
     (define-key map (kbd "q") #'task-conductor-sessions-quit)
     map)
   "Keymap for `task-conductor-sessions-mode'.")
