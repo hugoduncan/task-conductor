@@ -433,22 +433,24 @@
     (mapv #(enrich-project % all-sessions) projects)))
 
 (defn notify-projects-changed!
-  "Push enriched project data to a specific dev-env via notification."
-  [dev-env]
+  "Push pre-computed project data to a specific dev-env via notification."
+  [dev-env projects]
   (let [{:keys [command-chan connected?]} @(:state dev-env)]
     (when (and connected? command-chan)
       (send-notification command-chan
                          :notify-projects-changed
-                         {:projects (enriched-projects)}))))
+                         {:projects projects}))))
 
 (defn notify-all-projects-changed!
-  "Push enriched project data to all connected dev-envs."
+  "Push enriched project data to all connected dev-envs.
+  Computes enriched projects once and sends to all."
   []
-  (doseq [{:keys [dev-env/id type]} (generic-registry/list-dev-envs)
-          :when (= :emacs type)
-          :let [dev-env (generic-registry/get-dev-env id)]
-          :when (connected? dev-env)]
-    (notify-projects-changed! dev-env)))
+  (let [projects (enriched-projects)]
+    (doseq [{:keys [dev-env/id type]} (generic-registry/list-dev-envs)
+            :when (= :emacs type)
+            :let [dev-env (generic-registry/get-dev-env id)]
+            :when (connected? dev-env)]
+      (notify-projects-changed! dev-env projects))))
 
 (defn query-projects-by-id
   "Query all registered projects enriched with execution status.
