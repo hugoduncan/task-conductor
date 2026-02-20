@@ -353,6 +353,27 @@
         (should-error (task-conductor-sessions-merge-pr)
                       :type 'user-error)))))
 
+(ert-deftest task-conductor-sessions-merge-pr-rejects-nil-session-id ()
+  ;; merge-pr signals error when session has no :session-id.
+  (with-sessions-buffer
+    (let ((sessions-no-id
+           (list (list :state :wait-pr-merge
+                       :task-id 104 :task-title "Feature"
+                       :pr-num 42 :branch "feat"
+                       :entered-state-at "2026-02-19T11:00:00Z"))))
+      (task-conductor-sessions--render sessions-no-id)
+      (goto-char (point-min))
+      (let ((entry-found nil))
+        (dolist (group (oref magit-root-section children))
+          (dolist (entry (oref group children))
+            (when (and (not entry-found)
+                       (eq (oref entry type) 'task-conductor-sessions-entry))
+              (setq entry-found entry))))
+        (when entry-found
+          (goto-char (oref entry-found start))
+          (should-error (task-conductor-sessions-merge-pr)
+                        :type 'user-error))))))
+
 ;;; Re-render on Push
 
 (ert-deftest task-conductor-sessions-rerender-if-live-no-buffer ()

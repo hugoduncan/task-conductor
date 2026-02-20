@@ -199,6 +199,8 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
                              (oref section value))))
       (let ((state (plist-get session :state))
             (session-id (plist-get session :session-id)))
+        (unless session-id
+          (user-error "Session has no session-id"))
         (unless (or (eq state :wait-pr-merge) (equal state "wait-pr-merge"))
           (user-error "Session is not in :wait-pr-merge state"))
         (let ((result (task-conductor-dev-env--eval-sync
