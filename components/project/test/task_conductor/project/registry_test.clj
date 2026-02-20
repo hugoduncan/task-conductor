@@ -226,6 +226,25 @@
               (is (= 2 (count listed)))
               (is (= #{p1 p2} (set listed))))))))))
 
+;;; Watch
+
+(deftest watch-test
+  (with-clean-project-state
+    (testing "watch!"
+      (testing "fires callback on registry mutation"
+        (fs/with-temp-dir [tmp]
+          (let [calls (atom [])
+                key (registry/watch! ::test-watch
+                                     (fn [k _r old new]
+                                       (swap! calls conj
+                                              {:key k :old old :new new})))]
+            (try
+              (registry/register! (str tmp) {:project/name "w"})
+              (is (= 1 (count @calls)))
+              (is (= ::test-watch (:key (first @calls))))
+              (finally
+                (registry/unwatch! key)))))))))
+
 ;;; Clear
 
 (deftest clear-test

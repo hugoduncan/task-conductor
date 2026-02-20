@@ -39,6 +39,12 @@
   {::pco/output [:engine/active-sessions]}
   {:engine/active-sessions (core/query-sessions #{:escalated :idle})})
 
+(graph/defresolver engine-all-session-summaries
+  "All active sessions with state, task, and project data."
+  []
+  {::pco/output [:engine/all-session-summaries]}
+  {:engine/all-session-summaries (core/all-session-summaries)})
+
 ;;; Mutations
 
 (graph/defmutation engine-start! [{:engine/keys [chart-id]}]
@@ -114,6 +120,7 @@
    engine-session-history
    engine-session-data
    engine-active-sessions
+   engine-all-session-summaries
    engine-start!
    engine-send!
    engine-stop!

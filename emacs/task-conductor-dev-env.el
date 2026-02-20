@@ -102,7 +102,12 @@ Prevents overlapping poll requests.")
 (defvar task-conductor-dev-env--cached-sessions nil
   "Cached session data from the JVM.
 A list of plists, each with :session-id, :state, :task-id, :task-title,
-and :entered-state-at.")
+:project-dir, and :entered-state-at.")
+
+(defvar task-conductor-dev-env--cached-projects nil
+  "Cached enriched project data from the JVM.
+A list of plists, each with :project/path, :project/name, and optionally
+:project/status and :project/active-sessions.")
 
 (defconst task-conductor-dev-env--idle-debounce-seconds 0.5
   "Debounce interval for idle detection in seconds.")
@@ -462,6 +467,16 @@ Updates cached sessions and re-renders the sessions buffer if live."
       (task-conductor-sessions-rerender-if-live))
     '(:status :ok)))
 
+(defun task-conductor-dev-env--handle-notify-projects-changed (params)
+  "Handle :notify-projects-changed notification from JVM.
+PARAMS contains :projects, a list of enriched project plists.
+Updates cached projects and re-renders the projects buffer if live."
+  (let ((projects (plist-get params :projects)))
+    (setq task-conductor-dev-env--cached-projects projects)
+    (when (fboundp 'task-conductor-project-rerender-if-live)
+      (task-conductor-project-rerender-if-live))
+    '(:status :ok)))
+
 (defun task-conductor-dev-env-query-sessions ()
   "Query JVM for sessions in escalated/idle states.
 Updates `task-conductor-dev-env--cached-sessions' and returns the session list."
@@ -501,6 +516,8 @@ Returns the response to send back to the orchestrator."
               (task-conductor-dev-env--handle-close-session params))
              (:notify-sessions-changed
               (task-conductor-dev-env--handle-notify-sessions-changed params))
+             (:notify-projects-changed
+              (task-conductor-dev-env--handle-notify-projects-changed params))
              (_
               `(:error :unknown-command :message ,(format "Unknown command: %s" command-type))))))
       (unless notification
@@ -597,6 +614,7 @@ Stops the command subscription loop before unregistering."
     (setq task-conductor-dev-env--dev-env-id nil)
     (setq task-conductor-dev-env--project-dir nil)
     (setq task-conductor-dev-env--cached-sessions nil)
+    (setq task-conductor-dev-env--cached-projects nil)
     (clrhash task-conductor-dev-env--sessions)
     (clrhash task-conductor-dev-env--session-hooks)
     (message "Disconnected from task-conductor")))

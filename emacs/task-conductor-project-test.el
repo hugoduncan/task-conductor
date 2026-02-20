@@ -46,12 +46,12 @@
       (should (string-match-p "longname" text)))))
 
 (ert-deftest task-conductor-project-format-entry-padding ()
-  ;; Format pads name to the given width.
+  ;; Format pads name to the given width with status icon prefix.
   (let ((entry (task-conductor-project--format-entry
                 (list :project/name "ab" :project/path "/x")
                 10)))
-    (should (string-match-p "^ab " entry))
-    (should (string-match-p "/x$" entry))))
+    (should (string-match-p "ab " entry))
+    (should (string-match-p "/x" entry))))
 
 (ert-deftest task-conductor-project-max-name-width ()
   ;; Max width is computed from the longest name.
@@ -72,6 +72,73 @@
         (should (eq (oref section type) 'task-conductor-project-entry))
         (should (equal "test" (plist-get (oref section value)
                                          :project/name)))))))
+
+;;; Status display tests
+
+(ert-deftest task-conductor-project-status-icon ()
+  ;; Status icons map correctly.
+  (should (equal "⚡" (task-conductor-project--status-icon :running)))
+  (should (equal "⚡" (task-conductor-project--status-icon :escalated)))
+  (should (equal "⏸" (task-conductor-project--status-icon :idle)))
+  (should (equal " " (task-conductor-project--status-icon nil))))
+
+(ert-deftest task-conductor-project-status-info-single ()
+  ;; Status info shows state and task ID for a single session.
+  (let* ((sessions (list (list :state :running :task-id 42)))
+         (project (list :project/name "p" :project/path "/p"
+                        :project/status :running
+                        :project/active-sessions sessions))
+         (info (task-conductor-project--status-info project)))
+    (should (string-match-p "running" info))
+    (should (string-match-p "task 42" info))))
+
+(ert-deftest task-conductor-project-status-info-multiple ()
+  ;; Status info shows count for multiple sessions.
+  (let* ((sessions (list (list :state :running :task-id 1)
+                         (list :state :idle :task-id 2)))
+         (project (list :project/name "p" :project/path "/p"
+                        :project/active-sessions sessions))
+         (info (task-conductor-project--status-info project)))
+    (should (string-match-p "\\+1" info))))
+
+(ert-deftest task-conductor-project-status-info-nil ()
+  ;; No status info when no sessions.
+  (let ((project (list :project/name "p" :project/path "/p")))
+    (should-not (task-conductor-project--status-info project))))
+
+(ert-deftest task-conductor-project-format-entry-with-status ()
+  ;; Format includes status icon and session info.
+  (let* ((sessions (list (list :state :running :task-id 5)))
+         (project (list :project/name "proj" :project/path "/proj"
+                        :project/status :running
+                        :project/active-sessions sessions))
+         (entry (task-conductor-project--format-entry project 10)))
+    (should (string-match-p "⚡" entry))
+    (should (string-match-p "running: task 5" entry))))
+
+(ert-deftest task-conductor-project-format-entry-no-status ()
+  ;; Format shows space icon when no status.
+  (let* ((project (list :project/name "proj" :project/path "/proj"))
+         (entry (task-conductor-project--format-entry project 10)))
+    (should-not (string-match-p "⚡" entry))
+    (should-not (string-match-p "⏸" entry))))
+
+(ert-deftest task-conductor-project-rerender-if-live ()
+  ;; Rerender updates buffer from cached projects when buffer exists.
+  (let* ((buf-name "*tc-test-proj-rerender*")
+         (task-conductor-project--buffer-name buf-name)
+         (task-conductor-dev-env--cached-projects
+          (list (list :project/name "cached" :project/path "/cached")))
+         (buf (get-buffer-create buf-name)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (task-conductor-project-mode))
+          (task-conductor-project-rerender-if-live)
+          (with-current-buffer buf
+            (should (string-match-p "cached" (buffer-string)))
+            (should (string-match-p "Projects (1)" (buffer-string)))))
+      (kill-buffer buf))))
 
 (provide 'task-conductor-project-test)
 ;;; task-conductor-project-test.el ends here

@@ -99,4 +99,36 @@
         (let [result (core/query-sessions #{:idle})]
           (is (= 1 (count result)))
           (is (= 99 (:task-id (first result))))
-          (is (nil? (:task-title (first result)))))))))
+          (is (nil? (:task-title (first result)))))))
+
+    (testing "includes project-dir from session data"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (core/start! ::chart {:data {:task-id 1
+                                     :project-dir "/tmp/proj"}})
+        (let [result (core/query-sessions #{:idle})]
+          (is (= "/tmp/proj" (:project-dir (first result)))))))))
+
+(deftest all-session-summaries-test
+  (testing "all-session-summaries"
+    (testing "returns empty vec when no sessions"
+      (with-clean-engine
+        (is (= [] (core/all-session-summaries)))))
+
+    (testing "returns all sessions regardless of state"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (let [s1 (core/start! ::chart {:data {:task-id 1
+                                              :project-dir "/a"}})
+              s2 (core/start! ::chart {:data {:task-id 2
+                                              :project-dir "/b"}})]
+          (core/send! s2 :start) ;; s2 goes to :running
+          (let [result (core/all-session-summaries)
+                by-id (into {} (map (juxt :session-id identity)) result)]
+            (is (= 2 (count result)))
+            (is (= :idle (:state (get by-id s1))))
+            (is (= :running (:state (get by-id s2))))
+            (is (= "/a" (:project-dir (get by-id s1))))
+            (is (= "/b" (:project-dir (get by-id s2))))
+            (is (= 1 (:task-id (get by-id s1))))
+            (is (= 2 (:task-id (get by-id s2))))))))))

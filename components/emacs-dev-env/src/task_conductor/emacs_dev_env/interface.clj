@@ -226,6 +226,19 @@
   []
   (core/notify-all-sessions-changed!))
 
+(defn notify-projects-changed!
+  "Push enriched project data notification to a specific dev-env.
+
+  Parameters:
+    dev-env - The EmacsDevEnv instance"
+  [dev-env]
+  (core/notify-projects-changed! dev-env))
+
+(defn notify-all-projects-changed!
+  "Push enriched project data to all connected dev-envs."
+  []
+  (core/notify-all-projects-changed!))
+
 ;;; Health Check
 
 (defn ping

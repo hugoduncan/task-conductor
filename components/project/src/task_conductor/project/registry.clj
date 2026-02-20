@@ -135,6 +135,19 @@
                        m))))
         @result))))
 
+(defn watch!
+  "Add a watch on the registry atom. Callback receives
+  (key atom old-state new-state). Returns key."
+  [key f]
+  (add-watch registry key f)
+  key)
+
+(defn unwatch!
+  "Remove a watch from the registry atom."
+  [key]
+  (remove-watch registry key)
+  nil)
+
 (defn clear!
   "Resets registry. For testing."
   []

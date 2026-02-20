@@ -8,7 +8,9 @@
    [taoensso.timbre :as log]
    [task-conductor.dev-env.protocol :as protocol]
    [task-conductor.dev-env.registry :as generic-registry]
-   [task-conductor.pathom-graph.interface :as graph])
+   [task-conductor.pathom-graph.interface :as graph]
+   [task-conductor.project.registry :as project-registry]
+   [task-conductor.statechart-engine.interface :as sc])
   (:import
    [java.util UUID]))
 
@@ -392,13 +394,61 @@
 
 ;;; Project Query
 
+(defn- derive-project-status
+  "Derive project status from its active sessions.
+  Returns :escalated, :idle, :running, or nil."
+  [sessions]
+  (when (seq sessions)
+    (let [states (into #{} (map :state) sessions)]
+      (cond
+        (contains? states :escalated) :escalated
+        (contains? states :idle) :idle
+        :else :running))))
+
+(defn- enrich-project
+  "Enrich a project map with execution status from active sessions."
+  [project all-sessions]
+  (let [project-path (:project/path project)
+        matching (filterv #(= project-path (:project-dir %)) all-sessions)
+        status (derive-project-status matching)]
+    (cond-> project
+      status (assoc :project/status status)
+      (seq matching) (assoc :project/active-sessions
+                            (mapv #(select-keys % [:session-id :state :task-id])
+                                  matching)))))
+
+(defn- enriched-projects
+  "Fetch all projects enriched with session status."
+  []
+  (let [projects (:project/all (graph/query [:project/all]))
+        all-sessions (sc/all-session-summaries)]
+    (mapv #(enrich-project % all-sessions) projects)))
+
+(defn notify-projects-changed!
+  "Push enriched project data to a specific dev-env via notification."
+  [dev-env]
+  (let [{:keys [command-chan connected?]} @(:state dev-env)]
+    (when (and connected? command-chan)
+      (send-notification command-chan
+                         :notify-projects-changed
+                         {:projects (enriched-projects)}))))
+
+(defn notify-all-projects-changed!
+  "Push enriched project data to all connected dev-envs."
+  []
+  (doseq [{:keys [dev-env/id type]} (generic-registry/list-dev-envs)
+          :when (= :emacs type)
+          :let [dev-env (generic-registry/get-dev-env id)]
+          :when (connected? dev-env)]
+    (notify-projects-changed! dev-env)))
+
 (defn query-projects-by-id
-  "Query all registered projects. Called by Emacs via nREPL.
+  "Query all registered projects enriched with execution status.
   Returns {:status :ok :projects [...]} or {:status :error ...}."
   [dev-env-id]
   (if (get-dev-env dev-env-id)
     {:status :ok
-     :projects (:project/all (graph/query [:project/all]))}
+     :projects (enriched-projects)}
     {:status :error
      :message (str "Dev-env not found: " dev-env-id)}))
 
@@ -573,3 +623,21 @@
        {:dev-env-id dev-env-id
         :type :emacs
         :dev-env (get-dev-env dev-env-id)}))))
+
+;;; Registry Watch
+
+(defn install-project-registry-watch!
+  "Install a watch on the project registry that pushes notifications
+  to all connected dev-envs when projects change."
+  []
+  (project-registry/watch!
+   ::project-notify
+   (fn [_key _ref _old _new]
+     (notify-all-projects-changed!))))
+
+(defn remove-project-registry-watch!
+  "Remove the project registry watch."
+  []
+  (project-registry/unwatch! ::project-notify))
+
+(install-project-registry-watch!)

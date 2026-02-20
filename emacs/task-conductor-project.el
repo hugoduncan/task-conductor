@@ -96,12 +96,36 @@ Returns a plist with :status and :project on success."
   (cl-loop for p in projects
            maximize (length (or (plist-get p :project/name) ""))))
 
+(defun task-conductor-project--status-icon (status)
+  "Return a status icon string for STATUS keyword."
+  (pcase status
+    (:running "⚡")
+    (:escalated "⚡")
+    (:idle "⏸")
+    (_ " ")))
+
+(defun task-conductor-project--status-info (project)
+  "Return a status info string for PROJECT, or nil."
+  (when-let ((sessions (plist-get project :project/active-sessions)))
+    (let* ((first-session (car sessions))
+           (state (plist-get first-session :state))
+           (task-id (plist-get first-session :task-id))
+           (count (length sessions)))
+      (if (> count 1)
+          (format "[%s: task %s +%d]" state task-id (1- count))
+        (format "[%s: task %s]" state task-id)))))
+
 (defun task-conductor-project--format-entry (project name-width)
-  "Format PROJECT entry with NAME-WIDTH padding."
+  "Format PROJECT entry with NAME-WIDTH padding and status."
   (let* ((name (or (plist-get project :project/name) "unnamed"))
          (path (or (plist-get project :project/path) ""))
-         (padded (concat name (make-string (max 0 (- name-width (length name))) ?\s))))
-    (format "%s  %s" padded path)))
+         (status (plist-get project :project/status))
+         (icon (task-conductor-project--status-icon status))
+         (padded (concat name (make-string (max 0 (- name-width (length name))) ?\s)))
+         (info (task-conductor-project--status-info project)))
+    (if info
+        (format "%s %s  %s    %s" icon padded path info)
+      (format "%s %s  %s" icon padded path))))
 
 (defun task-conductor-project--render (projects)
   "Render PROJECTS into the current buffer.
@@ -127,6 +151,17 @@ PROJECTS is a list of plists with :project/name and :project/path."
           (goto-char (oref s start)))
       (goto-char (point-min)))))
 
+;;; Auto-refresh
+
+(defun task-conductor-project-rerender-if-live ()
+  "Re-render projects buffer from cached data if it exists.
+Called by the :notify-projects-changed handler."
+  (when-let ((buf (get-buffer task-conductor-project--buffer-name)))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (task-conductor-project--render
+         task-conductor-dev-env--cached-projects)))))
+
 ;;; Interactive commands
 
 (defun task-conductor-project-refresh ()
@@ -138,8 +173,9 @@ PROJECTS is a list of plists with :project/name and :project/path."
         (message "Not connected to task-conductor"))
     (let ((result (task-conductor-project--list)))
       (if (eq :ok (plist-get result :status))
-          (progn
-            (task-conductor-project--render (plist-get result :projects))
+          (let ((projects (plist-get result :projects)))
+            (setq task-conductor-dev-env--cached-projects projects)
+            (task-conductor-project--render projects)
             (message "Projects refreshed"))
         (message "Error fetching projects: %s"
                  (or (plist-get result :message) "unknown"))))))
