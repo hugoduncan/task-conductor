@@ -234,6 +234,7 @@ Shared Pathom3 graph for EQL queries.
 
 - `parseedn-read-str` returns EDN vectors as Emacs vectors, not lists. Use `(append vec nil)` to coerce, or handle `vectorp` in recursive converters.
 - `read-directory-name` does not expand `~` — wrap with `expand-file-name`.
+- `(require 'task-conductor.project.execute :reload)` fails — use `in-ns` to patch individual fns instead.
 
 ## Error Handling
 

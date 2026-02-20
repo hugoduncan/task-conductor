@@ -2,6 +2,27 @@
 
 Past discoveries and learnings.
 
+## 2026-02-20: Story Execution Debugging
+
+### CLAUDECODE Env Var Blocks Subprocess
+- Claude CLI refuses to start when `CLAUDECODE=1` is inherited from parent session
+- Fix: `{:extra-env {"CLAUDECODE" ""}}` in babashka.process opts
+- Symptom: exit code 1, zero events, nil session-id
+
+### mcp-tasks Meta Keys Are Namespaced
+- CLI returns meta as `#:user{:refined "true"}` — key is `:user/refined`, not `:refined`
+- `refined?` must compare `(name k)` to handle any namespace
+
+### Statechart Re-registration on Reload
+- `(require 'task-conductor.project.execute :reload)` fails: "Chart already registered"
+- Workaround: `(in-ns 'task-conductor.project.execute)` then redefine individual fns
+- Root cause: `register-statecharts!` runs at namespace load time
+
+### Emacs Hook Timing
+- `register-hook` sent after `start-session` can fail if buffer dies before command arrives
+- Fix: always add `kill-buffer-hook` during `start-session` itself
+- `on-close-handler` should fire unconditionally for managed sessions
+
 ## 2026-02-20: Emacs Dev-Env Startup
 
 ### Multiple Emacs Server Sockets
