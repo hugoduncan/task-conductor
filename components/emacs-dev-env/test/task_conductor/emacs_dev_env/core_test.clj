@@ -5,7 +5,8 @@
    [clojure.test :refer [deftest is testing]]
    [task-conductor.dev-env.protocol :as protocol]
    [task-conductor.dev-env.registry :as generic-registry]
-   [task-conductor.emacs-dev-env.core :as core]))
+   [task-conductor.emacs-dev-env.core :as core]
+   [task-conductor.statechart-engine.resolvers :as resolvers]))
 
 (defmacro with-register-hook-responder
   "Spawn a thread that responds to :register-hook commands with success.
@@ -609,3 +610,63 @@
 
       (finally
         (generic-registry/clear!)))))
+
+;;; Session Query Tests
+
+(deftest query-sessions-by-id-test
+  ;; Verify query-sessions-by-id validates dev-env and queries
+  ;; active sessions via pathom graph.
+  (resolvers/register-resolvers!)
+  (testing "query-sessions-by-id"
+    (testing "returns error for unknown dev-env-id"
+      (let [result (core/query-sessions-by-id "nonexistent")]
+        (is (= :error (:status result)))
+        (is (string? (:message result)))))
+
+    (testing "returns sessions from statechart engine"
+      (let [dev-env-id (core/register-emacs-dev-env)
+            result (core/query-sessions-by-id dev-env-id)]
+        (is (= :ok (:status result)))
+        (is (vector? (:sessions result)))
+        (core/unregister-emacs-dev-env dev-env-id)))))
+
+;;; Notification Tests
+
+(deftest notification-test
+  ;; Verify fire-and-forget notifications are delivered to Emacs
+  ;; without requiring a response.
+  (resolvers/register-resolvers!)
+  (testing "notifications"
+    (testing "are delivered via await-command"
+      (let [dev-env-id (core/register-emacs-dev-env)]
+        (core/notify-sessions-changed! (core/get-dev-env dev-env-id))
+        (let [result (core/await-command-by-id dev-env-id 1000)
+              cmd (:command result)]
+          (is (= :ok (:status result)))
+          (is (= :notify-sessions-changed (:command cmd)))
+          (is (true? (:notification cmd)))
+          (is (vector? (get-in cmd [:params :sessions]))))
+        (core/unregister-emacs-dev-env dev-env-id)))
+
+    (testing "do not create pending commands"
+      (let [dev-env-id (core/register-emacs-dev-env)
+            dev-env (core/get-dev-env dev-env-id)]
+        (core/notify-sessions-changed! dev-env)
+        ;; Consume the notification
+        (core/await-command-by-id dev-env-id 1000)
+        ;; No pending commands should exist
+        (is (empty? (:pending-commands @(:state dev-env))))
+        (core/unregister-emacs-dev-env dev-env-id)))
+
+    (testing "notify-all-sessions-changed! sends to all connected dev-envs"
+      (let [id1 (core/register-emacs-dev-env)
+            id2 (core/register-emacs-dev-env)]
+        (core/notify-all-sessions-changed!)
+        (let [r1 (core/await-command-by-id id1 1000)
+              r2 (core/await-command-by-id id2 1000)]
+          (is (= :ok (:status r1)))
+          (is (= :ok (:status r2)))
+          (is (= :notify-sessions-changed (get-in r1 [:command :command])))
+          (is (= :notify-sessions-changed (get-in r2 [:command :command]))))
+        (core/unregister-emacs-dev-env id1)
+        (core/unregister-emacs-dev-env id2)))))

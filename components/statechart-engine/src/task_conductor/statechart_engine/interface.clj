@@ -193,3 +193,14 @@
   f is a function that takes the current data and returns new data.
   Returns the new data. Throws if session doesn't exist."
   core/update-data!)
+
+;;; Session Query Functions
+
+(def query-sessions
+  "Query active sessions filtered by state.
+  Returns vec of maps with :session-id, :state, :task-id, :task-title,
+  and :entered-state-at for sessions whose current state intersects
+  the given state-filter set.
+
+  state-filter - set of state keywords to match (e.g. #{:escalated :idle})"
+  core/query-sessions)

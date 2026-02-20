@@ -161,6 +161,30 @@
   [dev-env-id hook-type session-id reason]
   (core/send-hook-event-by-id dev-env-id hook-type session-id reason))
 
+;;; Session Query
+
+(defn query-sessions-by-id
+  "Query sessions in escalated/idle states using dev-env-id.
+  Returns {:status :ok :sessions [...]} or {:status :error ...}.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env"
+  [dev-env-id]
+  (core/query-sessions-by-id dev-env-id))
+
+(defn notify-sessions-changed!
+  "Push session data notification to a specific dev-env.
+
+  Parameters:
+    dev-env - The EmacsDevEnv instance"
+  [dev-env]
+  (core/notify-sessions-changed! dev-env))
+
+(defn notify-all-sessions-changed!
+  "Push session data to all connected dev-envs."
+  []
+  (core/notify-all-sessions-changed!))
+
 ;;; Health Check
 
 (defn ping

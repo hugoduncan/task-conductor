@@ -1,5 +1,7 @@
 {:paths ["src"]
  :deps {org.clojure/core.async {:mvn/version "1.7.701"}
-        com.taoensso/timbre {:mvn/version "6.6.2"}}
+        com.taoensso/timbre {:mvn/version "6.6.2"}
+        task-conductor/pathom-graph
+        {:local/root "../pathom-graph"}}
  :aliases
  {:test {:extra-paths ["test"]}}}

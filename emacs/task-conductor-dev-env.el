@@ -99,6 +99,11 @@ Set during connect to ensure poll loop uses correct nREPL session.")
   "Non-nil when an async poll request is in flight.
 Prevents overlapping poll requests.")
 
+(defvar task-conductor-dev-env--cached-sessions nil
+  "Cached session data from the JVM.
+A list of plists, each with :session-id, :state, :task-id, :task-title,
+and :entered-state-at.")
+
 (defconst task-conductor-dev-env--idle-debounce-seconds 0.5
   "Debounce interval for idle detection in seconds.")
 
@@ -445,6 +450,31 @@ hook if registered), removes from sessions table, and cleans up hooks."
       (task-conductor-dev-env--cleanup-session-hooks session-id)
       '(:status :ok))))
 
+;;; Session query
+
+(defun task-conductor-dev-env--handle-notify-sessions-changed (params)
+  "Handle :notify-sessions-changed notification from JVM.
+PARAMS contains :sessions, a list of session plists.
+Updates cached sessions and re-renders the sessions buffer if live."
+  (let ((sessions (plist-get params :sessions)))
+    (setq task-conductor-dev-env--cached-sessions sessions)
+    (when (fboundp 'task-conductor-sessions-rerender-if-live)
+      (task-conductor-sessions-rerender-if-live))
+    '(:status :ok)))
+
+(defun task-conductor-dev-env-query-sessions ()
+  "Query JVM for sessions in escalated/idle states.
+Updates `task-conductor-dev-env--cached-sessions' and returns the session list."
+  (interactive)
+  (unless (task-conductor-dev-env--connected-p)
+    (user-error "Not connected to task-conductor"))
+  (let ((result (task-conductor-dev-env--eval-sync
+                 (format "(task-conductor.emacs-dev-env.interface/query-sessions-by-id %S)"
+                         task-conductor-dev-env--dev-env-id))))
+    (when (eq :ok (plist-get result :status))
+      (setq task-conductor-dev-env--cached-sessions (plist-get result :sessions)))
+    result))
+
 ;;; Command dispatch
 
 (defun task-conductor-dev-env--dispatch-command (command)
@@ -453,7 +483,8 @@ COMMAND is a plist with :command-id, :command, and :params.
 Returns the response to send back to the orchestrator."
   (let ((command-type (plist-get command :command))
         (command-id (plist-get command :command-id))
-        (params (plist-get command :params)))
+        (params (plist-get command :params))
+        (notification (plist-get command :notification)))
     (let ((response
            (pcase command-type
              (:ping
@@ -468,9 +499,12 @@ Returns the response to send back to the orchestrator."
               '(:error :not-implemented :message "query-events not yet implemented"))
              (:close-session
               (task-conductor-dev-env--handle-close-session params))
+             (:notify-sessions-changed
+              (task-conductor-dev-env--handle-notify-sessions-changed params))
              (_
               `(:error :unknown-command :message ,(format "Unknown command: %s" command-type))))))
-      (task-conductor-dev-env--send-response command-id response)
+      (unless notification
+        (task-conductor-dev-env--send-response command-id response))
       response)))
 
 ;;; Async poll loop
@@ -562,6 +596,7 @@ Stops the command subscription loop before unregistering."
              dev-env-id))
     (setq task-conductor-dev-env--dev-env-id nil)
     (setq task-conductor-dev-env--project-dir nil)
+    (setq task-conductor-dev-env--cached-sessions nil)
     (clrhash task-conductor-dev-env--sessions)
     (clrhash task-conductor-dev-env--session-hooks)
     (message "Disconnected from task-conductor")))

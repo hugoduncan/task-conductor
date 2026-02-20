@@ -7,7 +7,8 @@
    [clojure.core.async :as async]
    [taoensso.timbre :as log]
    [task-conductor.dev-env.protocol :as protocol]
-   [task-conductor.dev-env.registry :as generic-registry])
+   [task-conductor.dev-env.registry :as generic-registry]
+   [task-conductor.pathom-graph.interface :as graph])
   (:import
    [java.util UUID]))
 
@@ -52,6 +53,22 @@
           {:error :timeout
            :message (str "Response timeout waiting for " (name command-kw))})
         result))))
+
+(defn- send-notification
+  "Send a one-way notification to Emacs (no response expected).
+  Returns true if put on channel, false if channel is nil."
+  [command-chan command-kw params]
+  (if command-chan
+    (do
+      (async/>!! command-chan {:command-id (UUID/randomUUID)
+                               :command command-kw
+                               :params params
+                               :notification true})
+      true)
+    (do
+      (log/debug "Notification dropped, no command channel"
+                 {:command command-kw})
+      false)))
 
 (defrecord EmacsDevEnv [state]
   ;; state is an atom containing:
@@ -213,11 +230,12 @@
 
            :else
            (do
-             (swap!
-              (:state dev-env)
-              assoc-in
-              [:pending-commands (:command-id value)]
-              (:response-promise value))
+             (when-let [rp (:response-promise value)]
+               (swap!
+                (:state dev-env)
+                assoc-in
+                [:pending-commands (:command-id value)]
+                rp))
              {:status :ok
               :command (dissoc value :response-promise)})))))))
 
@@ -334,6 +352,43 @@
   (if-let [dev-env (get-dev-env dev-env-id)]
     (send-hook-event dev-env hook-type session-id reason)
     {:error :not-found :message (str "Dev-env not found: " dev-env-id)}))
+
+;;; Session Query
+
+(defn query-sessions-by-id
+  "Query sessions in escalated/idle states. Called by Emacs via nREPL.
+  Returns {:status :ok :sessions [...]} or {:status :error ...}.
+
+  Validates that the caller is a registered dev-env."
+  [dev-env-id]
+  (if (get-dev-env dev-env-id)
+    {:status :ok
+     :sessions (:engine/active-sessions
+                (graph/query [:engine/active-sessions]))}
+    {:status :error
+     :message (str "Dev-env not found: " dev-env-id)}))
+
+(defn notify-sessions-changed!
+  "Push session data to a specific dev-env via notification.
+  Sends :notify-sessions-changed command with current session data."
+  [dev-env]
+  (let [{:keys [command-chan connected?]} @(:state dev-env)]
+    (when (and connected? command-chan)
+      (let [sessions (:engine/active-sessions
+                      (graph/query
+                       [:engine/active-sessions]))]
+        (send-notification command-chan
+                           :notify-sessions-changed
+                           {:sessions sessions})))))
+
+(defn notify-all-sessions-changed!
+  "Push session data to all connected dev-envs."
+  []
+  (doseq [{:keys [dev-env/id type]} (generic-registry/list-dev-envs)
+          :when (= :emacs type)
+          :let [dev-env (generic-registry/get-dev-env id)]
+          :when (connected? dev-env)]
+    (notify-sessions-changed! dev-env)))
 
 ;;; Health Check
 

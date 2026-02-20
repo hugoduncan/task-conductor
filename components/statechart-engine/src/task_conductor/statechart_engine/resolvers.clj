@@ -33,6 +33,12 @@
    ::pco/output [:engine/session-data]}
   {:engine/session-data (core/get-data session-id)})
 
+(graph/defresolver engine-active-sessions
+  "Sessions in escalated or idle states — those needing attention."
+  []
+  {::pco/output [:engine/active-sessions]}
+  {:engine/active-sessions (core/query-sessions #{:escalated :idle})})
+
 ;;; Mutations
 
 (graph/defmutation engine-start! [{:engine/keys [chart-id]}]
@@ -107,6 +113,7 @@
    engine-session-state
    engine-session-history
    engine-session-data
+   engine-active-sessions
    engine-start!
    engine-send!
    engine-stop!

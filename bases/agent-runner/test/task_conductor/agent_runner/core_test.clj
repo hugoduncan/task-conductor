@@ -15,6 +15,8 @@
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.core :as agent-runner]
    [task-conductor.claude-cli.interface :as claude-cli]
+   [task-conductor.emacs-dev-env.interface
+    :as emacs-dev-env]
    [task-conductor.dev-env.registry :as dev-env-registry]
    [task-conductor.dev-env.resolvers :as dev-env-resolvers]
    [task-conductor.mcp-tasks.interface :as mcp-tasks]
@@ -42,6 +44,7 @@
      (engine-resolvers/reset-dev-env-hooks!)
      (resolvers/reset-skill-threads!)
      (sc/remove-transition-listener! ::agent-runner/transition-log)
+     (sc/remove-transition-listener! ::agent-runner/session-notify)
      (execute/register-statecharts!)
      (engine-resolvers/register-resolvers!)
      (dev-env-resolvers/register-resolvers!)
@@ -52,6 +55,7 @@
        (resolvers/await-skill-threads!)
        (resolvers/reset-skill-threads!)
        (sc/remove-transition-listener! ::agent-runner/transition-log)
+       (sc/remove-transition-listener! ::agent-runner/session-notify)
        (engine/reset-engine!)
        (graph/reset-graph!)
        (registry/clear!)
@@ -96,14 +100,66 @@
           (is (true? (:graph-operational? result)))
           (is (seq (:namespaces result))))))
 
-    (testing "registers transition listener"
+    (testing "registers transition listeners"
       (with-agent-runner-state
         (agent-runner/bootstrap!)
-        ;; Verify listener was registered by checking it can be removed
-        ;; (remove returns the key if it existed)
-        (let [removed (sc/remove-transition-listener!
-                       ::agent-runner/transition-log)]
-          (is (= ::agent-runner/transition-log removed)))))))
+        ;; Verify listeners were registered by checking they can be removed
+        (let [log-removed (sc/remove-transition-listener!
+                           ::agent-runner/transition-log)
+              notify-removed (sc/remove-transition-listener!
+                              ::agent-runner/session-notify)]
+          (is (= ::agent-runner/transition-log log-removed))
+          (is (= ::agent-runner/session-notify notify-removed)))))))
+
+;;; Notification Tests
+
+(deftest notify-on-transition-test
+  ;; Verify bootstrap! registers a transition listener that calls
+  ;; notify-all-sessions-changed! when sessions enter/leave
+  ;; escalated or idle.
+  (testing "notify-on-session-state-change"
+    (testing "fires when session enters escalated state"
+      (with-agent-runner-state
+        (let [notified (atom 0)]
+          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
+                        (fn [] (swap! notified inc))]
+            (agent-runner/bootstrap!)
+            (let [mnull (mcp-tasks/make-nullable
+                         {:responses (task-responses {})})
+                  cnull (claude-cli/make-nullable)]
+              (mcp-tasks/with-nullable-mcp-tasks mnull
+                (claude-cli/with-nullable-claude-cli cnull
+                  (agent-runner/run-task! "/test" 300)
+                  ;; Entering :idle triggers notification.
+                  (is (pos? @notified)))))))))
+
+    (testing "does not fire for non-session states"
+      (with-agent-runner-state
+        (let [notified (atom 0)]
+          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
+                        (fn [] (swap! notified inc))]
+            (agent-runner/bootstrap!)
+            (let [listeners @engine/transition-listeners
+                  listener (get listeners
+                                ::agent-runner/session-notify)]
+              (listener "test" #{:running} #{:completed} :done)
+              (is (zero? @notified)))))))
+
+    (testing "does not fire for no-op transitions within same notify state"
+      (with-agent-runner-state
+        (let [notified (atom 0)]
+          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
+                        (fn [] (swap! notified inc))]
+            (agent-runner/bootstrap!)
+            (let [listeners @engine/transition-listeners
+                  listener (get listeners
+                                ::agent-runner/session-notify)]
+              ;; Both from and to contain :escalated
+              (listener "test"
+                        #{:escalated :sub-a}
+                        #{:escalated :sub-b}
+                        :internal)
+              (is (zero? @notified)))))))))
 
 ;;; run-story! Tests
 
