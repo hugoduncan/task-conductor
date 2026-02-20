@@ -930,9 +930,8 @@
                 (is (= :triggered (:pr-merge/status merge-result)))
                 (is (nil? (:pr-merge/error merge-result)))
                 ;; Should have transitioned to :merging-pr
-                (is (contains? (sc/current-state session-id) :merging-pr))
-                ;; Wait for skill thread triggered by :merging-pr entry action
-                (resolvers/await-skill-threads!)))))))
+                ;; (skill thread cleanup handled by with-execute-state finally)
+                (is (contains? (sc/current-state session-id) :merging-pr))))))))
 
     (testing "returns error when session not in :wait-pr-merge"
       (with-execute-state
