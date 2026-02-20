@@ -369,6 +369,20 @@
 
 ;;; Session Query API
 
+(def ^:private state-priority
+  "State selection priority, highest first.
+  Escalated states need attention; idle indicates a session awaiting
+  interaction."
+  [:escalated :idle])
+
+(defn- select-priority-state
+  "Select the highest-priority state from a set of states.
+  Uses state-priority ordering, falling back to lexicographic sort
+  for states not in the priority list."
+  [states]
+  (or (some states state-priority)
+      (first (sort states))))
+
 (defn- session-summary
   "Build a summary map for a session from its data and history."
   [sid current-state data hist]
@@ -385,9 +399,8 @@
   :project-dir, and :entered-state-at for sessions whose current state
   intersects the given state-filter set.
 
-  Each session returns a single :state — the filtered states are expected
-  to be mutually exclusive leaf states (e.g. :escalated, :idle).
-  If multiple states match, the lexicographically first is returned.
+  Each session returns a single :state selected by priority
+  (:escalated > :idle > lexicographic fallback).
 
   state-filter - set of state keywords to match (e.g. #{:escalated :idle})"
   [state-filter]
@@ -398,20 +411,21 @@
              (let [current (state sid)
                    matching (set/intersection current state-filter)]
                (when (seq matching)
-                 (session-summary sid (first (sort matching))
+                 (session-summary sid (select-priority-state matching)
                                   (get @session-data sid)
                                   (get @histories sid))))))
           session-ids)))
 
 (defn all-session-summaries
   "Returns summaries of all active sessions.
-  Each summary contains :session-id, :state (first state from config),
-  :task-id, :task-title, :project-dir, and :entered-state-at."
+  Each summary contains :session-id, :state (selected by priority:
+  :escalated > :idle > lexicographic), :task-id, :task-title,
+  :project-dir, and :entered-state-at."
   []
   (into []
         (map (fn [sid]
                (let [current (state sid)]
-                 (session-summary sid (first (sort current))
+                 (session-summary sid (select-priority-state current)
                                   (get @session-data sid)
                                   (get @histories sid)))))
         (keys @sessions)))

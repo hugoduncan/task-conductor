@@ -109,6 +109,25 @@
         (let [result (core/query-sessions #{:idle})]
           (is (= "/tmp/proj" (:project-dir (first result)))))))))
 
+(deftest select-priority-state-test
+  ;; Tests priority-based state selection: :escalated > :idle > lexicographic.
+  ;; Ensures the most actionable state is surfaced in session summaries.
+  (let [select @#'core/select-priority-state]
+    (testing "select-priority-state"
+      (testing "prefers :escalated over other states"
+        (is (= :escalated (select #{:escalated :idle})))
+        (is (= :escalated (select #{:escalated :running})))
+        (is (= :escalated (select #{:escalated :idle :running}))))
+      (testing "prefers :idle over non-priority states"
+        (is (= :idle (select #{:idle :running})))
+        (is (= :idle (select #{:idle :waiting}))))
+      (testing "falls back to lexicographic sort"
+        (is (= :running (select #{:running :waiting})))
+        (is (= :alpha (select #{:beta :alpha}))))
+      (testing "returns single state as-is"
+        (is (= :idle (select #{:idle})))
+        (is (= :running (select #{:running})))))))
+
 (deftest all-session-summaries-test
   (testing "all-session-summaries"
     (testing "returns empty vec when no sessions"

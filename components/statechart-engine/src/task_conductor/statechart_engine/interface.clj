@@ -200,13 +200,15 @@
   "Query active sessions filtered by state.
   Returns vec of maps with :session-id, :state, :task-id, :task-title,
   :project-dir, and :entered-state-at for sessions whose current state
-  intersects the given state-filter set.
+  intersects the given state-filter set. State selected by priority:
+  :escalated > :idle > lexicographic fallback.
 
   state-filter - set of state keywords to match (e.g. #{:escalated :idle})"
   core/query-sessions)
 
 (def all-session-summaries
   "Returns summaries of all active sessions.
-  Each summary contains :session-id, :state, :task-id, :task-title,
+  Each summary contains :session-id, :state (selected by priority:
+  :escalated > :idle > lexicographic), :task-id, :task-title,
   :project-dir, and :entered-state-at."
   core/all-session-summaries)
