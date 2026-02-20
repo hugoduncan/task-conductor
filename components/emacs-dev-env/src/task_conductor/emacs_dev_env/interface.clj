@@ -163,6 +163,47 @@
 
 ;;; Session Query
 
+(defn query-projects-by-id
+  "Query all registered projects using dev-env-id.
+  Returns {:status :ok :projects [...]} or {:status :error ...}.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env"
+  [dev-env-id]
+  (core/query-projects-by-id dev-env-id))
+
+(defn create-project-by-id
+  "Create a project using dev-env-id.
+  Returns {:status :ok :project {...}} or {:status :error ...}.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    path       - Project directory path
+    name       - Optional project name (nil to use directory name)"
+  [dev-env-id path name]
+  (core/create-project-by-id dev-env-id path name))
+
+(defn update-project-by-id
+  "Update project name using dev-env-id.
+  Returns {:status :ok :project {...}} or {:status :error ...}.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    path       - Project directory path
+    name       - New project name"
+  [dev-env-id path name]
+  (core/update-project-by-id dev-env-id path name))
+
+(defn delete-project-by-id
+  "Delete project by path using dev-env-id.
+  Returns {:status :ok :project {...}} or {:status :error ...}.
+
+  Parameters:
+    dev-env-id - String ID returned from register-emacs-dev-env
+    path       - Project directory path"
+  [dev-env-id path]
+  (core/delete-project-by-id dev-env-id path))
+
 (defn query-sessions-by-id
   "Query sessions in escalated/idle states using dev-env-id.
   Returns {:status :ok :sessions [...]} or {:status :error ...}.

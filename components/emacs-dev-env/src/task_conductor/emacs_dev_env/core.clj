@@ -390,6 +390,65 @@
           :when (connected? dev-env)]
     (notify-sessions-changed! dev-env)))
 
+;;; Project Query
+
+(defn query-projects-by-id
+  "Query all registered projects. Called by Emacs via nREPL.
+  Returns {:status :ok :projects [...]} or {:status :error ...}."
+  [dev-env-id]
+  (if (get-dev-env dev-env-id)
+    {:status :ok
+     :projects (:project/all (graph/query [:project/all]))}
+    {:status :error
+     :message (str "Dev-env not found: " dev-env-id)}))
+
+(defn create-project-by-id
+  "Create a project. Called by Emacs via nREPL.
+  Returns {:status :ok :project {...}} or {:status :error ...}."
+  [dev-env-id path name]
+  (if (get-dev-env dev-env-id)
+    (let [params (cond-> {:project/path path}
+                   name (assoc :project/name name))
+          mutation-sym `task-conductor.project.resolvers/project-create!
+          query-result (graph/query [(list mutation-sym params)])
+          result (:project/result (get query-result mutation-sym))]
+      (if (:error result)
+        {:status :error :message (:message result) :error (:error result)}
+        {:status :ok :project result}))
+    {:status :error
+     :message (str "Dev-env not found: " dev-env-id)}))
+
+(defn update-project-by-id
+  "Update project name. Called by Emacs via nREPL.
+  Returns {:status :ok :project {...}} or {:status :error ...}."
+  [dev-env-id path name]
+  (if (get-dev-env dev-env-id)
+    (let [mutation-sym `task-conductor.project.resolvers/project-update!
+          query-result (graph/query
+                        [(list mutation-sym
+                               {:project/path path :project/name name})])
+          result (:project/result (get query-result mutation-sym))]
+      (if (:error result)
+        {:status :error :message (:message result) :error (:error result)}
+        {:status :ok :project result}))
+    {:status :error
+     :message (str "Dev-env not found: " dev-env-id)}))
+
+(defn delete-project-by-id
+  "Delete project by path. Called by Emacs via nREPL.
+  Returns {:status :ok :project {...}} or {:status :error ...}."
+  [dev-env-id path]
+  (if (get-dev-env dev-env-id)
+    (let [mutation-sym `task-conductor.project.resolvers/project-delete!
+          query-result (graph/query
+                        [(list mutation-sym {:project/path path})])
+          result (:project/result (get query-result mutation-sym))]
+      (if result
+        {:status :ok :project result}
+        {:status :error :message (str "Project not found: " path)}))
+    {:status :error
+     :message (str "Dev-env not found: " dev-env-id)}))
+
 ;;; Health Check
 
 (def ^:const default-ping-timeout-ms
