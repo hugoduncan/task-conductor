@@ -130,7 +130,8 @@
   (let [{:keys [dir timeout on-line on-event _args]} opts
         args (or _args (build-args opts))
         result-promise (promise)
-        proc (p/process args (cond-> {:in "" :out :stream :err :inherit}
+        proc (p/process args (cond-> {:in "" :out :stream :err :inherit
+                                      :extra-env {"CLAUDECODE" ""}}
                                dir (assoc :dir dir)))
         ;; Schedule timeout if specified
         scheduler (when timeout (Executors/newSingleThreadScheduledExecutor))
