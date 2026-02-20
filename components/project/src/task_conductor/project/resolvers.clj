@@ -379,6 +379,39 @@
        :escalate/error {:error :no-dev-env
                         :message "No dev-env available for escalation"}})))
 
+;;; PR Merge Mutation
+
+(graph/defmutation pr-merge!
+  "Trigger PR merge for a session in :wait-pr-merge state.
+   Sends :merge-pr event to the statechart, which transitions to
+   :merging-pr and runs the squash-merge-on-gh skill.
+
+   Input:
+     :engine/session-id - statechart session ID
+
+   Returns:
+     :pr-merge/status - :triggered or :error
+     :pr-merge/error  - error map if failed"
+  [{:engine/keys [session-id]}]
+  {::pco/output [:pr-merge/status :pr-merge/error]}
+  (try
+    (let [state (sc/current-state session-id)]
+      (if (contains? state :wait-pr-merge)
+        (do
+          (sc/send! session-id :merge-pr)
+          {:pr-merge/status :triggered
+           :pr-merge/error nil})
+        {:pr-merge/status :error
+         :pr-merge/error {:error :invalid-state
+                          :message (str "Session not in :wait-pr-merge state, "
+                                        "current: " state)}}))
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :session-not-found (:error (ex-data e)))
+        {:pr-merge/status :error
+         :pr-merge/error {:error :session-not-found
+                          :message "Session not found"}}
+        (throw e)))))
+
 ;;; Registration
 
 (def all-operations
@@ -391,7 +424,8 @@
    project-delete!
    execute!
    invoke-skill!
-   escalate-to-dev-env!])
+   escalate-to-dev-env!
+   pr-merge!])
 
 (defn register-resolvers!
   "Register all project resolvers and mutations.
