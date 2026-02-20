@@ -82,6 +82,10 @@ Returns a string like \"3m ago\", \"1h ago\", \"2d ago\"."
 
 ;;; Rendering
 
+(defun task-conductor-sessions--wait-pr-merge-p (state)
+  "Return non-nil if STATE represents the :wait-pr-merge session state."
+  (or (eq state :wait-pr-merge) (equal state "wait-pr-merge")))
+
 (defun task-conductor-sessions--state-icon (state)
   "Return icon string for session STATE keyword."
   (pcase state
@@ -103,8 +107,7 @@ Shows PR number and branch for :wait-pr-merge sessions."
             (task-conductor-sessions--state-icon state)
             (if task-id (format "%s" task-id) "?")
             task-title
-            (if (and (or (eq state :wait-pr-merge)
-                        (equal state "wait-pr-merge"))
+            (if (and (task-conductor-sessions--wait-pr-merge-p state)
                      (or pr-num branch))
                 (format "  %s%s"
                         (if pr-num (format "PR #%s" pr-num) "")
@@ -123,7 +126,7 @@ Returns a plist (:escalated LIST :idle LIST :wait-pr-merge LIST)."
           (push s escalated))
          ((or (eq state :idle) (equal state "idle"))
           (push s idle))
-         ((or (eq state :wait-pr-merge) (equal state "wait-pr-merge"))
+         ((task-conductor-sessions--wait-pr-merge-p state)
           (push s wait-pr-merge)))))
     (list :escalated (nreverse escalated)
           :idle (nreverse idle)
@@ -201,7 +204,7 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
             (session-id (plist-get session :session-id)))
         (unless session-id
           (user-error "Session has no session-id"))
-        (unless (or (eq state :wait-pr-merge) (equal state "wait-pr-merge"))
+        (unless (task-conductor-sessions--wait-pr-merge-p state)
           (user-error "Session is not in :wait-pr-merge state"))
         (let ((result (task-conductor-dev-env--eval-sync
                        (format "(let [r (task-conductor.pathom-graph.interface/query [`(task-conductor.project.resolvers/pr-merge! {:engine/session-id %S})])] (get r 'task-conductor.project.resolvers/pr-merge!))"
