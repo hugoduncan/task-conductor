@@ -6,6 +6,8 @@
    [task-conductor.dev-env.protocol :as protocol]
    [task-conductor.dev-env.registry :as generic-registry]
    [task-conductor.emacs-dev-env.core :as core]
+   [task-conductor.project.registry :as project-registry]
+   [task-conductor.project.resolvers :as project-resolvers]
    [task-conductor.statechart-engine.resolvers :as resolvers]))
 
 (defmacro with-register-hook-responder
@@ -85,11 +87,13 @@
                     "unknown"
                     (java.util.UUID/randomUUID)
                     nil)]
-        (is (= :not-found (:error result)))))
+        (is (= :error (:status result)))
+        (is (string? (:message result)))))
 
     (testing "send-hook-event-by-id returns error for unknown id"
       (let [result (core/send-hook-event-by-id "unknown" :on-idle "s1" :idle)]
-        (is (= :not-found (:error result)))))
+        (is (= :error (:status result)))
+        (is (string? (:message result)))))
 
     (testing "await-command-by-id works with valid id"
       (let [dev-env-id (core/register-emacs-dev-env)
@@ -670,3 +674,132 @@
           (is (= :notify-sessions-changed (get-in r2 [:command :command]))))
         (core/unregister-emacs-dev-env id1)
         (core/unregister-emacs-dev-env id2)))))
+
+;;; Project Query Tests
+
+(defmacro with-clean-project-registry
+  "Execute body with a clean project registry, restoring state after."
+  [& body]
+  `(try
+     (project-registry/clear!)
+     ~@body
+     (finally
+       (project-registry/clear!))))
+
+(deftest query-projects-by-id-test
+  ;; Verify query-projects-by-id validates dev-env and returns
+  ;; the project list from the registry.
+  (project-resolvers/register-resolvers!)
+  (testing "query-projects-by-id"
+    (testing "returns error for unknown dev-env-id"
+      (let [result (core/query-projects-by-id "nonexistent")]
+        (is (= :error (:status result)))
+        (is (string? (:message result)))))
+
+    (testing "returns empty list when no projects registered"
+      (with-clean-project-registry
+        (let [dev-env-id (core/register-emacs-dev-env)
+              result (core/query-projects-by-id dev-env-id)]
+          (is (= :ok (:status result)))
+          (is (= [] (:projects result)))
+          (core/unregister-emacs-dev-env dev-env-id))))
+
+    (testing "returns registered projects"
+      (with-clean-project-registry
+        (let [dev-env-id (core/register-emacs-dev-env)
+              _ (project-registry/register! "/tmp" {:project/name "test-proj"})
+              result (core/query-projects-by-id dev-env-id)]
+          (is (= :ok (:status result)))
+          (is (= 1 (count (:projects result))))
+          (let [project (first (:projects result))]
+            (is (= "test-proj" (:project/name project)))
+            (is (string? (:project/path project))))
+          (core/unregister-emacs-dev-env dev-env-id))))))
+
+(deftest create-project-by-id-test
+  ;; Verify create-project-by-id validates dev-env, creates project
+  ;; via mutation, and returns correct response shape.
+  (project-resolvers/register-resolvers!)
+  (testing "create-project-by-id"
+    (testing "returns error for unknown dev-env-id"
+      (let [result (core/create-project-by-id "nonexistent" "/tmp" nil)]
+        (is (= :error (:status result)))))
+
+    (testing "creates project with name"
+      (with-clean-project-registry
+        (let [dev-env-id (core/register-emacs-dev-env)
+              result (core/create-project-by-id dev-env-id "/tmp" "my-proj")]
+          (is (= :ok (:status result)))
+          (is (= "my-proj" (:project/name (:project result))))
+          (core/unregister-emacs-dev-env dev-env-id))))
+
+    (testing "creates project without name (uses dir name)"
+      (with-clean-project-registry
+        (let [dev-env-id (core/register-emacs-dev-env)
+              result (core/create-project-by-id dev-env-id "/tmp" nil)]
+          (is (= :ok (:status result)))
+          (is (string? (:project/name (:project result))))
+          (core/unregister-emacs-dev-env dev-env-id))))
+
+    (testing "returns error for duplicate path"
+      (with-clean-project-registry
+        (let [dev-env-id (core/register-emacs-dev-env)]
+          (core/create-project-by-id dev-env-id "/tmp" "first")
+          (let [result (core/create-project-by-id dev-env-id "/tmp" "second")]
+            (is (= :error (:status result)))
+            (is (= :duplicate-path (:error result))))
+          (core/unregister-emacs-dev-env dev-env-id))))))
+
+(deftest update-project-by-id-test
+  ;; Verify update-project-by-id validates dev-env, updates project
+  ;; name, and returns correct response shape.
+  (project-resolvers/register-resolvers!)
+  (testing "update-project-by-id"
+    (testing "returns error for unknown dev-env-id"
+      (let [result (core/update-project-by-id "nonexistent" "/tmp" "new")]
+        (is (= :error (:status result)))))
+
+    (testing "updates project name"
+      (with-clean-project-registry
+        (let [dev-env-id (core/register-emacs-dev-env)]
+          (core/create-project-by-id dev-env-id "/tmp" "old-name")
+          (let [result (core/update-project-by-id dev-env-id "/tmp" "new-name")]
+            (is (= :ok (:status result)))
+            (is (= "new-name" (:project/name (:project result)))))
+          (core/unregister-emacs-dev-env dev-env-id))))
+
+    (testing "returns error for non-existent project"
+      (with-clean-project-registry
+        (let [dev-env-id (core/register-emacs-dev-env)
+              result (core/update-project-by-id
+                      dev-env-id "/nonexistent" "name")]
+          (is (= :error (:status result)))
+          (core/unregister-emacs-dev-env dev-env-id))))))
+
+(deftest delete-project-by-id-test
+  ;; Verify delete-project-by-id validates dev-env, removes project,
+  ;; and returns correct response shape.
+  (project-resolvers/register-resolvers!)
+  (testing "delete-project-by-id"
+    (testing "returns error for unknown dev-env-id"
+      (let [result (core/delete-project-by-id "nonexistent" "/tmp")]
+        (is (= :error (:status result)))))
+
+    (testing "deletes existing project"
+      (with-clean-project-registry
+        (let [dev-env-id (core/register-emacs-dev-env)]
+          (core/create-project-by-id dev-env-id "/tmp" "del-proj")
+          (let [result (core/delete-project-by-id dev-env-id "/tmp")]
+            (is (= :ok (:status result)))
+            (is (= "del-proj" (:project/name (:project result)))))
+          ;; Verify it's gone
+          (let [list-result (core/query-projects-by-id dev-env-id)]
+            (is (= [] (:projects list-result))))
+          (core/unregister-emacs-dev-env dev-env-id))))
+
+    (testing "returns error for non-existent project"
+      (with-clean-project-registry
+        (let [dev-env-id (core/register-emacs-dev-env)
+              result (core/delete-project-by-id dev-env-id "/nonexistent")]
+          (is (= :error (:status result)))
+          (core/unregister-emacs-dev-env dev-env-id))))))

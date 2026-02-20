@@ -8,9 +8,13 @@
    [taoensso.timbre :as log]
    [task-conductor.dev-env.protocol :as protocol]
    [task-conductor.dev-env.registry :as generic-registry]
-   [task-conductor.pathom-graph.interface :as graph])
+   [task-conductor.pathom-graph.interface :as graph]
+   [task-conductor.project.registry :as project-registry]
+   [task-conductor.statechart-engine.interface :as sc])
   (:import
    [java.util UUID]))
+
+(declare install-project-registry-watch!)
 
 (def ^:const default-await-timeout-ms
   "Default timeout for await-command in milliseconds."
@@ -168,13 +172,15 @@
   "Called by Emacs to register itself as a dev-env.
 
   Creates a new EmacsDevEnv, stores it in the generic dev-env registry,
-  then marks it connected.
+  then marks it connected. Also installs the project registry watch
+  (idempotent) so notifications are only active when a dev-env is connected.
   Returns the dev-env-id for use in subsequent calls.
 
   Arity:
     ()        - Create new dev-env, register, return ID (for Emacs)
     (dev-env) - Mark existing dev-env as connected (for internal use)"
   ([]
+   (install-project-registry-watch!)
    (let [dev-env (make-emacs-dev-env)
          dev-env-id (generic-registry/register! dev-env :emacs {})]
      (swap! (:state dev-env) assoc :connected? true)
@@ -304,6 +310,15 @@
 ;; the dev-env in the registry.
 ;; They are the primary API for Emacs to interact with the dev-env.
 
+(defmacro with-dev-env
+  "Look up a dev-env by ID and bind it, or return a standard error map.
+  Evaluates body with binding bound to the dev-env instance.
+  Returns {:status :error :message ...} if the dev-env is not found."
+  [binding dev-env-id & body]
+  `(if-let [~binding (get-dev-env ~dev-env-id)]
+     (do ~@body)
+     {:status :error :message (str "Dev-env not found: " ~dev-env-id)}))
+
 (defn await-command-by-id
   "Called by Emacs to poll for the next command using dev-env-id.
 
@@ -319,9 +334,8 @@
   ([dev-env-id]
    (await-command-by-id dev-env-id default-await-timeout-ms))
   ([dev-env-id timeout-ms]
-   (if-let [dev-env (get-dev-env dev-env-id)]
-     (await-command dev-env timeout-ms)
-     {:status :error :message (str "Dev-env not found: " dev-env-id)})))
+   (with-dev-env dev-env dev-env-id
+     (await-command dev-env timeout-ms))))
 
 (defn send-response-by-id
   "Called by Emacs to send a response for a command using dev-env-id.
@@ -334,9 +348,8 @@
   Returns true if response was delivered, false if command not found,
   or {:error ...} if dev-env not found."
   [dev-env-id command-id response]
-  (if-let [dev-env (get-dev-env dev-env-id)]
-    (send-response dev-env command-id response)
-    {:error :not-found :message (str "Dev-env not found: " dev-env-id)}))
+  (with-dev-env dev-env dev-env-id
+    (send-response dev-env command-id response)))
 
 (defn send-hook-event-by-id
   "Called by Emacs to notify of session events using dev-env-id.
@@ -349,9 +362,8 @@
 
   Returns true after invoking hooks, or {:error ...} if dev-env not found."
   [dev-env-id hook-type session-id reason]
-  (if-let [dev-env (get-dev-env dev-env-id)]
-    (send-hook-event dev-env hook-type session-id reason)
-    {:error :not-found :message (str "Dev-env not found: " dev-env-id)}))
+  (with-dev-env dev-env dev-env-id
+    (send-hook-event dev-env hook-type session-id reason)))
 
 ;;; Session Query
 
@@ -361,12 +373,10 @@
 
   Validates that the caller is a registered dev-env."
   [dev-env-id]
-  (if (get-dev-env dev-env-id)
+  (with-dev-env _dev-env dev-env-id
     {:status :ok
      :sessions (:engine/active-sessions
-                (graph/query [:engine/active-sessions]))}
-    {:status :error
-     :message (str "Dev-env not found: " dev-env-id)}))
+                (graph/query [:engine/active-sessions]))}))
 
 (defn notify-sessions-changed!
   "Push session data to a specific dev-env via notification.
@@ -389,6 +399,108 @@
           :let [dev-env (generic-registry/get-dev-env id)]
           :when (connected? dev-env)]
     (notify-sessions-changed! dev-env)))
+
+;;; Project Query
+
+(defn- derive-project-status
+  "Derive project status from its active sessions.
+  Returns :escalated, :idle, :running, or nil."
+  [sessions]
+  (when (seq sessions)
+    (let [states (into #{} (map :state) sessions)]
+      (cond
+        (contains? states :escalated) :escalated
+        (contains? states :idle) :idle
+        :else :running))))
+
+(defn- enrich-project
+  "Enrich a project map with execution status from active sessions."
+  [project all-sessions]
+  (let [project-path (:project/path project)
+        matching (filterv #(= project-path (:project-dir %)) all-sessions)
+        status (derive-project-status matching)]
+    (cond-> project
+      status (assoc :project/status status)
+      (seq matching) (assoc :project/active-sessions
+                            (mapv #(select-keys % [:session-id :state :task-id])
+                                  matching)))))
+
+(defn- enriched-projects
+  "Fetch all projects enriched with session status."
+  []
+  (let [projects (:project/all (graph/query [:project/all]))
+        all-sessions (sc/all-session-summaries)]
+    (mapv #(enrich-project % all-sessions) projects)))
+
+(defn notify-projects-changed!
+  "Push pre-computed project data to a specific dev-env via notification."
+  [dev-env projects]
+  (let [{:keys [command-chan connected?]} @(:state dev-env)]
+    (when (and connected? command-chan)
+      (send-notification command-chan
+                         :notify-projects-changed
+                         {:projects projects}))))
+
+(defn notify-all-projects-changed!
+  "Push enriched project data to all connected dev-envs.
+  Computes enriched projects once and sends to all."
+  []
+  (let [projects (enriched-projects)]
+    (doseq [{:keys [dev-env/id type]} (generic-registry/list-dev-envs)
+            :when (= :emacs type)
+            :let [dev-env (generic-registry/get-dev-env id)]
+            :when (connected? dev-env)]
+      (notify-projects-changed! dev-env projects))))
+
+(defn query-projects-by-id
+  "Query all registered projects enriched with execution status.
+  Returns {:status :ok :projects [...]} or {:status :error ...}."
+  [dev-env-id]
+  (with-dev-env _dev-env dev-env-id
+    {:status :ok
+     :projects (enriched-projects)}))
+
+(defn- invoke-project-mutation!
+  "Invoke a project mutation via graph/query.
+  Returns {:status :ok :project result} or {:status :error ...}."
+  [mutation-kw params]
+  (let [mutation-sym (symbol "task-conductor.project.resolvers"
+                             (str "project-" (name mutation-kw) "!"))
+        query-result (graph/query [(list mutation-sym params)])
+        result (:project/result (get query-result mutation-sym))]
+    (cond
+      (:error result)
+      {:status :error :message (:message result) :error (:error result)}
+
+      (nil? result)
+      {:status :error :message "Mutation returned no result"}
+
+      :else
+      {:status :ok :project result})))
+
+(defn create-project-by-id
+  "Create a project. Called by Emacs via nREPL.
+  Returns {:status :ok :project {...}} or {:status :error ...}."
+  [dev-env-id path name]
+  (with-dev-env _dev-env dev-env-id
+    (invoke-project-mutation!
+     :create (cond-> {:project/path path}
+               name (assoc :project/name name)))))
+
+(defn update-project-by-id
+  "Update project name. Called by Emacs via nREPL.
+  Returns {:status :ok :project {...}} or {:status :error ...}."
+  [dev-env-id path name]
+  (with-dev-env _dev-env dev-env-id
+    (invoke-project-mutation!
+     :update {:project/path path :project/name name})))
+
+(defn delete-project-by-id
+  "Delete project by path. Called by Emacs via nREPL.
+  Returns {:status :ok :project {...}} or {:status :error ...}."
+  [dev-env-id path]
+  (with-dev-env _dev-env dev-env-id
+    (invoke-project-mutation! :delete {:project/path path})))
 
 ;;; Health Check
 
@@ -446,9 +558,8 @@
   ([dev-env-id]
    (ping-by-id dev-env-id default-ping-timeout-ms))
   ([dev-env-id timeout-ms]
-   (if-let [dev-env (get-dev-env dev-env-id)]
-     (ping dev-env timeout-ms)
-     {:status :error :message (str "Dev-env not found: " dev-env-id)})))
+   (with-dev-env dev-env dev-env-id
+     (ping dev-env timeout-ms))))
 
 ;;; Dev-Env Selection
 
@@ -514,3 +625,23 @@
        {:dev-env-id dev-env-id
         :type :emacs
         :dev-env (get-dev-env dev-env-id)}))))
+
+;;; Registry Watch
+
+(defn install-project-registry-watch!
+  "Install a watch on the project registry that pushes notifications
+  to all connected dev-envs when projects change."
+  []
+  (project-registry/watch!
+   ::project-notify
+   (fn [_key _ref _old _new]
+     (try
+       (notify-all-projects-changed!)
+       (catch Exception e
+         (log/warn "Failed to notify projects changed"
+                   {:error (.getMessage e)}))))))
+
+(defn remove-project-registry-watch!
+  "Remove the project registry watch."
+  []
+  (project-registry/unwatch! ::project-notify))
