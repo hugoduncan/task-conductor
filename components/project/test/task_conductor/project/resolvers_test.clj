@@ -887,3 +887,77 @@
                  (=
                   :no-dev-env
                   (:error (:escalate/error escalate-result))))))))))))
+
+;;; PR Merge Tests
+
+(deftest pr-merge-test
+  ;; Verify pr-merge! sends :merge-pr event to statechart when session
+  ;; is in :wait-pr-merge state, and rejects when in wrong state.
+  (testing "pr-merge!"
+    (testing "sends :merge-pr event when session is in :wait-pr-merge"
+      (with-execute-state
+        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
+              mcp-nullable
+              (mcp-tasks/make-nullable
+               {:responses
+                {:work-on [(make-work-on-response)]
+                 :show [(make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42
+                                             :status :done})]
+                 :why-blocked [(make-blocking-response)]}})
+              dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 500})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    ;; Transition to :wait-pr-merge
+                    _ (sc/send! session-id :wait-pr-merge)
+                    _ (is (contains? (sc/current-state session-id)
+                                     :wait-pr-merge)
+                          "precondition: session in :wait-pr-merge")
+                    ;; Invoke pr-merge!
+                    result (graph/query [`(resolvers/pr-merge!
+                                           {:engine/session-id ~session-id})])
+                    merge-result (get result `resolvers/pr-merge!)]
+                (is (= :triggered (:pr-merge/status merge-result)))
+                (is (nil? (:pr-merge/error merge-result)))
+                ;; Should have transitioned to :merging-pr
+                ;; (skill thread cleanup handled by with-execute-state finally)
+                (is (contains? (sc/current-state session-id) :merging-pr))))))))
+
+    (testing "returns error when session not in :wait-pr-merge"
+      (with-execute-state
+        (let [mcp-nullable (mcp-tasks/make-nullable
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 501})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    ;; Session starts in :idle, not :wait-pr-merge
+                    result (graph/query [`(resolvers/pr-merge!
+                                           {:engine/session-id ~session-id})])
+                    merge-result (get result `resolvers/pr-merge!)]
+                (is (= :error (:pr-merge/status merge-result)))
+                (is (= :invalid-state
+                       (:error (:pr-merge/error merge-result))))))))))
+
+    (testing "returns error when session not found"
+      (with-execute-state
+        (let [result (graph/query [`(resolvers/pr-merge!
+                                     {:engine/session-id "no-such-id"})])
+              merge-result (get result `resolvers/pr-merge!)]
+          (is (= :error (:pr-merge/status merge-result)))
+          (is (= :session-not-found
+                 (:error (:pr-merge/error merge-result)))))))))

@@ -5,11 +5,13 @@ PKG_DIR := .
 
 # Source files in dependency order for compilation
 SRC_FILES := \
-	$(PKG_DIR)/task-conductor-dev-env.el
+	$(PKG_DIR)/task-conductor-dev-env.el \
+	$(PKG_DIR)/task-conductor-sessions.el
 
 # Test files
 TEST_FILES := \
-	$(PKG_DIR)/test/test-task-conductor-dev-env.el
+	$(PKG_DIR)/test/test-task-conductor-dev-env.el \
+	$(PKG_DIR)/test/test-task-conductor-sessions.el
 
 # Stub files for testing (mocked dependencies)
 STUB_FILES := \

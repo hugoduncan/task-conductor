@@ -220,7 +220,7 @@ rule RegisterResolversOnLoad {
     ensures: PathomGraph.registered(
         project_by_path, project_by_name, all_projects,
         project_create, project_update, project_delete,
-        execute, invoke_skill, escalate_to_dev_env
+        execute, invoke_skill, escalate_to_dev_env, pr_merge
     )
 }
 
@@ -255,6 +255,18 @@ rule InvokeSkillMutation {
     })
     implements: orchestration.InvokeSkill
     ensures: result = { status: started, error: Map? }
+}
+
+rule PrMergeMutation {
+    -- EQL entry point for triggering a PR merge from the sessions view.
+    -- Validates the session is in :wait-pr-merge state, then sends
+    -- :merge-pr event to the statechart (which transitions to :merging-pr).
+    when: PathomGraph.mutate(pr_merge, { session_id: String })
+    requires: ExecutionSession(session_id).statechart_state = wait_pr_merge
+    ensures: ExecutionSession(session_id).statechart.send(merge_pr)
+    ensures: result = { status: triggered }
+    -- On invalid state: { status: error, error: { error: invalid_state, message: "..." } }
+    -- On session not found: { status: error, error: { error: session_not_found } }
 }
 
 rule EscalateToDevEnvMutation {
@@ -311,6 +323,7 @@ surface ProjectExecutionApi {
         PathomGraph.mutate(execute, { project_dir, task_id })
         PathomGraph.mutate(invoke_skill, { session_id, skill, on_complete? })
         PathomGraph.mutate(escalate_to_dev_env, { session_id })
+        PathomGraph.mutate(pr_merge, { session_id })
 }
 
 

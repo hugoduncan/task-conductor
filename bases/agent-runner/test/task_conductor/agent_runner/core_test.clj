@@ -116,7 +116,7 @@
 (deftest notify-on-transition-test
   ;; Verify bootstrap! registers a transition listener that calls
   ;; notify-all-sessions-changed! when sessions enter/leave
-  ;; escalated or idle.
+  ;; escalated, idle, or wait-pr-merge states.
   (testing "notify-on-session-state-change"
     (testing "fires when session enters escalated state"
       (with-agent-runner-state
@@ -132,6 +132,18 @@
                   (agent-runner/run-task! "/test" 300)
                   ;; Entering :idle triggers notification.
                   (is (pos? @notified)))))))))
+
+    (testing "fires when session enters wait-pr-merge state"
+      (with-agent-runner-state
+        (let [notified (atom 0)]
+          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
+                        (fn [] (swap! notified inc))]
+            (agent-runner/bootstrap!)
+            (let [listeners @engine/transition-listeners
+                  listener (get listeners
+                                ::agent-runner/session-notify)]
+              (listener "test" #{:running} #{:wait-pr-merge} :pr-created)
+              (is (pos? @notified)))))))
 
     (testing "does not fire for non-session states"
       (with-agent-runner-state

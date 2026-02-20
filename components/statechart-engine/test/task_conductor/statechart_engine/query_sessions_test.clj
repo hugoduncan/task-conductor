@@ -10,15 +10,18 @@
    [task-conductor.statechart-engine.test-helpers :refer [with-clean-engine]]))
 
 (def test-chart
-  "Chart with idle, running, and escalated states."
+  "Chart with idle, running, escalated, and wait-pr-merge states."
   (statechart {:initial :idle}
               (state {:id :idle}
                      (transition {:event :start :target :running}))
               (state {:id :running}
                      (transition {:event :error :target :escalated})
-                     (transition {:event :done :target :idle}))
+                     (transition {:event :done :target :idle})
+                     (transition {:event :pr-ready :target :wait-pr-merge}))
               (state {:id :escalated}
-                     (transition {:event :resolve :target :idle}))))
+                     (transition {:event :resolve :target :idle}))
+              (state {:id :wait-pr-merge}
+                     (transition {:event :merge-pr :target :idle}))))
 
 (deftest query-sessions-test
   (testing "query-sessions"
@@ -107,7 +110,33 @@
         (core/start! ::chart {:data {:task-id 1
                                      :project-dir "/tmp/proj"}})
         (let [result (core/query-sessions #{:idle})]
-          (is (= "/tmp/proj" (:project-dir (first result)))))))))
+          (is (= "/tmp/proj" (:project-dir (first result)))))))
+
+    (testing "matches :wait-pr-merge sessions"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (let [sid (core/start! ::chart
+                               {:data {:task-id 7
+                                       :task-title "PR task"
+                                       :pr-num 42
+                                       :branch "feat/x"}})]
+          (core/send! sid :start)
+          (core/send! sid :pr-ready)
+          (let [result (core/query-sessions #{:escalated :idle :wait-pr-merge})]
+            (is (= 1 (count result)))
+            (is (= :wait-pr-merge (:state (first result))))
+            (is (= 42 (:pr-num (first result))))
+            (is (= "feat/x" (:branch (first result))))))))
+
+    (testing "includes pr-num and branch from session data"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (core/start! ::chart {:data {:task-id 3
+                                     :pr-num 99
+                                     :branch "main"}})
+        (let [result (core/query-sessions #{:idle})]
+          (is (= 99 (:pr-num (first result))))
+          (is (= "main" (:branch (first result)))))))))
 
 (deftest select-priority-state-test
   ;; Tests priority-based state selection: :escalated > :idle > lexicographic.
@@ -118,9 +147,13 @@
         (is (= :escalated (select #{:escalated :idle})))
         (is (= :escalated (select #{:escalated :running})))
         (is (= :escalated (select #{:escalated :idle :running}))))
+      (testing "prefers :idle over :wait-pr-merge"
+        (is (= :idle (select #{:idle :wait-pr-merge}))))
       (testing "prefers :idle over non-priority states"
         (is (= :idle (select #{:idle :running})))
         (is (= :idle (select #{:idle :waiting}))))
+      (testing "prefers :wait-pr-merge over non-priority states"
+        (is (= :wait-pr-merge (select #{:wait-pr-merge :running}))))
       (testing "falls back to lexicographic sort"
         (is (= :running (select #{:running :waiting})))
         (is (= :alpha (select #{:beta :alpha}))))

@@ -37,7 +37,7 @@
 
 (def ^:private session-notify-states
   "States that trigger session notification to dev-envs."
-  #{:escalated :idle})
+  #{:escalated :idle :wait-pr-merge})
 
 (defn- notify-on-session-state-change
   "Push session data to all dev-envs when a session enters or leaves

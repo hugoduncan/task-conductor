@@ -372,8 +372,8 @@
 (def ^:private state-priority
   "State selection priority, highest first.
   Escalated states need attention; idle indicates a session awaiting
-  interaction."
-  [:escalated :idle])
+  interaction; wait-pr-merge indicates a session waiting for PR merge."
+  [:escalated :idle :wait-pr-merge])
 
 (defn- select-priority-state
   "Select the highest-priority state from a set of states.
@@ -391,16 +391,18 @@
    :task-id (:task-id data)
    :task-title (:task-title data)
    :project-dir (:project-dir data)
+   :pr-num (:pr-num data)
+   :branch (:branch data)
    :entered-state-at (:timestamp (peek hist))})
 
 (defn query-sessions
   "Query active sessions filtered by state.
   Returns vec of maps with :session-id, :state, :task-id, :task-title,
-  :project-dir, and :entered-state-at for sessions whose current state
-  intersects the given state-filter set.
+  :project-dir, :entered-state-at, :pr-num, and :branch for sessions
+  whose current state intersects the given state-filter set.
 
   Each session returns a single :state selected by priority
-  (:escalated > :idle > lexicographic fallback).
+  (:escalated > :idle > :wait-pr-merge > lexicographic fallback).
 
   state-filter - set of state keywords to match (e.g. #{:escalated :idle})"
   [state-filter]
@@ -419,8 +421,9 @@
 (defn all-session-summaries
   "Returns summaries of all active sessions.
   Each summary contains :session-id, :state (selected by priority:
-  :escalated > :idle > lexicographic), :task-id, :task-title,
-  :project-dir, and :entered-state-at."
+  :escalated > :idle > :wait-pr-merge > lexicographic), :task-id,
+  :task-title, :project-dir, :entered-state-at, and optionally
+  :pr-num and :branch."
   []
   (into []
         (map (fn [sid]
