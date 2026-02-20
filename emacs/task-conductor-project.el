@@ -88,7 +88,7 @@ or :status :error and :message on failure."
 
 ;;; Buffer state
 
-(defconst task-conductor-project--buffer-name "*task-conductor-projects*"
+(defvar task-conductor-project--buffer-name "*task-conductor-projects*"
   "Name of the projects buffer.")
 
 ;;; Section types
