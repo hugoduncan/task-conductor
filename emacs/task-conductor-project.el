@@ -38,21 +38,30 @@
 
 ;;; Project CRUD
 
-(defun task-conductor-project--list ()
-  "Query all registered projects from the JVM.
-Returns a plist with :status and :projects on success."
+(defun task-conductor-project--eval-or-error (form)
+  "Evaluate Clojure FORM, returning result plist or an error plist.
+Checks dev-env connection first.  On nREPL failure or nil result,
+returns (:status :error :message ...)."
   (unless (task-conductor-dev-env--connected-p)
     (user-error "Not connected to task-conductor"))
-  (task-conductor-dev-env--eval-sync
+  (condition-case err
+      (or (task-conductor-dev-env--eval-sync form)
+          (list :status :error :message "No result from nREPL"))
+    (error (list :status :error :message (error-message-string err)))))
+
+(defun task-conductor-project--list ()
+  "Query all registered projects from the JVM.
+Returns a plist with :status and :projects on success,
+or :status :error and :message on failure."
+  (task-conductor-project--eval-or-error
    (format "(task-conductor.emacs-dev-env.interface/query-projects-by-id %S)"
            task-conductor-dev-env--dev-env-id)))
 
 (defun task-conductor-project--create (path &optional name)
   "Create a project at PATH with optional NAME.
-Returns a plist with :status and :project on success."
-  (unless (task-conductor-dev-env--connected-p)
-    (user-error "Not connected to task-conductor"))
-  (task-conductor-dev-env--eval-sync
+Returns a plist with :status and :project on success,
+or :status :error and :message on failure."
+  (task-conductor-project--eval-or-error
    (format "(task-conductor.emacs-dev-env.interface/create-project-by-id %S %S %S)"
            task-conductor-dev-env--dev-env-id
            path
@@ -60,10 +69,9 @@ Returns a plist with :status and :project on success."
 
 (defun task-conductor-project--update (path name)
   "Update project at PATH to have NAME.
-Returns a plist with :status and :project on success."
-  (unless (task-conductor-dev-env--connected-p)
-    (user-error "Not connected to task-conductor"))
-  (task-conductor-dev-env--eval-sync
+Returns a plist with :status and :project on success,
+or :status :error and :message on failure."
+  (task-conductor-project--eval-or-error
    (format "(task-conductor.emacs-dev-env.interface/update-project-by-id %S %S %S)"
            task-conductor-dev-env--dev-env-id
            path
@@ -71,10 +79,9 @@ Returns a plist with :status and :project on success."
 
 (defun task-conductor-project--delete (path)
   "Delete project at PATH.
-Returns a plist with :status and :project on success."
-  (unless (task-conductor-dev-env--connected-p)
-    (user-error "Not connected to task-conductor"))
-  (task-conductor-dev-env--eval-sync
+Returns a plist with :status and :project on success,
+or :status :error and :message on failure."
+  (task-conductor-project--eval-or-error
    (format "(task-conductor.emacs-dev-env.interface/delete-project-by-id %S %S)"
            task-conductor-dev-env--dev-env-id
            path)))

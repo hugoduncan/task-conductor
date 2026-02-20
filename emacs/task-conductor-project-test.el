@@ -140,5 +140,43 @@
             (should (string-match-p "Projects (1)" (buffer-string)))))
       (kill-buffer buf))))
 
+;;; Error handling tests
+
+(ert-deftest task-conductor-project-eval-or-error-nil-result ()
+  ;; Returns error plist when eval-sync returns nil.
+  (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+             (lambda () t))
+            ((symbol-function 'task-conductor-dev-env--eval-sync)
+             (lambda (_form) nil)))
+    (let ((result (task-conductor-project--eval-or-error "(foo)")))
+      (should (eq :error (plist-get result :status)))
+      (should (plist-get result :message)))))
+
+(ert-deftest task-conductor-project-eval-or-error-nrepl-error ()
+  ;; Returns error plist when eval-sync signals an error.
+  (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+             (lambda () t))
+            ((symbol-function 'task-conductor-dev-env--eval-sync)
+             (lambda (_form) (error "nREPL timeout"))))
+    (let ((result (task-conductor-project--eval-or-error "(foo)")))
+      (should (eq :error (plist-get result :status)))
+      (should (string-match-p "timeout" (plist-get result :message))))))
+
+(ert-deftest task-conductor-project-eval-or-error-success ()
+  ;; Returns the eval-sync result when successful.
+  (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+             (lambda () t))
+            ((symbol-function 'task-conductor-dev-env--eval-sync)
+             (lambda (_form) (list :status :ok :projects nil))))
+    (let ((result (task-conductor-project--eval-or-error "(foo)")))
+      (should (eq :ok (plist-get result :status))))))
+
+(ert-deftest task-conductor-project-eval-or-error-not-connected ()
+  ;; Signals user-error when not connected.
+  (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+             (lambda () nil)))
+    (should-error (task-conductor-project--eval-or-error "(foo)")
+                  :type 'user-error)))
+
 (provide 'task-conductor-project-test)
 ;;; task-conductor-project-test.el ends here
