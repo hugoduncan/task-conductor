@@ -127,7 +127,10 @@ Returns a plist (:escalated LIST :idle LIST :wait-pr-merge LIST)."
          ((or (eq state :idle) (equal state "idle"))
           (push s idle))
          ((task-conductor-sessions--wait-pr-merge-p state)
-          (push s wait-pr-merge)))))
+          (push s wait-pr-merge))
+         (t
+          (message "task-conductor-sessions: unknown state %S in session %S"
+                   state (plist-get s :session-id))))))
     (list :escalated (nreverse escalated)
           :idle (nreverse idle)
           :wait-pr-merge (nreverse wait-pr-merge))))
