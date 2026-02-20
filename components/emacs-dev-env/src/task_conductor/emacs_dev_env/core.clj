@@ -454,46 +454,47 @@
     {:status :ok
      :projects (enriched-projects)}))
 
+(defn- invoke-project-mutation!
+  "Invoke a project mutation via graph/query.
+  Returns {:status :ok :project result} or {:status :error ...}."
+  [mutation-kw params]
+  (let [mutation-sym (symbol "task-conductor.project.resolvers"
+                             (str "project-" (name mutation-kw) "!"))
+        query-result (graph/query [(list mutation-sym params)])
+        result (:project/result (get query-result mutation-sym))]
+    (cond
+      (:error result)
+      {:status :error :message (:message result) :error (:error result)}
+
+      (nil? result)
+      {:status :error :message "Mutation returned no result"}
+
+      :else
+      {:status :ok :project result})))
+
 (defn create-project-by-id
   "Create a project. Called by Emacs via nREPL.
   Returns {:status :ok :project {...}} or {:status :error ...}."
   [dev-env-id path name]
   (with-dev-env _dev-env dev-env-id
-    (let [params (cond-> {:project/path path}
-                   name (assoc :project/name name))
-          mutation-sym `task-conductor.project.resolvers/project-create!
-          query-result (graph/query [(list mutation-sym params)])
-          result (:project/result (get query-result mutation-sym))]
-      (if (:error result)
-        {:status :error :message (:message result) :error (:error result)}
-        {:status :ok :project result}))))
+    (invoke-project-mutation!
+     :create (cond-> {:project/path path}
+               name (assoc :project/name name)))))
 
 (defn update-project-by-id
   "Update project name. Called by Emacs via nREPL.
   Returns {:status :ok :project {...}} or {:status :error ...}."
   [dev-env-id path name]
   (with-dev-env _dev-env dev-env-id
-    (let [mutation-sym `task-conductor.project.resolvers/project-update!
-          query-result (graph/query
-                        [(list mutation-sym
-                               {:project/path path :project/name name})])
-          result (:project/result (get query-result mutation-sym))]
-      (if (:error result)
-        {:status :error :message (:message result) :error (:error result)}
-        {:status :ok :project result}))))
+    (invoke-project-mutation!
+     :update {:project/path path :project/name name})))
 
 (defn delete-project-by-id
   "Delete project by path. Called by Emacs via nREPL.
   Returns {:status :ok :project {...}} or {:status :error ...}."
   [dev-env-id path]
   (with-dev-env _dev-env dev-env-id
-    (let [mutation-sym `task-conductor.project.resolvers/project-delete!
-          query-result (graph/query
-                        [(list mutation-sym {:project/path path})])
-          result (:project/result (get query-result mutation-sym))]
-      (if result
-        {:status :ok :project result}
-        {:status :error :message (str "Project not found: " path)}))))
+    (invoke-project-mutation! :delete {:project/path path})))
 
 ;;; Health Check
 
