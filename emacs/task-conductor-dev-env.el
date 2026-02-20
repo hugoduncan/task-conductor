@@ -151,6 +151,8 @@ Handles special parseedn types like (edn-uuid \"...\")."
          (eq (car edn) 'edn-uuid)
          (stringp (cadr edn)))
     (cadr edn))
+   ((vectorp edn)
+    (mapcar #'task-conductor-dev-env--edn-to-plist (append edn nil)))
    ((listp edn)
     (mapcar #'task-conductor-dev-env--edn-to-plist edn))
    (t edn)))

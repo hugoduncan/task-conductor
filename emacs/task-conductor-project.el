@@ -182,7 +182,7 @@ Called by the :notify-projects-changed handler."
         (message "Not connected to task-conductor"))
     (let ((result (task-conductor-project--list)))
       (if (eq :ok (plist-get result :status))
-          (let ((projects (plist-get result :projects)))
+          (let ((projects (append (plist-get result :projects) nil)))
             (setq task-conductor-dev-env--cached-projects projects)
             (task-conductor-project--render projects)
             (message "Projects refreshed"))
@@ -193,7 +193,7 @@ Called by the :notify-projects-changed handler."
   "Create a new project.
 Prompts for directory path and optional name."
   (interactive)
-  (let* ((path (read-directory-name "Project path: "))
+  (let* ((path (expand-file-name (read-directory-name "Project path: ")))
          (name (read-string "Project name (empty for dir name): ")))
     (when (string-empty-p name)
       (setq name nil))
