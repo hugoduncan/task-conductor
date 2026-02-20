@@ -28,6 +28,7 @@
 ;;   d   - Delete project at point
 ;;   r   - Rename project at point
 ;;   RET - Open project directory in dired
+;;   t   - Open mcp-tasks browser for project
 ;;   q   - Quit buffer
 
 ;;; Code:
@@ -35,6 +36,7 @@
 (require 'cl-lib)
 (require 'magit-section)
 (require 'task-conductor-dev-env)
+(require 'mcp-tasks-browser)
 
 ;;; Project CRUD
 
@@ -248,6 +250,16 @@ Prompts for directory path and optional name."
             (dired path)
           (message "Directory not found: %s" (or path "?")))))))
 
+(defun task-conductor-project-open-tasks ()
+  "Open the mcp-tasks browser for the project at point."
+  (interactive)
+  (when-let ((section (magit-current-section)))
+    (when (eq (oref section type) 'task-conductor-project-entry)
+      (let* ((project (oref section value))
+             (path (plist-get project :project/path))
+             (name (or (plist-get project :project/name) path)))
+        (mcp-tasks-browser-open path path name)))))
+
 (defun task-conductor-project-quit ()
   "Quit the projects buffer."
   (interactive)
@@ -263,6 +275,7 @@ Prompts for directory path and optional name."
     (define-key map (kbd "d") #'task-conductor-project-delete)
     (define-key map (kbd "r") #'task-conductor-project-rename)
     (define-key map (kbd "RET") #'task-conductor-project-open-dired)
+    (define-key map (kbd "t") #'task-conductor-project-open-tasks)
     (define-key map (kbd "q") #'task-conductor-project-quit)
     map)
   "Keymap for `task-conductor-project-mode'.")
