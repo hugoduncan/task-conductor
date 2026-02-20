@@ -14,6 +14,8 @@
   (:import
    [java.util UUID]))
 
+(declare install-project-registry-watch!)
+
 (def ^:const default-await-timeout-ms
   "Default timeout for await-command in milliseconds."
   30000)
@@ -170,13 +172,15 @@
   "Called by Emacs to register itself as a dev-env.
 
   Creates a new EmacsDevEnv, stores it in the generic dev-env registry,
-  then marks it connected.
+  then marks it connected. Also installs the project registry watch
+  (idempotent) so notifications are only active when a dev-env is connected.
   Returns the dev-env-id for use in subsequent calls.
 
   Arity:
     ()        - Create new dev-env, register, return ID (for Emacs)
     (dev-env) - Mark existing dev-env as connected (for internal use)"
   ([]
+   (install-project-registry-watch!)
    (let [dev-env (make-emacs-dev-env)
          dev-env-id (generic-registry/register! dev-env :emacs {})]
      (swap! (:state dev-env) assoc :connected? true)
@@ -635,5 +639,3 @@
   "Remove the project registry watch."
   []
   (project-registry/unwatch! ::project-notify))
-
-(install-project-registry-watch!)
