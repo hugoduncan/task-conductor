@@ -245,14 +245,14 @@
         (task-conductor-sessions-goto-session)))))
 
 (ert-deftest task-conductor-sessions-goto-session-with-buffer ()
-  ;; When session has a live buffer, switches to it.
+  ;; When session has a live buffer, goto-session calls pop-to-buffer.
   (with-sessions-buffer
     (let ((target-buf (generate-new-buffer "*claude:test*")))
       (unwind-protect
           (progn
             (puthash "sess-1" target-buf task-conductor-dev-env--sessions)
             (task-conductor-sessions--render test-sessions-sample)
-            ;; Find the sess-1 entry
+            ;; Find the sess-1 entry and move point to it
             (let ((entry-found nil))
               (dolist (group (oref magit-root-section children))
                 (dolist (entry (oref group children))
@@ -260,7 +260,14 @@
                     (let ((val (oref entry value)))
                       (when (equal "sess-1" (plist-get val :session-id))
                         (setq entry-found entry))))))
-              (should entry-found)))
+              (should entry-found)
+              (goto-char (oref entry-found start))
+              ;; Verify goto-session invokes pop-to-buffer with target
+              (let ((popped-buf nil))
+                (cl-letf (((symbol-function 'pop-to-buffer)
+                           (lambda (buf &rest _) (setq popped-buf buf))))
+                  (task-conductor-sessions-goto-session))
+                (should (eq popped-buf target-buf)))))
         (kill-buffer target-buf)))))
 
 ;;; Re-render on Push
