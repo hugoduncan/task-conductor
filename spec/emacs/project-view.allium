@@ -1,0 +1,324 @@
+-- Emacs Project View Specification
+--
+-- Magit-section based buffer for managing the project registry from Emacs.
+-- CRUD operations use synchronous nREPL eval to the JVM; push notifications
+-- from the JVM trigger auto-refresh via the dev-env command channel.
+--
+-- Additive to emacs.allium (dev-env protocol) and project.allium (registry).
+-- This spec covers the Emacs UI layer only.
+
+use ../dev-env/emacs as emacs
+use ../project/project as project
+
+
+-- External Entities
+
+external entity Dired {
+    -- Emacs directory editor, opened for a project path.
+}
+
+external entity MagitSection {
+    -- magit-section library providing collapsible, navigable buffer sections.
+    type: Symbol
+    value: Any
+    start: Point
+}
+
+
+-- Config
+
+config {
+    buffer_name: String = "*task-conductor-projects*"
+    status_icons: Map<Symbol, String> = {
+        running: "⚡",
+        escalated: "⚡",
+        idle: "⏸"
+    }
+    default_icon: String = " "
+}
+
+
+-- Entities
+
+entity ProjectBuffer {
+    -- Singleton buffer displaying all registered projects.
+    -- Uses magit-section-mode as parent major mode.
+    mode: task_conductor_project_mode
+    name: config.buffer_name
+    projects: List<ProjectView>               -- current display data
+
+    -- Derived
+    live: buffer exists and is displayed
+}
+
+value ProjectView {
+    -- A project enriched with execution status for display.
+    path: String                              -- canonical filesystem path
+    name: String                              -- unique display name
+    status: running | escalated | idle | nil  -- derived from active sessions
+    active_sessions: List<SessionSummary>     -- statechart sessions for this project
+}
+
+value SessionSummary {
+    -- Subset of statechart session state for display.
+    state: String                             -- current statechart state
+    task_id: Integer                          -- task being executed
+}
+
+
+-- Rules
+
+--- Data Fetching
+
+rule FetchProjects {
+    -- Query JVM for all projects with execution status.
+    -- Uses emacs.SyncEval to call query-projects-by-id.
+    when: FetchRequested(dev_env_id)
+    requires: emacs.EmacsDevEnv.dev_env_id exists
+    let result = emacs.SyncEval(
+        "query-projects-by-id(dev_env_id)"
+    )
+    ensures:
+        if result.status = ok:
+            result.projects: List<ProjectView>
+        else:
+            result.error exists
+}
+
+
+--- Buffer Rendering
+
+rule RenderProjects {
+    -- Render project list into the buffer using magit-section.
+    -- Preserves cursor position across re-renders via section identity.
+    when: RenderRequested(buffer, projects)
+    let saved_section = buffer.current_section_identity
+    let name_width = projects.max(p => p.name.length)
+    ensures: buffer.contents =
+        MagitSection(type: project_root,
+            heading: "Projects (N)\n" where N = projects.count,
+            children:
+                if projects.empty:
+                    ["  (none)\n"]
+                else:
+                    for p in projects:
+                        MagitSection(type: project_entry, value: p,
+                            heading: FormatEntry(p, name_width))
+        )
+    ensures:
+        if saved_section exists:
+            buffer.cursor = section matching saved_section
+        else:
+            buffer.cursor = buffer.start
+}
+
+rule FormatEntry {
+    -- Format a single project line with status icon, name, path, and session info.
+    when: FormatRequested(project, name_width)
+    let icon = config.status_icons.get(project.status) or config.default_icon
+    let padded_name = project.name padded to name_width
+    let info = StatusInfo(project)
+    ensures: result =
+        if info exists:
+            "  {icon} {padded_name}  {project.path}    {info}"
+        else:
+            "  {icon} {padded_name}  {project.path}"
+}
+
+rule StatusInfo {
+    -- Build status info string from active sessions.
+    when: StatusInfoRequested(project)
+    requires: project.active_sessions is not empty
+    let first = project.active_sessions.first
+    let count = project.active_sessions.count
+    ensures: result =
+        if count > 1:
+            "[{first.state}: task {first.task_id} +{count - 1}]"
+        else:
+            "[{first.state}: task {first.task_id}]"
+}
+
+
+--- Push Notifications
+
+rule HandleProjectsChanged {
+    -- JVM pushes :notify-projects-changed with project data.
+    -- Caches projects and re-renders buffer if live.
+    when: emacs.DispatchCommand.command = notify_projects_changed
+    let projects = command.params.projects
+    ensures: emacs.EmacsDevEnv.cached_projects = projects
+    ensures:
+        if ProjectBuffer.live:
+            RenderProjects(ProjectBuffer, projects)
+    -- No response sent; this is a notification, not a command.
+}
+
+rule ProjectRegistryWatch {
+    -- JVM-side: atom watcher on project registry triggers notification
+    -- to all connected Emacs dev-envs on any registry mutation.
+    -- Installed automatically on namespace load.
+    when: project.ProjectRegistry.entries changed
+    ensures: for dev_env in emacs.Registry.all_connected:
+        emacs.SendCommandAndWait(dev_env, notify_projects_changed,
+            { projects: FetchProjects(dev_env.id).projects })
+}
+
+
+--- CRUD Commands
+
+rule CreateProject {
+    -- Prompt user for path and optional name, create via nREPL.
+    when: UserInvokesCreate
+    let path = prompt("Project path: ", type: directory)
+    let name = prompt("Project name (empty for dir name): ", type: string)
+    let effective_name = if name.empty: nil else: name
+    let result = emacs.SyncEval(
+        "create-project-by-id(dev_env_id, path, effective_name)"
+    )
+    ensures:
+        if result.status = ok:
+            message("Created project at {path}")
+            RefreshProjects
+        else:
+            message("Error creating project: {result.message}")
+}
+
+rule DeleteProject {
+    -- Delete project at cursor, with confirmation.
+    when: UserInvokesDelete
+    requires: cursor is on ProjectEntry section
+    let project = section.value
+    let confirmed = confirm("Delete project {project.name}?")
+    requires: confirmed
+    let result = emacs.SyncEval(
+        "delete-project-by-id(dev_env_id, project.path)"
+    )
+    ensures:
+        if result.status = ok:
+            message("Deleted project {project.name}")
+            RefreshProjects
+        else:
+            message("Error deleting project: {result.message}")
+}
+
+rule RenameProject {
+    -- Rename project at cursor.
+    when: UserInvokesRename
+    requires: cursor is on ProjectEntry section
+    let project = section.value
+    let new_name = prompt("New name: ", default: project.name)
+    requires: new_name is not empty
+    let result = emacs.SyncEval(
+        "update-project-by-id(dev_env_id, project.path, new_name)"
+    )
+    ensures:
+        if result.status = ok:
+            message("Renamed to {new_name}")
+            RefreshProjects
+        else:
+            message("Error renaming project: {result.message}")
+}
+
+rule OpenDired {
+    -- Open project directory in dired.
+    when: UserInvokesOpen
+    requires: cursor is on ProjectEntry section
+    let path = section.value.path
+    requires: path exists and is a directory
+    ensures: Dired.opened(path)
+}
+
+
+--- Refresh
+
+rule RefreshProjects {
+    -- Fetch projects and re-render. Manual trigger via keybinding.
+    when: UserInvokesRefresh
+    ensures:
+        if emacs.EmacsDevEnv.dev_env_id exists:
+            let result = FetchProjects(emacs.EmacsDevEnv.dev_env_id)
+            if result.status = ok:
+                emacs.EmacsDevEnv.cached_projects = result.projects
+                RenderProjects(ProjectBuffer, result.projects)
+                message("Projects refreshed")
+            else:
+                message("Error fetching projects: {result.message}")
+        else:
+            RenderProjects(ProjectBuffer, [])
+            message("Not connected to task-conductor")
+}
+
+
+--- Lifecycle
+
+rule OpenProjectBuffer {
+    -- Entry point: M-x task-conductor-project-list
+    when: UserInvokesProjectList
+    ensures: ProjectBuffer.created_or_reused(config.buffer_name)
+    ensures: ProjectBuffer.mode = task_conductor_project_mode
+    ensures: RefreshProjects
+    ensures: ProjectBuffer.displayed
+}
+
+
+-- Surfaces
+
+surface ProjectManagement {
+    -- Interactive commands available in the project buffer.
+    for consumer: EmacsUser
+
+    context buffer: ProjectBuffer
+
+    exposes:
+        for project in buffer.projects:
+            project.name
+            project.path
+            project.status
+            project.active_sessions
+
+    provides:
+        OpenProjectBuffer                     -- M-x task-conductor-project-list
+        RefreshProjects                       -- g
+            when buffer.live
+        CreateProject                         -- c
+            when emacs.EmacsDevEnv.dev_env_id exists
+        DeleteProject                         -- d
+            when cursor on ProjectEntry
+        RenameProject                         -- r
+            when cursor on ProjectEntry
+        OpenDired                             -- RET
+            when cursor on ProjectEntry
+        QuitBuffer                            -- q
+}
+
+surface ProjectNotification {
+    -- Push notification channel from JVM to Emacs.
+    for consumer: EmacsPollLoop
+
+    provides:
+        HandleProjectsChanged
+            -- Received as :notify-projects-changed via command channel.
+            -- No response required.
+}
+
+
+-- Keybindings
+
+config keybindings {
+    -- All bound in task-conductor-project-mode-map,
+    -- inheriting from magit-section-mode-map.
+    g:   RefreshProjects
+    c:   CreateProject
+    d:   DeleteProject
+    r:   RenameProject
+    RET: OpenDired
+    q:   QuitBuffer
+}
+
+
+-- Open Questions
+
+open_question "Should the buffer support sorting projects (by name, path, or status)?"
+open_question "Should there be a keybinding to jump directly to a project's task list?"
+open_question "Should the status display show story title in addition to task ID?"
+open_question "Should the buffer auto-refresh on regaining focus (window-selection-change-functions)?"
