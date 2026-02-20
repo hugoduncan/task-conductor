@@ -3,6 +3,7 @@
            task-conductor.pathom-graph.interface/defresolver clojure.core/defn
            task-conductor.pathom-graph.interface/defmutation clojure.core/defn
            babashka.fs/with-temp-dir clojure.core/with-open}
- :hooks {:analyze-call {task-conductor.dev-env.interface/with-session hooks.dev-env/with-session}}
+ :hooks {:analyze-call {task-conductor.dev-env.interface/with-session hooks.dev-env/with-session
+                        task-conductor.emacs-dev-env.core/with-dev-env hooks.emacs-dev-env/with-dev-env}}
  :linters {:unresolved-symbol {:exclude [(task-conductor.project.registry-test/with-clean-project-state)
                                          (task-conductor.project.resolvers-test/with-clean-state)]}}}

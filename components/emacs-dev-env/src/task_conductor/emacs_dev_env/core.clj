@@ -306,6 +306,15 @@
 ;; the dev-env in the registry.
 ;; They are the primary API for Emacs to interact with the dev-env.
 
+(defmacro with-dev-env
+  "Look up a dev-env by ID and bind it, or return a standard error map.
+  Evaluates body with binding bound to the dev-env instance.
+  Returns {:status :error :message ...} if the dev-env is not found."
+  [binding dev-env-id & body]
+  `(if-let [~binding (get-dev-env ~dev-env-id)]
+     (do ~@body)
+     {:status :error :message (str "Dev-env not found: " ~dev-env-id)}))
+
 (defn await-command-by-id
   "Called by Emacs to poll for the next command using dev-env-id.
 
@@ -321,9 +330,8 @@
   ([dev-env-id]
    (await-command-by-id dev-env-id default-await-timeout-ms))
   ([dev-env-id timeout-ms]
-   (if-let [dev-env (get-dev-env dev-env-id)]
-     (await-command dev-env timeout-ms)
-     {:status :error :message (str "Dev-env not found: " dev-env-id)})))
+   (with-dev-env dev-env dev-env-id
+     (await-command dev-env timeout-ms))))
 
 (defn send-response-by-id
   "Called by Emacs to send a response for a command using dev-env-id.
@@ -336,9 +344,8 @@
   Returns true if response was delivered, false if command not found,
   or {:error ...} if dev-env not found."
   [dev-env-id command-id response]
-  (if-let [dev-env (get-dev-env dev-env-id)]
-    (send-response dev-env command-id response)
-    {:error :not-found :message (str "Dev-env not found: " dev-env-id)}))
+  (with-dev-env dev-env dev-env-id
+    (send-response dev-env command-id response)))
 
 (defn send-hook-event-by-id
   "Called by Emacs to notify of session events using dev-env-id.
@@ -351,9 +358,8 @@
 
   Returns true after invoking hooks, or {:error ...} if dev-env not found."
   [dev-env-id hook-type session-id reason]
-  (if-let [dev-env (get-dev-env dev-env-id)]
-    (send-hook-event dev-env hook-type session-id reason)
-    {:error :not-found :message (str "Dev-env not found: " dev-env-id)}))
+  (with-dev-env dev-env dev-env-id
+    (send-hook-event dev-env hook-type session-id reason)))
 
 ;;; Session Query
 
@@ -363,12 +369,10 @@
 
   Validates that the caller is a registered dev-env."
   [dev-env-id]
-  (if (get-dev-env dev-env-id)
+  (with-dev-env _dev-env dev-env-id
     {:status :ok
      :sessions (:engine/active-sessions
-                (graph/query [:engine/active-sessions]))}
-    {:status :error
-     :message (str "Dev-env not found: " dev-env-id)}))
+                (graph/query [:engine/active-sessions]))}))
 
 (defn notify-sessions-changed!
   "Push session data to a specific dev-env via notification.
@@ -446,17 +450,15 @@
   "Query all registered projects enriched with execution status.
   Returns {:status :ok :projects [...]} or {:status :error ...}."
   [dev-env-id]
-  (if (get-dev-env dev-env-id)
+  (with-dev-env _dev-env dev-env-id
     {:status :ok
-     :projects (enriched-projects)}
-    {:status :error
-     :message (str "Dev-env not found: " dev-env-id)}))
+     :projects (enriched-projects)}))
 
 (defn create-project-by-id
   "Create a project. Called by Emacs via nREPL.
   Returns {:status :ok :project {...}} or {:status :error ...}."
   [dev-env-id path name]
-  (if (get-dev-env dev-env-id)
+  (with-dev-env _dev-env dev-env-id
     (let [params (cond-> {:project/path path}
                    name (assoc :project/name name))
           mutation-sym `task-conductor.project.resolvers/project-create!
@@ -464,15 +466,13 @@
           result (:project/result (get query-result mutation-sym))]
       (if (:error result)
         {:status :error :message (:message result) :error (:error result)}
-        {:status :ok :project result}))
-    {:status :error
-     :message (str "Dev-env not found: " dev-env-id)}))
+        {:status :ok :project result}))))
 
 (defn update-project-by-id
   "Update project name. Called by Emacs via nREPL.
   Returns {:status :ok :project {...}} or {:status :error ...}."
   [dev-env-id path name]
-  (if (get-dev-env dev-env-id)
+  (with-dev-env _dev-env dev-env-id
     (let [mutation-sym `task-conductor.project.resolvers/project-update!
           query-result (graph/query
                         [(list mutation-sym
@@ -480,24 +480,20 @@
           result (:project/result (get query-result mutation-sym))]
       (if (:error result)
         {:status :error :message (:message result) :error (:error result)}
-        {:status :ok :project result}))
-    {:status :error
-     :message (str "Dev-env not found: " dev-env-id)}))
+        {:status :ok :project result}))))
 
 (defn delete-project-by-id
   "Delete project by path. Called by Emacs via nREPL.
   Returns {:status :ok :project {...}} or {:status :error ...}."
   [dev-env-id path]
-  (if (get-dev-env dev-env-id)
+  (with-dev-env _dev-env dev-env-id
     (let [mutation-sym `task-conductor.project.resolvers/project-delete!
           query-result (graph/query
                         [(list mutation-sym {:project/path path})])
           result (:project/result (get query-result mutation-sym))]
       (if result
         {:status :ok :project result}
-        {:status :error :message (str "Project not found: " path)}))
-    {:status :error
-     :message (str "Dev-env not found: " dev-env-id)}))
+        {:status :error :message (str "Project not found: " path)}))))
 
 ;;; Health Check
 
@@ -555,9 +551,8 @@
   ([dev-env-id]
    (ping-by-id dev-env-id default-ping-timeout-ms))
   ([dev-env-id timeout-ms]
-   (if-let [dev-env (get-dev-env dev-env-id)]
-     (ping dev-env timeout-ms)
-     {:status :error :message (str "Dev-env not found: " dev-env-id)})))
+   (with-dev-env dev-env dev-env-id
+     (ping dev-env timeout-ms))))
 
 ;;; Dev-Env Selection
 

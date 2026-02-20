@@ -87,11 +87,13 @@
                     "unknown"
                     (java.util.UUID/randomUUID)
                     nil)]
-        (is (= :not-found (:error result)))))
+        (is (= :error (:status result)))
+        (is (string? (:message result)))))
 
     (testing "send-hook-event-by-id returns error for unknown id"
       (let [result (core/send-hook-event-by-id "unknown" :on-idle "s1" :idle)]
-        (is (= :not-found (:error result)))))
+        (is (= :error (:status result)))
+        (is (string? (:message result)))))
 
     (testing "await-command-by-id works with valid id"
       (let [dev-env-id (core/register-emacs-dev-env)
