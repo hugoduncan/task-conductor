@@ -1,0 +1,297 @@
+-- Emacs Sessions View Specification
+--
+-- Magit-section based buffer for viewing and acting on active Claude
+-- sessions.  Displays sessions grouped by state (Escalated, Idle,
+-- PR Waiting) with auto-refresh and push notification support.
+--
+-- Additive to emacs.allium (dev-env protocol) and orchestration.allium
+-- (statechart execution).  This spec covers the Emacs UI layer only.
+
+use ../dev-env/emacs as emacs
+use ../dev-env/orchestration as orchestration
+
+
+-- External Entities
+
+external entity MagitSection {
+    type: Symbol
+    value: Any
+    start: Point
+}
+
+
+-- Config
+
+config {
+    buffer_name: String = "*task-conductor-sessions*"
+    refresh_interval: Duration = 5.seconds
+    state_icons: Map<String, String> = {
+        escalated: "⚡",
+        idle: "⏸",
+        wait_pr_merge: "🔀"
+    }
+    state_groups: List<StateGroup> = [
+        { key: escalated, label: "Escalated" },
+        { key: idle, label: "Idle" },
+        { key: wait_pr_merge, label: "PR Waiting" }
+    ]
+}
+
+value StateGroup {
+    key: String
+    label: String
+}
+
+
+-- Entities
+
+entity SessionsBuffer {
+    -- Singleton buffer displaying active Claude sessions.
+    mode: task_conductor_sessions_mode
+    name: config.buffer_name
+    refresh_timer: Timer?
+
+    -- Derived
+    live: buffer exists and is displayed
+}
+
+value SessionEntry {
+    -- A session as displayed in the buffer.
+    session_id: String
+    state: String                             -- escalated | idle | wait_pr_merge
+    task_id: Integer
+    task_title: String?
+    entered_state_at: Timestamp?              -- when session entered current state
+    pr_num: Integer?                          -- present for wait_pr_merge sessions
+    branch: String?                           -- present for wait_pr_merge sessions
+}
+
+
+-- Rules
+
+--- Data Fetching
+
+rule FetchSessions {
+    -- Query JVM for active sessions via dev-env nREPL eval.
+    when: FetchRequested
+    requires: emacs.EmacsDevEnv.dev_env_id exists
+    ensures: result = emacs.SyncEval(
+        "query-active-sessions()"
+    )
+}
+
+
+--- Rendering
+
+rule RenderSessions {
+    -- Render sessions grouped by state into the buffer.
+    when: RenderRequested(sessions: List<SessionEntry>)
+    let parts = PartitionByState(sessions)
+    ensures: SessionsBuffer.contents =
+        MagitSection(type: sessions_root,
+            heading: "Claude Sessions\n",
+            children:
+                for group in config.state_groups:
+                    InsertGroup(group.label, parts.get(group.key))
+        )
+    ensures: SessionsBuffer.cursor = SessionsBuffer.start
+}
+
+rule PartitionByState {
+    -- Partition sessions into groups keyed by state.
+    -- Returns plist with :escalated, :idle, :wait_pr_merge keys.
+    when: PartitionRequested(sessions: List<SessionEntry>)
+    ensures: result = sessions.group_by(s => s.state)
+}
+
+rule InsertGroup {
+    -- Insert a collapsible group section with label and session entries.
+    when: InsertGroupRequested(label, sessions)
+    ensures: MagitSection(type: sessions_group, value: label,
+        heading: "{label} ({sessions.count})\n",
+        children:
+            if sessions.empty: ["  (none)\n"]
+            else: for s in sessions: InsertEntry(s)
+    )
+}
+
+rule InsertEntry {
+    -- Insert a single session entry with icon, task info, and timing.
+    when: InsertEntryRequested(session: SessionEntry)
+    let icon = config.state_icons.get(session.state) or "?"
+    let pr_info = if session.state = wait_pr_merge
+                     and (session.pr_num exists or session.branch exists):
+        FormatPrInfo(session.pr_num, session.branch)
+    else: ""
+    let time = FormatRelativeTime(session.entered_state_at)
+    ensures: MagitSection(type: sessions_entry, value: session,
+        heading: "  {icon} #{session.task_id} {session.task_title}{pr_info}  {time}\n"
+    )
+}
+
+rule FormatPrInfo {
+    -- Format PR number and branch for display.
+    when: FormatPrInfoRequested(pr_num, branch)
+    ensures: result = "  " +
+        (if pr_num exists: "PR #{pr_num}" else: "") +
+        (if branch exists: " {branch}" else: "")
+}
+
+rule FormatRelativeTime {
+    -- Format timestamp as relative time (e.g. "3m ago", "1h ago").
+    when: FormatRelativeTimeRequested(timestamp)
+    let elapsed = now - timestamp
+    ensures: result =
+        if elapsed < 60.seconds: "{elapsed.seconds}s ago"
+        else if elapsed < 1.hour: "{elapsed.minutes}m ago"
+        else if elapsed < 1.day: "{elapsed.hours}h ago"
+        else: "{elapsed.days}d ago"
+}
+
+
+--- Actions
+
+rule GotoSession {
+    -- Switch to the *claude:* buffer for the session at point.
+    when: UserInvokesGotoSession
+    requires: cursor is on SessionEntry section
+    let session = section.value
+    let buffer = emacs.EmacsDevEnv.session_buffers.get(session.session_id)
+    requires: buffer exists and buffer.live
+    ensures: buffer.displayed
+}
+
+rule MergePr {
+    -- Trigger PR merge for a :wait_pr_merge session at point.
+    -- Calls pr-merge! EQL mutation on the JVM via nREPL.
+    when: UserInvokesMergePr
+    requires: cursor is on SessionEntry section
+    let session = section.value
+    requires: session.state = wait_pr_merge
+    let result = emacs.SyncEval(
+        "pr-merge!(session.session_id)"
+    )
+    ensures:
+        if result.status = triggered:
+            message("PR merge triggered for session {session.session_id}")
+        else:
+            message("PR merge failed: {result.error.message}")
+}
+
+
+--- Refresh
+
+rule RefreshSessions {
+    -- Fetch sessions and re-render.
+    when: UserInvokesRefresh
+    ensures:
+        if emacs.EmacsDevEnv.dev_env_id exists:
+            let sessions = FetchSessions
+            RenderSessions(sessions)
+            message("Sessions refreshed")
+        else:
+            RenderSessions([])
+            message("Not connected to task-conductor")
+}
+
+
+--- Auto-Refresh
+
+rule AutoRefresh {
+    -- Timer-driven refresh while buffer is visible.
+    when: RefreshTimerFired
+    requires: SessionsBuffer.live
+    ensures: FetchSessions then RenderSessions
+    -- Errors are caught and logged, never propagated.
+}
+
+rule StartRefreshTimer {
+    when: SessionsBuffer.displayed
+    requires: SessionsBuffer.refresh_timer = nil
+    ensures: SessionsBuffer.refresh_timer = repeating_timer(
+        interval: config.refresh_interval,
+        action: AutoRefresh
+    )
+}
+
+rule StopRefreshTimer {
+    when: SessionsBuffer.hidden or SessionsBuffer.killed
+    ensures: SessionsBuffer.refresh_timer.cancelled
+    ensures: SessionsBuffer.refresh_timer = nil
+}
+
+
+--- Push Notifications
+
+rule HandleSessionsChanged {
+    -- JVM pushes :notify-sessions-changed with cached session data.
+    -- Re-renders buffer if live.
+    when: emacs.DispatchCommand.command = notify_sessions_changed
+    ensures:
+        if SessionsBuffer.live:
+            RenderSessions(emacs.EmacsDevEnv.cached_sessions)
+}
+
+
+--- Lifecycle
+
+rule OpenSessionsBuffer {
+    -- Entry point: M-x task-conductor-sessions
+    when: UserInvokesSessions
+    ensures: SessionsBuffer.created_or_reused(config.buffer_name)
+    ensures: SessionsBuffer.mode = task_conductor_sessions_mode
+    ensures: RefreshSessions
+    ensures: StartRefreshTimer
+    ensures: SessionsBuffer.displayed
+}
+
+
+-- Surfaces
+
+surface SessionManagement {
+    -- Interactive commands available in the sessions buffer.
+    for consumer: EmacsUser
+
+    context buffer: SessionsBuffer
+
+    exposes:
+        for session in buffer.sessions:
+            session.session_id
+            session.state
+            session.task_id
+            session.task_title
+            session.pr_num
+            session.branch
+
+    provides:
+        OpenSessionsBuffer                    -- M-x task-conductor-sessions
+        RefreshSessions                       -- g
+            when buffer.live
+        GotoSession                           -- RET
+            when cursor on SessionEntry
+        MergePr                               -- m
+            when cursor on SessionEntry
+            and session.state = wait_pr_merge
+        QuitBuffer                            -- q
+}
+
+surface SessionNotification {
+    -- Push notification channel from JVM to Emacs.
+    for consumer: EmacsPollLoop
+
+    provides:
+        HandleSessionsChanged
+            -- Received as :notify-sessions-changed via command channel.
+}
+
+
+-- Keybindings
+
+config keybindings {
+    -- All bound in task-conductor-sessions-mode-map,
+    -- inheriting from magit-section-mode-map.
+    RET: GotoSession
+    g:   RefreshSessions
+    m:   MergePr
+    q:   QuitBuffer
+}

@@ -32,7 +32,8 @@ config {
     status_icons: Map<Symbol, String> = {
         running: "⚡",
         escalated: "⚡",
-        idle: "⏸"
+        idle: "⏸",
+        wait_pr_merge: "🔀"
     }
     default_icon: String = " "
 }
@@ -55,7 +56,7 @@ value ProjectView {
     -- A project enriched with execution status for display.
     path: String                              -- canonical filesystem path
     name: String                              -- unique display name
-    status: running | escalated | idle | nil  -- derived from active sessions
+    status: running | escalated | idle | wait_pr_merge | nil  -- derived from active sessions
     active_sessions: List<SessionSummary>     -- statechart sessions for this project
 }
 
@@ -63,6 +64,8 @@ value SessionSummary {
     -- Subset of statechart session state for display.
     state: String                             -- current statechart state
     task_id: Integer                          -- task being executed
+    pr_num: Integer?                          -- GitHub PR number (present in wait_pr_merge)
+    branch: String?                           -- git branch name (present in wait_pr_merge)
 }
 
 

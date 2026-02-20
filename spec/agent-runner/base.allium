@@ -85,6 +85,20 @@ rule LogTransition {
     ensures: logged(session_id, from_state, to_state, event)
 }
 
+rule NotifyOnStateChange {
+    -- Transition listener that fires desktop notifications when a session
+    -- enters a notify-worthy state.  Enables user awareness of sessions
+    -- needing attention without polling.
+    when: TransitionOccurred(session_id, from_state, to_state, event)
+    requires: to_state in session_notify_states
+    ensures: desktop_notification(session_id, to_state)
+}
+
+config {
+    -- States that trigger a desktop notification on entry.
+    session_notify_states: Set<TaskState> = { escalated, idle, wait_pr_merge }
+}
+
 
 --- Execution Entry Points
 --
@@ -148,6 +162,37 @@ rule QueryStatus {
         current_state: orchestration/ExecutionSession.statechart_state(session_id),
         history: orchestration/ExecutionSession.history(session_id)
     }
+}
+
+rule ActiveSessions {
+    -- EQL resolver returning sessions in states needing user attention.
+    -- Used by the Emacs sessions view to populate the display.
+    -- Queries all statechart sessions, filters to active_session_states,
+    -- enriches each with task metadata (title, pr_num, branch).
+    when: ActiveSessionsRequested
+    let all_sessions = StatechartEngine.all_sessions
+    let active_states = { escalated, idle, wait_pr_merge }
+    let matching = all_sessions.filter(s => s.current_state intersects active_states)
+    ensures: result = matching.map(s => SessionSummary {
+        session_id: s.id,
+        state: s.current_state intersect active_states . first,
+        task_id: s.task_id,
+        task_title: s.task_title,
+        entered_state_at: s.entered_state_at,
+        pr_num: s.pr_num,                    -- nil when not in wait_pr_merge
+        branch: s.branch                     -- nil when not in wait_pr_merge
+    })
+}
+
+value SessionSummary {
+    -- Session data for the sessions view display.
+    session_id: String
+    state: String
+    task_id: Integer
+    task_title: String?
+    entered_state_at: Timestamp?
+    pr_num: Integer?
+    branch: String?
 }
 
 rule QueryStatusNotFound {
