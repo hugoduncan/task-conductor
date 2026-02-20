@@ -240,6 +240,11 @@
   []
   (core/notify-all-projects-changed!))
 
+(defn remove-project-registry-watch!
+  "Remove the project registry watch."
+  []
+  (core/remove-project-registry-watch!))
+
 ;;; Health Check
 
 (defn ping
