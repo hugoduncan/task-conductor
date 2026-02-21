@@ -390,6 +390,41 @@
     (should (equal "    [B][>] #7 Fix bug"
                    (task-conductor-project--format-task-entry task)))))
 
+(ert-deftest task-conductor-project-task-execution-icon ()
+  ;; Maps each session state to its execution icon, nil for unknown.
+  (should (equal "⏸" (task-conductor-project--task-execution-icon :idle)))
+  (should (equal "🔄" (task-conductor-project--task-execution-icon :running)))
+  (should (equal "🔔" (task-conductor-project--task-execution-icon :escalated)))
+  (should (equal "🔀" (task-conductor-project--task-execution-icon :wait-pr-merge)))
+  (should-not (task-conductor-project--task-execution-icon nil))
+  (should-not (task-conductor-project--task-execution-icon :other)))
+
+(ert-deftest task-conductor-project-format-task-entry-with-session ()
+  ;; Appends execution icon when a matching session is found.
+  (let* ((session (list :session-id "s1" :task-id 42 :state :running))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 42 :title "Do thing" :type "task" :status "open"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "🔄" result))
+    (should (string-match-p "#42 Do thing" result))))
+
+(ert-deftest task-conductor-project-format-task-entry-session-text-property ()
+  ;; Icon carries task-conductor-task-id text property for later clickability.
+  (let* ((session (list :session-id "s1" :task-id 10 :state :idle))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 10 :title "A task" :type "task" :status "open"))
+         (result (task-conductor-project--format-task-entry task))
+         (icon-pos (string-match "⏸" result)))
+    (should icon-pos)
+    (should (equal 10 (get-text-property icon-pos 'task-conductor-task-id result)))))
+
+(ert-deftest task-conductor-project-format-task-entry-no-session ()
+  ;; No icon appended when no session matches the task.
+  (let* ((task-conductor-dev-env--cached-sessions nil)
+         (task (list :id 42 :title "Do thing" :type "task" :status "open")))
+    (should (equal "    [T][ ] #42 Do thing"
+                   (task-conductor-project--format-task-entry task)))))
+
 ;;; insert-task-children tests (cache-only)
 
 (ert-deftest task-conductor-project-insert-task-children-cache-hit ()

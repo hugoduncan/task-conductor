@@ -191,6 +191,18 @@ Nil until first use; initialized by `task-conductor-project-mode'.")
 
 ;;; Task formatting
 
+(defun task-conductor-project--task-execution-icon (session-state)
+  "Return an execution status icon for SESSION-STATE, or nil.
+Maps session state keywords to unicode icons: idle, running,
+escalated, and wait-pr-merge states each have a distinct icon.
+Returns nil for unrecognized or nil states."
+  (pcase session-state
+    (:idle          "⏸")
+    (:running       "🔄")
+    (:escalated     "🔔")
+    (:wait-pr-merge "🔀")
+    (_              nil)))
+
 (defun task-conductor-project--task-type-icon (type)
   "Return a bracketed type icon for task TYPE string."
   (pcase type
@@ -210,14 +222,24 @@ Nil until first use; initialized by `task-conductor-project-mode'.")
     ((or "blocked" :blocked)             "[!]")
     (_                                   "[ ]")))
 
-(defun task-conductor-project--format-task-entry (task)
+(defun task-conductor-project--format-task-entry (task &optional project-path)
   "Format TASK plist as a single display line.
-Returns a string like `[T][ ] #42 Some title'."
-  (format "    %s%s #%d %s"
-          (task-conductor-project--task-type-icon (plist-get task :type))
-          (task-conductor-project--task-status-icon (plist-get task :status))
-          (plist-get task :id)
-          (plist-get task :title)))
+Returns a string like `[T][ ] #42 Some title'.
+When a session matches TASK's id (optionally filtered by PROJECT-PATH),
+appends an execution status icon with a `task-conductor-task-id' text property."
+  (let* ((task-id (plist-get task :id))
+         (base (format "    %s%s #%d %s"
+                       (task-conductor-project--task-type-icon (plist-get task :type))
+                       (task-conductor-project--task-status-icon (plist-get task :status))
+                       task-id
+                       (plist-get task :title)))
+         (session (task-conductor-project--find-session task-id project-path))
+         (icon (when session
+                 (task-conductor-project--task-execution-icon
+                  (plist-get session :state)))))
+    (if icon
+        (concat base " " (propertize icon 'task-conductor-task-id task-id))
+      base)))
 
 (defun task-conductor-project--insert-task-children (project-path)
   "Insert task child sections for PROJECT-PATH from cache only.
@@ -234,7 +256,8 @@ On a cached error value, inserts a warning message."
           (magit-insert-section (task-conductor-project-task task)
             (magit-insert-heading
               (format "%s\n"
-                      (task-conductor-project--format-task-entry task))))))))))
+                      (task-conductor-project--format-task-entry
+                       task project-path))))))))))
 
 ;;; Section traversal and expansion tracking
 
