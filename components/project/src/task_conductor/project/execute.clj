@@ -66,7 +66,7 @@
   "Count the number of open (non-closed, non-deleted) children.
    Used for detecting no-progress in :has-tasks state."
   [children]
-  (count (filter #(not (#{:closed "closed"} (:status %)))
+  (count (filter #(not (#{:closed "closed" :done "done"} (:status %)))
                  (active-children children))))
 
 (defn- children-complete?

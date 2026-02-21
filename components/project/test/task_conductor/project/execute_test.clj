@@ -200,6 +200,33 @@
       (is (not (execute/refined? {:meta {}})))
       (is (not (execute/refined? {:meta {:other "x"}}))))))
 
+(deftest count-open-children-test
+  ;; Verify count-open-children treats :done and :closed as complete.
+  (testing "count-open-children"
+    (testing "counts children with :open status"
+      (is (= 2 (execute/count-open-children
+                [{:status :open} {:status :open}]))))
+
+    (testing "excludes :closed children"
+      (is (= 0 (execute/count-open-children
+                [{:status :closed}]))))
+
+    (testing "excludes :done children"
+      (is (= 0 (execute/count-open-children
+                [{:status :done}]))))
+
+    (testing "excludes string status variants"
+      (is (= 0 (execute/count-open-children
+                [{:status "closed"} {:status "done"}]))))
+
+    (testing "excludes :deleted children"
+      (is (= 1 (execute/count-open-children
+                [{:status :open} {:status :deleted}]))))
+
+    (testing "counts mixed statuses correctly"
+      (is (= 1 (execute/count-open-children
+                [{:status :done} {:status :open} {:status :closed}]))))))
+
 ;;; Statechart Definition Tests
 
 (defmacro with-clean-test-env
