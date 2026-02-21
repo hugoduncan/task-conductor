@@ -610,6 +610,30 @@
 
 ;;; Refresh tests
 
+(ert-deftest task-conductor-project-refresh-queries-sessions-when-connected ()
+  ;; Refresh calls query-sessions to update session cache before re-rendering.
+  (with-project-buffer
+    (let ((sessions-queried nil))
+      (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+                 (lambda () t))
+                ((symbol-function 'task-conductor-dev-env-query-sessions)
+                 (lambda () (setq sessions-queried t)))
+                ((symbol-function 'task-conductor-project--list)
+                 (lambda () (list :status :ok :projects nil))))
+        (task-conductor-project-refresh)
+        (should sessions-queried)))))
+
+(ert-deftest task-conductor-project-refresh-skips-query-sessions-when-not-connected ()
+  ;; Refresh does not call query-sessions when not connected.
+  (with-project-buffer
+    (let ((sessions-queried nil))
+      (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+                 (lambda () nil))
+                ((symbol-function 'task-conductor-dev-env-query-sessions)
+                 (lambda () (setq sessions-queried t))))
+        (task-conductor-project-refresh)
+        (should-not sessions-queried)))))
+
 (ert-deftest task-conductor-project-refresh-clears-cache ()
   ;; Refresh clears the task cache so tasks are re-fetched lazily.
   (with-project-buffer
@@ -654,6 +678,8 @@
                  (lambda (_path) tasks))
                 ((symbol-function 'task-conductor-dev-env--connected-p)
                  (lambda () t))
+                ((symbol-function 'task-conductor-dev-env-query-sessions)
+                 (lambda () nil))
                 ((symbol-function 'task-conductor-project--list)
                  (lambda () (list :status :ok :projects (list proj)))))
         (task-conductor-project-refresh)

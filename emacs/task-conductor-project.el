@@ -525,6 +525,7 @@ after refresh.  Preserves which project sections were expanded."
         (progn
           (task-conductor-project--render nil)
           (message "Not connected to task-conductor"))
+      (task-conductor-dev-env-query-sessions)
       (let ((result (task-conductor-project--list)))
         (if (eq :ok (plist-get result :status))
             (let ((projects (append (plist-get result :projects) nil)))

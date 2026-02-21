@@ -402,5 +402,25 @@
     (task-conductor-dev-env--cleanup-session-hooks "sess-cleanup")
     (should-not (gethash "sess-cleanup" task-conductor-dev-env--session-hooks))))
 
+;;; Notify-sessions-changed tests
+
+(ert-deftest task-conductor-dev-env-handle-notify-sessions-changed-updates-cache ()
+  ;; Updates cached sessions from params.
+  (with-task-conductor-test-state
+    (let ((sessions (list (list :session-id "s1" :state :running :task-id 42))))
+      (task-conductor-dev-env--handle-notify-sessions-changed
+       (list :sessions sessions))
+      (should (equal sessions task-conductor-dev-env--cached-sessions)))))
+
+(ert-deftest task-conductor-dev-env-handle-notify-sessions-changed-rerenders-projects ()
+  ;; Calls task-conductor-project-rerender-if-live when defined.
+  (with-task-conductor-test-state
+    (let ((project-rerender-called nil))
+      (cl-letf (((symbol-function 'task-conductor-project-rerender-if-live)
+                 (lambda () (setq project-rerender-called t))))
+        (task-conductor-dev-env--handle-notify-sessions-changed
+         (list :sessions nil))
+        (should project-rerender-called)))))
+
 (provide 'test-task-conductor-dev-env)
 ;;; test-task-conductor-dev-env.el ends here
