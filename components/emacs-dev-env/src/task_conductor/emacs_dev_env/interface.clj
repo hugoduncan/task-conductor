@@ -204,6 +204,18 @@
   [dev-env-id path]
   (core/delete-project-by-id dev-env-id path))
 
+(defn execute-task-by-id
+  "Start execution of a task or story using dev-env-id.
+  Returns {:status :ok :session-id ... :initial-state ...} or
+  {:status :error ...}.
+
+  Parameters:
+    dev-env-id  - String ID returned from register-emacs-dev-env
+    project-dir - Project directory path
+    task-id     - Task or story ID (integer)"
+  [dev-env-id project-dir task-id]
+  (core/execute-task-by-id dev-env-id project-dir task-id))
+
 (defn query-sessions-by-id
   "Query sessions in escalated/idle states using dev-env-id.
   Returns {:status :ok :sessions [...]} or {:status :error ...}.
