@@ -608,19 +608,18 @@ Prompts for directory path and optional name."
 
 ;;; Mode
 
-(defvar task-conductor-project-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map magit-section-mode-map)
-    (define-key map (kbd "g") #'task-conductor-project-refresh)
-    (define-key map (kbd "c") #'task-conductor-project-create)
-    (define-key map (kbd "d") #'task-conductor-project-delete)
-    (define-key map (kbd "e") #'task-conductor-project-execute)
-    (define-key map (kbd "k") #'task-conductor-project-cancel)
-    (define-key map (kbd "r") #'task-conductor-project-rename)
-    (define-key map (kbd "RET") #'task-conductor-project-open-dired)
-    (define-key map (kbd "q") #'task-conductor-project-quit)
-    map)
-  "Keymap for `task-conductor-project-mode'.")
+(defvar-keymap task-conductor-project-mode-map
+  :doc "Keymap for `task-conductor-project-mode'."
+  :parent magit-section-mode-map
+  "g"   #'task-conductor-project-refresh
+  "c"   #'task-conductor-project-create
+  "d"   #'task-conductor-project-delete
+  "e"   #'task-conductor-project-execute
+  "k"   #'task-conductor-project-cancel
+  "r"   #'task-conductor-project-rename
+  "RET" #'task-conductor-project-open-dired
+  "t"   #'task-conductor-project-open-tasks
+  "q"   #'task-conductor-project-quit)
 
 (define-derived-mode task-conductor-project-mode magit-section-mode
   "TC Projects"
