@@ -296,7 +296,7 @@
 
 (deftest execute-test
   ;; Verify execute! mutation correctly starts statechart sessions for tasks
-  ;; and stories, derives initial state, and registers dev-env hooks.
+  ;; and stories, and derives initial state.
   (testing "execute!"
     (testing "starts statechart session for a task"
       (with-execute-state
@@ -374,7 +374,9 @@
                 (is (= :not-found (:error (:execute/error execute-result))))
                 (is (nil? (:execute/session-id execute-result)))))))))
 
-    (testing "registers dev-env hook when dev-env available"
+    (testing "does not register dev-env hooks on execute"
+      ;; Idle detection is handled by CLI hooks in escalate-to-dev-env!,
+      ;; not at execute! time.
       (with-execute-state
         (let [dev-env (dev-env-protocol/make-noop-dev-env)
               _dev-env-id (dev-env-registry/register! dev-env :test)
@@ -389,8 +391,7 @@
                     execute-result (get result `resolvers/execute!)
                     session-id (:execute/session-id execute-result)]
                 (is (string? session-id))
-                ;; Verify hook was registered
-                (is (= 1 (count @(:hooks dev-env))))))))))
+                (is (= 0 (count @(:hooks dev-env))))))))))
 
     (testing "stores session data including task context"
       (with-execute-state

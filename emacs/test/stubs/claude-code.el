@@ -15,10 +15,6 @@ ARGS should include --resume and session-id."
   (or claude-code--stub-buffer
       (generate-new-buffer "*claude-code-stub*")))
 
-(defun claude-code--notify (&rest _args)
-  "Stub for claude-code--notify (bell notification)."
-  nil)
-
 (defun claude-code--find-claude-buffers-for-directory (_dir)
   "Stub for claude-code--find-claude-buffers-for-directory.
 Returns a list containing `claude-code--stub-buffer' if set."

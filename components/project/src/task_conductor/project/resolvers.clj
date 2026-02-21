@@ -67,9 +67,6 @@
 
 ;;; Execute Mutation
 
-(def ^:private register-hook-mutation
-  'task-conductor.statechart-engine.resolvers/engine-register-dev-env-hook!)
-
 (defn- fetch-task
   "Fetch task data via EQL query.
    Returns task map with :task/type, :task/status, etc.
@@ -149,18 +146,7 @@
                               :task-id id
                               :task-type (if is-story :story :task)}
                 session-id (sc/start! chart-id {:data initial-data})
-                initial-state (derive-initial-state task children)
-                selected (graph/query [:dev-env/selected])
-                dev-env-id (:dev-env/id
-                            (:dev-env/selected selected))]
-            (when dev-env-id
-              (let [params
-                    {:dev-env/id dev-env-id
-                     :dev-env/hook-type :on-idle
-                     :engine/session-id session-id
-                     :engine/event :complete}]
-                (graph/query
-                 [(list register-hook-mutation params)])))
+                initial-state (derive-initial-state task children)]
             {:execute/session-id session-id
              :execute/initial-state initial-state
              :execute/error nil}))))))
