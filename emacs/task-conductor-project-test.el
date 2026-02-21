@@ -946,5 +946,16 @@ The caller must ensure a dynamic binding for
     (should (string-match-p "⏸" result))
     (should-not (string-match-p "⏹" result))))
 
+(ert-deftest task-conductor-project-format-task-entry-unknown-session-state ()
+  ;; Unknown session state shows base text only: no status, play, or stop icon.
+  (let* ((session (list :session-id "s4" :task-id 9 :state :some-new-state))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 9 :title "My task" :type "task" :status "open"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "#9 My task" result))
+    (should-not (string-match-p "▶" result))
+    (should-not (string-match-p "⏹" result))
+    (should-not (string-match-p "⏸\\|🔄\\|🔔\\|🔀" result))))
+
 (provide 'task-conductor-project-test)
 ;;; task-conductor-project-test.el ends here
