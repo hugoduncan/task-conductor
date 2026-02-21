@@ -156,6 +156,11 @@ or :status :error and :message on failure."
 (defvar task-conductor-project--buffer-name "*task-conductor-projects*"
   "Name of the projects buffer.")
 
+(defvar-local task-conductor-project--task-cache nil
+  "Hash-table mapping project path strings to cached task lists.
+Each value is either a list of task plists or (:error \"message\").
+Nil until first use; initialized by `task-conductor-project-mode'.")
+
 ;;; Section types
 
 (defclass task-conductor-project-root-section (magit-section) ())
@@ -193,11 +198,11 @@ Returns a string like `[T][ ] #42 Some title'."
           (plist-get task :title)))
 
 (defun task-conductor-project--insert-task-children (project-path)
-  "Insert task child sections for PROJECT-PATH.
-Fetches tasks via CLI and inserts one child section per task.
-On error, inserts a warning message."
+  "Insert task child sections for PROJECT-PATH from cache only.
+Does not call the CLI; inserts nothing on a cache miss.
+On a cached error value, inserts a warning message."
   (when project-path
-    (let ((tasks (task-conductor-project--fetch-tasks project-path)))
+    (when-let ((tasks (gethash project-path task-conductor-project--task-cache)))
       (cond
        ((eq :error (car tasks))
         (insert (propertize (format "    %s\n" (cadr tasks))
@@ -208,6 +213,71 @@ On error, inserts a warning message."
             (magit-insert-heading
               (format "%s\n"
                       (task-conductor-project--format-task-entry task))))))))))
+
+;;; Section traversal and expansion tracking
+
+(defun task-conductor-project--walk-sections (section fn)
+  "Walk SECTION and its descendants depth-first, calling FN on each."
+  (when section
+    (funcall fn section)
+    (dolist (child (oref section children))
+      (task-conductor-project--walk-sections child fn))))
+
+(defun task-conductor-project--expanded-paths ()
+  "Return list of project paths whose entry sections are currently expanded."
+  (let (paths)
+    (when (and (boundp 'magit-root-section) magit-root-section)
+      (task-conductor-project--walk-sections
+       magit-root-section
+       (lambda (section)
+         (when (and (eq (oref section type) 'task-conductor-project-entry)
+                    (not (oref section hidden)))
+           (push (plist-get (oref section value) :project/path) paths)))))
+    (nreverse paths)))
+
+(defun task-conductor-project--hide-all-entries ()
+  "Hide all project entry sections in the current buffer."
+  (when (and (boundp 'magit-root-section) magit-root-section)
+    (task-conductor-project--walk-sections
+     magit-root-section
+     (lambda (section)
+       (when (eq (oref section type) 'task-conductor-project-entry)
+         (magit-section-hide section))))))
+
+(defun task-conductor-project--reexpand-paths (paths)
+  "Show project entry sections whose paths are in PATHS."
+  (when (and paths (boundp 'magit-root-section) magit-root-section)
+    (task-conductor-project--walk-sections
+     magit-root-section
+     (lambda (section)
+       (when (and (eq (oref section type) 'task-conductor-project-entry)
+                  (member (plist-get (oref section value) :project/path) paths))
+         (magit-section-show section))))))
+
+;;; Lazy loading
+
+(defun task-conductor-project--check-lazy-load ()
+  "Lazy-load tasks for the current project section if not yet cached.
+Run as a buffer-local `post-command-hook'.  When a project entry
+section is expanded but has no children and no cache entry, fetches
+tasks from the CLI, caches them, re-renders the buffer, and restores
+expansion state."
+  (when-let ((section (magit-current-section)))
+    (when (and (eq (oref section type) 'task-conductor-project-entry)
+               (not (oref section hidden))
+               (null (oref section children)))
+      (let* ((project (oref section value))
+             (path (plist-get project :project/path)))
+        (when (and path
+                   (not (gethash path task-conductor-project--task-cache)))
+          (let ((expanded (task-conductor-project--expanded-paths)))
+            (puthash path
+                     (task-conductor-project--fetch-tasks path)
+                     task-conductor-project--task-cache)
+            (when task-conductor-dev-env--cached-projects
+              (task-conductor-project--render
+               task-conductor-dev-env--cached-projects)
+              (task-conductor-project--reexpand-paths expanded))))))))
 
 ;;; Rendering
 
@@ -249,7 +319,9 @@ On error, inserts a warning message."
 
 (defun task-conductor-project--render (projects)
   "Render PROJECTS into the current buffer.
-PROJECTS is a list of plists with :project/name and :project/path."
+PROJECTS is a list of plists with :project/name and :project/path.
+All project entry sections start collapsed; callers should use
+`task-conductor-project--reexpand-paths' to restore expansion state."
   (let ((inhibit-read-only t)
         (saved-section-ident (when-let ((s (magit-current-section)))
                                (magit-section-ident s)))
@@ -268,6 +340,7 @@ PROJECTS is a list of plists with :project/name and :project/path."
               (task-conductor-project--insert-task-children
                (plist-get p :project/path))))
         (insert "  (none)\n")))
+    (task-conductor-project--hide-all-entries)
     (if saved-section-ident
         (when-let ((s (magit-get-section saved-section-ident)))
           (goto-char (oref s start)))
@@ -277,30 +350,45 @@ PROJECTS is a list of plists with :project/name and :project/path."
 
 (defun task-conductor-project-rerender-if-live ()
   "Re-render projects buffer from cached data if it exists.
-Called by the :notify-projects-changed handler."
+Called by the :notify-projects-changed handler.  Preserves
+expansion state and keeps the task cache intact."
   (when-let ((buf (get-buffer task-conductor-project--buffer-name)))
     (when (buffer-live-p buf)
       (with-current-buffer buf
-        (task-conductor-project--render
-         task-conductor-dev-env--cached-projects)))))
+        (let ((expanded (task-conductor-project--expanded-paths)))
+          (task-conductor-project--render
+           task-conductor-dev-env--cached-projects)
+          (task-conductor-project--reexpand-paths expanded))))))
 
 ;;; Interactive commands
 
 (defun task-conductor-project-refresh ()
-  "Refresh the project list from the JVM."
+  "Refresh the project list from the JVM.
+Clears the task cache so tasks are re-fetched from CLI on next expand.
+Pre-fetches tasks for currently-expanded projects so they remain visible
+after refresh.  Preserves which project sections were expanded."
   (interactive)
-  (if (not (task-conductor-dev-env--connected-p))
-      (progn
-        (task-conductor-project--render nil)
-        (message "Not connected to task-conductor"))
-    (let ((result (task-conductor-project--list)))
-      (if (eq :ok (plist-get result :status))
-          (let ((projects (append (plist-get result :projects) nil)))
-            (setq task-conductor-dev-env--cached-projects projects)
-            (task-conductor-project--render projects)
-            (message "Projects refreshed"))
-        (message "Error fetching projects: %s"
-                 (or (plist-get result :message) "unknown"))))))
+  (let* ((expanded (task-conductor-project--expanded-paths))
+         (fresh-tasks (make-hash-table :test #'equal)))
+    ;; Pre-fetch fresh tasks for expanded paths before clearing cache
+    (dolist (path expanded)
+      (puthash path (task-conductor-project--fetch-tasks path) fresh-tasks))
+    (clrhash task-conductor-project--task-cache)
+    (dolist (path expanded)
+      (puthash path (gethash path fresh-tasks) task-conductor-project--task-cache))
+    (if (not (task-conductor-dev-env--connected-p))
+        (progn
+          (task-conductor-project--render nil)
+          (message "Not connected to task-conductor"))
+      (let ((result (task-conductor-project--list)))
+        (if (eq :ok (plist-get result :status))
+            (let ((projects (append (plist-get result :projects) nil)))
+              (setq task-conductor-dev-env--cached-projects projects)
+              (task-conductor-project--render projects)
+              (task-conductor-project--reexpand-paths expanded)
+              (message "Projects refreshed"))
+          (message "Error fetching projects: %s"
+                   (or (plist-get result :message) "unknown")))))))
 
 (defun task-conductor-project-create ()
   "Create a new project.
@@ -399,7 +487,11 @@ Prompts for directory path and optional name."
   "TC Projects"
   "Major mode for managing task-conductor projects.
 
-\\{task-conductor-project-mode-map}")
+\\{task-conductor-project-mode-map}"
+  (setq task-conductor-project--task-cache (make-hash-table :test #'equal))
+  (add-hook 'post-command-hook
+            #'task-conductor-project--check-lazy-load
+            nil t))
 
 ;;; Entry point
 

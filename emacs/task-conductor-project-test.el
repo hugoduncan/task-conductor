@@ -343,40 +343,44 @@
     (should (equal "    [B][>] #7 Fix bug"
                    (task-conductor-project--format-task-entry task)))))
 
-(ert-deftest task-conductor-project-insert-task-children-with-tasks ()
-  ;; Inserts task sections as children when fetch returns tasks.
-  (with-project-buffer
-    (let ((inhibit-read-only t))
-      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
-                 (lambda (_path)
-                   (list (list :id 1 :title "First" :type "task" :status "open")
-                         (list :id 2 :title "Second" :type "bug" :status "done")))))
-        (magit-insert-section (task-conductor-project-root)
-          (task-conductor-project--insert-task-children "/proj"))
-        (let ((text (buffer-string)))
-          (should (string-match-p "\\[T\\]\\[ \\] #1 First" text))
-          (should (string-match-p "\\[B\\]\\[x\\] #2 Second" text)))))))
+;;; insert-task-children tests (cache-only)
 
-(ert-deftest task-conductor-project-insert-task-children-error ()
-  ;; Inserts warning-face text when fetch returns an error.
+(ert-deftest task-conductor-project-insert-task-children-cache-hit ()
+  ;; Inserts task sections when cache has data for the path.
   (with-project-buffer
     (let ((inhibit-read-only t))
-      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
-                 (lambda (_path) (list :error "CLI not found"))))
-        (magit-insert-section (task-conductor-project-root)
-          (task-conductor-project--insert-task-children "/proj"))
-        (let ((text (buffer-string)))
-          (should (string-match-p "CLI not found" text)))))))
+      (puthash "/proj"
+               (list (list :id 1 :title "First" :type "task" :status "open")
+                     (list :id 2 :title "Second" :type "bug" :status "done"))
+               task-conductor-project--task-cache)
+      (magit-insert-section (task-conductor-project-root)
+        (task-conductor-project--insert-task-children "/proj"))
+      (let ((text (buffer-string)))
+        (should (string-match-p "\\[T\\]\\[ \\] #1 First" text))
+        (should (string-match-p "\\[B\\]\\[x\\] #2 Second" text))))))
 
-(ert-deftest task-conductor-project-insert-task-children-empty ()
-  ;; Inserts nothing when fetch returns empty list.
+(ert-deftest task-conductor-project-insert-task-children-cache-miss ()
+  ;; Inserts nothing and does not call fetch-tasks when path is not in cache.
   (with-project-buffer
-    (let ((inhibit-read-only t))
+    (let ((inhibit-read-only t)
+          (fetch-called nil))
       (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
-                 (lambda (_path) nil)))
+                 (lambda (_path) (setq fetch-called t) nil)))
         (magit-insert-section (task-conductor-project-root)
           (task-conductor-project--insert-task-children "/proj"))
+        (should-not fetch-called)
         (should (string-empty-p (buffer-string)))))))
+
+(ert-deftest task-conductor-project-insert-task-children-cached-error ()
+  ;; Inserts warning-face text when cache holds an error value.
+  (with-project-buffer
+    (let ((inhibit-read-only t))
+      (puthash "/proj" (list :error "CLI not found")
+               task-conductor-project--task-cache)
+      (magit-insert-section (task-conductor-project-root)
+        (task-conductor-project--insert-task-children "/proj"))
+      (let ((text (buffer-string)))
+        (should (string-match-p "CLI not found" text))))))
 
 (ert-deftest task-conductor-project-insert-task-children-nil-path ()
   ;; Does nothing when project-path is nil.
@@ -386,33 +390,203 @@
         (task-conductor-project--insert-task-children nil))
       (should (string-empty-p (buffer-string))))))
 
-(ert-deftest task-conductor-project-render-with-task-children ()
-  ;; Render inserts task children inside project sections.
+;;; Render + cache tests
+
+(ert-deftest task-conductor-project-render-sections-start-hidden ()
+  ;; Project entry sections start collapsed (hidden) after render.
   (with-project-buffer
-    (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
-               (lambda (_path)
-                 (list (list :id 10 :title "A task" :type "task" :status "open")))))
-      (task-conductor-project--render
-       (list (list :project/name "proj" :project/path "/proj")))
-      (let ((text (buffer-string)))
-        (should (string-match-p "proj" text))
-        (should (string-match-p "\\[T\\]\\[ \\] #10 A task" text))))))
+    (task-conductor-project--render
+     (list (list :project/name "p" :project/path "/p")))
+    (goto-char (point-min))
+    (magit-section-forward)
+    (should (oref (magit-current-section) hidden))))
+
+(ert-deftest task-conductor-project-render-no-fetch-without-cache ()
+  ;; --render does not call --fetch-tasks; lazy loading is deferred to expand.
+  (with-project-buffer
+    (let ((fetch-called nil))
+      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
+                 (lambda (_path) (setq fetch-called t) nil)))
+        (task-conductor-project--render
+         (list (list :project/name "p" :project/path "/p")))
+        (should-not fetch-called)))))
+
+(ert-deftest task-conductor-project-render-with-cached-tasks ()
+  ;; Task children appear in buffer text when cache is pre-populated.
+  (with-project-buffer
+    (puthash "/proj"
+             (list (list :id 10 :title "A task" :type "task" :status "open"))
+             task-conductor-project--task-cache)
+    (task-conductor-project--render
+     (list (list :project/name "proj" :project/path "/proj")))
+    (let ((text (buffer-string)))
+      (should (string-match-p "proj" text))
+      (should (string-match-p "\\[T\\]\\[ \\] #10 A task" text)))))
 
 (ert-deftest task-conductor-project-task-section-stores-value ()
   ;; Task sections store the task plist as their value.
   (with-project-buffer
     (let ((task-data (list :id 5 :title "My task" :type "task" :status "open")))
-      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
-                 (lambda (_path) (list task-data))))
-        (task-conductor-project--render
-         (list (list :project/name "p" :project/path "/p")))
-        (goto-char (point-min))
-        ;; Navigate to the project entry, then into child task section
-        (magit-section-forward)
+      (puthash "/p" (list task-data) task-conductor-project--task-cache)
+      (task-conductor-project--render
+       (list (list :project/name "p" :project/path "/p")))
+      (goto-char (point-min))
+      (magit-section-forward)
+      (let ((entry (magit-current-section)))
+        ;; Show the collapsed section so we can navigate into it
+        (magit-section-show entry)
         (magit-section-forward)
         (let ((section (magit-current-section)))
           (should (eq (oref section type) 'task-conductor-project-task))
           (should (equal 5 (plist-get (oref section value) :id))))))))
+
+;;; Expansion state tests
+
+(ert-deftest task-conductor-project-expanded-paths-empty ()
+  ;; Returns empty list when all sections are collapsed.
+  (with-project-buffer
+    (task-conductor-project--render
+     (list (list :project/name "p" :project/path "/proj")))
+    (should (null (task-conductor-project--expanded-paths)))))
+
+(ert-deftest task-conductor-project-expanded-paths-after-show ()
+  ;; Expanding a section adds its path to the expanded list.
+  (with-project-buffer
+    (task-conductor-project--render
+     (list (list :project/name "p" :project/path "/proj")))
+    (goto-char (point-min))
+    (magit-section-forward)
+    (magit-section-show (magit-current-section))
+    (should (equal '("/proj") (task-conductor-project--expanded-paths)))))
+
+(ert-deftest task-conductor-project-reexpand-paths-restores ()
+  ;; reexpand-paths makes matching sections visible after render.
+  (with-project-buffer
+    (task-conductor-project--render
+     (list (list :project/name "p" :project/path "/proj")))
+    (should (null (task-conductor-project--expanded-paths)))
+    (task-conductor-project--reexpand-paths '("/proj"))
+    (should (equal '("/proj") (task-conductor-project--expanded-paths)))))
+
+(ert-deftest task-conductor-project-reexpand-paths-selective ()
+  ;; reexpand-paths only shows sections matching the given paths.
+  (with-project-buffer
+    (task-conductor-project--render
+     (list (list :project/name "a" :project/path "/a")
+           (list :project/name "b" :project/path "/b")))
+    (task-conductor-project--reexpand-paths '("/b"))
+    (let ((paths (task-conductor-project--expanded-paths)))
+      (should (= 1 (length paths)))
+      (should (member "/b" paths))
+      (should-not (member "/a" paths)))))
+
+;;; Lazy loading tests
+
+(ert-deftest task-conductor-project-check-lazy-load-fetches-on-cache-miss ()
+  ;; check-lazy-load fetches and caches tasks for an expanded section with no cache entry.
+  (with-project-buffer
+    (let* ((proj (list :project/name "p" :project/path "/p"))
+           (task-conductor-dev-env--cached-projects (list proj))
+           (fetch-called nil))
+      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
+                 (lambda (_path)
+                   (setq fetch-called t)
+                   (list (list :id 1 :title "T" :type "task" :status "open")))))
+        (task-conductor-project--render (list proj))
+        (goto-char (point-min))
+        (magit-section-forward)
+        (magit-section-show (magit-current-section))
+        (task-conductor-project--check-lazy-load)
+        (should fetch-called)
+        (should (gethash "/p" task-conductor-project--task-cache))))))
+
+(ert-deftest task-conductor-project-check-lazy-load-skips-cache-hit ()
+  ;; check-lazy-load does not re-fetch when section already has children in cache.
+  (with-project-buffer
+    (let* ((proj (list :project/name "p" :project/path "/p"))
+           (fetch-called nil))
+      (puthash "/p"
+               (list (list :id 1 :title "T" :type "task" :status "open"))
+               task-conductor-project--task-cache)
+      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
+                 (lambda (_path) (setq fetch-called t) nil)))
+        (task-conductor-project--render (list proj))
+        (goto-char (point-min))
+        (magit-section-forward)
+        (magit-section-show (magit-current-section))
+        (task-conductor-project--check-lazy-load)
+        (should-not fetch-called)))))
+
+;;; Refresh tests
+
+(ert-deftest task-conductor-project-refresh-clears-cache ()
+  ;; Refresh clears the task cache so tasks are re-fetched lazily.
+  (with-project-buffer
+    (puthash "/p" '() task-conductor-project--task-cache)
+    (should (= 1 (hash-table-count task-conductor-project--task-cache)))
+    (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+               (lambda () nil)))
+      (task-conductor-project-refresh))
+    (should (= 0 (hash-table-count task-conductor-project--task-cache)))))
+
+(ert-deftest task-conductor-project-refresh-prefetches-expanded ()
+  ;; Refresh pre-fetches tasks for previously-expanded projects so they remain visible.
+  (with-project-buffer
+    (let* ((proj (list :project/name "p" :project/path "/p"))
+           (fetch-called-for nil))
+      (puthash "/p"
+               (list (list :id 1 :title "T" :type "task" :status "open"))
+               task-conductor-project--task-cache)
+      (task-conductor-project--render (list proj))
+      (goto-char (point-min))
+      (magit-section-forward)
+      (magit-section-show (magit-current-section))
+      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
+                 (lambda (path) (push path fetch-called-for) nil))
+                ((symbol-function 'task-conductor-dev-env--connected-p)
+                 (lambda () nil)))
+        (task-conductor-project-refresh)
+        (should (member "/p" fetch-called-for))))))
+
+(ert-deftest task-conductor-project-refresh-preserves-expansion ()
+  ;; After refresh, previously-expanded sections are re-expanded.
+  (with-project-buffer
+    (let* ((proj (list :project/name "p" :project/path "/p"))
+           (tasks (list (list :id 1 :title "T" :type "task" :status "open")))
+           (task-conductor-dev-env--cached-projects (list proj)))
+      (puthash "/p" tasks task-conductor-project--task-cache)
+      (task-conductor-project--render (list proj))
+      (goto-char (point-min))
+      (magit-section-forward)
+      (magit-section-show (magit-current-section))
+      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
+                 (lambda (_path) tasks))
+                ((symbol-function 'task-conductor-dev-env--connected-p)
+                 (lambda () t))
+                ((symbol-function 'task-conductor-project--list)
+                 (lambda () (list :status :ok :projects (list proj)))))
+        (task-conductor-project-refresh)
+        (should (member "/p" (task-conductor-project--expanded-paths)))))))
+
+(ert-deftest task-conductor-project-rerender-preserves-expansion ()
+  ;; rerender-if-live preserves expanded sections across re-renders.
+  (let* ((buf-name "*tc-test-rerender-expand*")
+         (task-conductor-project--buffer-name buf-name)
+         (task-conductor-dev-env--cached-projects
+          (list (list :project/name "p" :project/path "/re")))
+         (buf (get-buffer-create buf-name)))
+    (unwind-protect
+        (with-current-buffer buf
+          (task-conductor-project-mode)
+          (task-conductor-project--render
+           task-conductor-dev-env--cached-projects)
+          (goto-char (point-min))
+          (magit-section-forward)
+          (magit-section-show (magit-current-section))
+          (should (equal '("/re") (task-conductor-project--expanded-paths)))
+          (task-conductor-project-rerender-if-live)
+          (should (equal '("/re") (task-conductor-project--expanded-paths))))
+      (kill-buffer buf))))
 
 (provide 'task-conductor-project-test)
 ;;; task-conductor-project-test.el ends here
