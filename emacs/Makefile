@@ -18,8 +18,7 @@ TEST_FILES := \
 # Stub files for testing (mocked dependencies)
 STUB_FILES := \
 	$(PKG_DIR)/test/stubs/claude-code.el \
-	$(PKG_DIR)/test/stubs/parseedn.el \
-	$(PKG_DIR)/test/stubs/mcp-tasks-browser.el
+	$(PKG_DIR)/test/stubs/parseedn.el
 
 help:
 	@echo "Targets:"
