@@ -367,8 +367,10 @@ Pre-fetches tasks for currently-expanded projects so they remain visible
 after refresh.  Preserves which project sections were expanded."
   (interactive)
   (let* ((expanded (task-conductor-project--expanded-paths)))
+    ;; Clear first so non-expanded paths don't retain stale data, then
+    ;; re-populate expanded paths before --render (which reads from
+    ;; cache only — cache miss means no children shown).
     (clrhash task-conductor-project--task-cache)
-    ;; Pre-fetch fresh tasks for expanded paths directly into cache
     (dolist (path expanded)
       (puthash path (task-conductor-project--fetch-tasks path)
                task-conductor-project--task-cache))
