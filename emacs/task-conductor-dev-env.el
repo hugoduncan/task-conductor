@@ -269,6 +269,10 @@ Returns t on success."
 HOOKS is a hash-table mapping event types to hook specifications,
 as received from the JVM via parseedn.
 Returns a list of (\"--settings\" json-string) or nil if HOOKS is nil."
+  ;; Claude CLI --settings requires JSON (not EDN).  `json-encode'
+  ;; treats the plist (:hooks <hash-table>) as a JSON object: keyword
+  ;; keys become strings (stripping ":"), and the hash-table from
+  ;; parseedn is recursively converted to a nested JSON object.
   (when hooks
     (list "--settings" (json-encode `(:hooks ,hooks)))))
 
