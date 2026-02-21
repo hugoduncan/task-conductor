@@ -211,8 +211,7 @@
 
 (def ^:private merge-pr-action
   {:expr '(task-conductor.project.resolvers/invoke-skill!
-           {:skill "squash-merge-on-gh"
-            :on-complete :complete})})
+           {:skill "squash-merge-on-gh"})})
 
 (def ^:private complete-story-action
   {:expr '(task-conductor.project.resolvers/invoke-skill!

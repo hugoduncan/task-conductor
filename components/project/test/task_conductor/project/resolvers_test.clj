@@ -1171,10 +1171,15 @@
                         ;; 2: store-pre-skill-state! for merge
                         (make-task-response {:meta {:refined "true"}
                                              :pr-num 42})
-                        ;; 3: store-pre-skill-state! for complete-story
+                        ;; 3: on-skill-complete after merge re-derive
                         (make-task-response {:meta {:refined "true"}
-                                             :pr-num 42})
-                        ;; 4: on-skill-complete re-derivation
+                                             :pr-num 42
+                                             :status :closed})
+                        ;; 4: store-pre-skill-state! for complete-story
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42
+                                             :status :closed})
+                        ;; 5: on-skill-complete after complete-story
                         (make-task-response {:meta {:refined "true"}
                                              :pr-num 42
                                              :status :closed})]
@@ -1204,25 +1209,30 @@
                 (is (= #{} (sc/current-state session-id))
                     "terminates after merge and complete-story")))))))
 
-    (testing "completes when merge skill succeeds regardless of API state"
-      ;; merge-pr-action sets :on-complete :complete. Entering :complete
-      ;; runs /complete-story which re-derives state to verify closure.
+    (testing "completes when merge skill succeeds and task is closed"
+      ;; Both merge and complete-story re-derive state. When the task
+      ;; is closed, derive returns :complete which terminates.
       (with-execute-state
         (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
               mcp-nullable
               (mcp-tasks/make-nullable
                {:responses
                 {:work-on [(make-work-on-response)]
-                 :show [;; execute! fetch-task
+                 :show [;; 1: execute! fetch-task
                         (make-task-response {:meta {:refined "true"}
                                              :pr-num 42})
-                        ;; store-pre-skill-state! for merge skill
+                        ;; 2: store-pre-skill-state! for merge
                         (make-task-response {:meta {:refined "true"}
                                              :pr-num 42})
-                        ;; store-pre-skill-state! for complete-story
+                        ;; 3: on-skill-complete after merge re-derive
                         (make-task-response {:meta {:refined "true"}
-                                             :pr-num 42})
-                        ;; on-skill-complete re-derivation
+                                             :pr-num 42
+                                             :status :closed})
+                        ;; 4: store-pre-skill-state! for complete-story
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42
+                                             :status :closed})
+                        ;; 5: on-skill-complete after complete-story
                         (make-task-response {:meta {:refined "true"}
                                              :pr-num 42
                                              :status :closed})]
