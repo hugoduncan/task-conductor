@@ -27,6 +27,7 @@
 ;;   c   - Create a new project
 ;;   d   - Delete project at point
 ;;   e   - Execute task or story at point
+;;   k   - Cancel execution at point
 ;;   r   - Rename project at point
 ;;   RET - Open project directory in dired
 ;;   q   - Quit buffer
