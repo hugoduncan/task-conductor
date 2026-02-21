@@ -589,9 +589,10 @@
       (kill-buffer buf))))
 
 (ert-deftest task-conductor-project-t-key-not-bound ()
-  ;; The `t' key should not be bound in the project mode map,
-  ;; since tasks are now shown inline via section expansion.
-  (should-not (lookup-key task-conductor-project-mode-map (kbd "t"))))
+  ;; t should not be bound in task-conductor-project-mode-map after
+  ;; removing the mcp-tasks-browser keybinding.
+  (with-project-buffer
+    (should-not (lookup-key task-conductor-project-mode-map (kbd "t")))))
 
 (provide 'task-conductor-project-test)
 ;;; task-conductor-project-test.el ends here
