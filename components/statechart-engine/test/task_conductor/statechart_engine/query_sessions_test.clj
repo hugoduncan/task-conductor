@@ -61,7 +61,7 @@
             (is (= :session-idle (:sub-state (first result))))
             (is (= 10 (:task-id (first result))))
             (is (= "Esc task" (:task-title (first result))))
-            (is (inst? (:entered-state-at (first result))))))))
+            (is (string? (:entered-state-at (first result))))))))
 
     (testing "filters idle sessions"
       (with-clean-engine
