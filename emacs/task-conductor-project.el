@@ -469,11 +469,11 @@ when not connected to task-conductor."
                     (format
                      "(task-conductor.emacs-dev-env.interface/execute-task-by-id %S %S %d)"
                      task-conductor-dev-env--dev-env-id project-dir task-id))))
-      (if (eq :ok (plist-get result :status))
-          (message "Started execution of task %d" task-id)
-        (message "Error starting execution of task %d: %s"
-                 task-id
-                 (or (plist-get result :message) "unknown"))))))
+      (if (and (listp result) (eq :error (plist-get result :status)))
+          (message "Error starting execution of task %d: %s"
+                   task-id
+                   (or (plist-get result :message) "unknown"))
+        (message "Started execution of task %d" task-id)))))
 
 (defun task-conductor-project-cancel ()
   "Cancel execution for the task at point.
@@ -486,8 +486,6 @@ connected."
   (let ((ctx (task-conductor-project--task-context-at-point)))
     (unless ctx
       (user-error "No task at point"))
-    (unless (task-conductor-dev-env--connected-p)
-      (user-error "Not connected to task-conductor"))
     (let* ((task-id (plist-get ctx :task-id))
            (project-dir (plist-get ctx :project-dir))
            (session (task-conductor-project--find-session task-id project-dir)))

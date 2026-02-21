@@ -790,6 +790,18 @@ Returns the project buffer, leaving point on the task section."
       ;; Should not signal; just display error message
       (task-conductor-project-execute))))
 
+(ert-deftest task-conductor-project-execute-nrepl-error ()
+  ;; Shows error message when nREPL signals an error (not just returns one).
+  (with-project-buffer
+    (tc-test--render-with-task 4 "/proj")
+    (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+               (lambda () t))
+              ((symbol-function 'task-conductor-dev-env--eval-sync)
+               (lambda (_form)
+                 (error "nREPL connection lost"))))
+      ;; Should not signal; eval-or-error catches and returns error plist
+      (task-conductor-project-execute))))
+
 (ert-deftest task-conductor-project-e-key-bound ()
   ;; e is bound to task-conductor-project-execute in the mode map.
   (with-project-buffer
@@ -798,10 +810,10 @@ Returns the project buffer, leaving point on the task section."
 
 ;;; Cancel command tests
 
-(defun tc-test--render-with-session (task-id project-path session-id state)
-  "Set up project buffer with a task having an active session at STATE.
-Leaves point on the task section.  The caller must ensure the dynamic
-binding for `task-conductor-dev-env--cached-sessions' is in effect."
+(defun tc-test--render-with-session (task-id project-path)
+  "Set up project buffer with a task and leave point on the task section.
+The caller must ensure a dynamic binding for
+`task-conductor-dev-env--cached-sessions' is in effect before calling."
   (let* ((task-data (list :id task-id :title "Running" :type "task"
                           :status "in-progress"))
          (proj (list :project/name "p" :project/path project-path)))
@@ -811,8 +823,7 @@ binding for `task-conductor-dev-env--cached-sessions' is in effect."
     (goto-char (point-min))
     (magit-section-forward)
     (magit-section-show (magit-current-section))
-    (magit-section-forward)
-    session-id))
+    (magit-section-forward)))
 
 (ert-deftest task-conductor-project-cancel-no-task-at-point ()
   ;; cancel raises user-error when point is on a project entry, not a task.
@@ -826,12 +837,14 @@ binding for `task-conductor-dev-env--cached-sessions' is in effect."
       (should-error (task-conductor-project-cancel) :type 'user-error))))
 
 (ert-deftest task-conductor-project-cancel-not-connected ()
-  ;; cancel raises user-error when not connected to task-conductor.
-  (with-project-buffer
-    (let ((task-conductor-dev-env--cached-sessions nil))
-      (tc-test--render-with-task 5 "/proj")
-      (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
-                 (lambda () nil)))
+  ;; cancel raises user-error via eval-or-error when not connected.
+  (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+             (lambda () nil)))
+    (with-project-buffer
+      (let ((task-conductor-dev-env--cached-sessions
+             (list (list :session-id "s1" :task-id 5
+                         :state :running :project-dir "/proj"))))
+        (tc-test--render-with-session 5 "/proj" "s1" :running)
         (should-error (task-conductor-project-cancel) :type 'user-error)))))
 
 (ert-deftest task-conductor-project-cancel-no-session ()
