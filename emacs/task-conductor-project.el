@@ -160,6 +160,54 @@ or :status :error and :message on failure."
 
 (defclass task-conductor-project-root-section (magit-section) ())
 (defclass task-conductor-project-entry-section (magit-section) ())
+(defclass task-conductor-project-task-section (magit-section) ())
+
+;;; Task formatting
+
+(defun task-conductor-project--task-type-icon (type)
+  "Return a bracketed type icon for task TYPE string."
+  (pcase type
+    ((or "task" :task)       "[T]")
+    ((or "bug" :bug)         "[B]")
+    ((or "feature" :feature) "[F]")
+    ((or "story" :story)     "[S]")
+    ((or "chore" :chore)     "[C]")
+    (_                       "[?]")))
+
+(defun task-conductor-project--task-status-icon (status)
+  "Return a bracketed status icon for task STATUS string."
+  (pcase status
+    ((or "open" :open)                   "[ ]")
+    ((or "in-progress" :in-progress)     "[>]")
+    ((or "done" :done "closed" :closed)  "[x]")
+    ((or "blocked" :blocked)             "[!]")
+    (_                                   "[ ]")))
+
+(defun task-conductor-project--format-task-entry (task)
+  "Format TASK plist as a single display line.
+Returns a string like `[T][ ] #42 Some title'."
+  (format "    %s%s #%d %s"
+          (task-conductor-project--task-type-icon (plist-get task :type))
+          (task-conductor-project--task-status-icon (plist-get task :status))
+          (plist-get task :id)
+          (plist-get task :title)))
+
+(defun task-conductor-project--insert-task-children (project-path)
+  "Insert task child sections for PROJECT-PATH.
+Fetches tasks via CLI and inserts one child section per task.
+On error, inserts a warning message."
+  (when project-path
+    (let ((tasks (task-conductor-project--fetch-tasks project-path)))
+      (cond
+       ((eq :error (car tasks))
+        (insert (propertize (format "    %s\n" (cadr tasks))
+                            'face 'font-lock-warning-face)))
+       (tasks
+        (dolist (task tasks)
+          (magit-insert-section (task-conductor-project-task task)
+            (magit-insert-heading
+              (format "%s\n"
+                      (task-conductor-project--format-task-entry task))))))))))
 
 ;;; Rendering
 
@@ -216,7 +264,9 @@ PROJECTS is a list of plists with :project/name and :project/path."
             (magit-insert-section (task-conductor-project-entry p)
               (magit-insert-heading
                 (format "  %s\n"
-                        (task-conductor-project--format-entry p name-width)))))
+                        (task-conductor-project--format-entry p name-width)))
+              (task-conductor-project--insert-task-children
+               (plist-get p :project/path))))
         (insert "  (none)\n")))
     (if saved-section-ident
         (when-let ((s (magit-get-section saved-section-ident)))

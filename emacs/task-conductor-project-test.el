@@ -313,5 +313,106 @@
       (should (listp result))
       (should (null result)))))
 
+;;; Task formatting tests
+
+(ert-deftest task-conductor-project-task-type-icon ()
+  ;; Each task type maps to its bracketed icon.
+  (should (equal "[T]" (task-conductor-project--task-type-icon "task")))
+  (should (equal "[B]" (task-conductor-project--task-type-icon "bug")))
+  (should (equal "[F]" (task-conductor-project--task-type-icon "feature")))
+  (should (equal "[S]" (task-conductor-project--task-type-icon "story")))
+  (should (equal "[C]" (task-conductor-project--task-type-icon "chore")))
+  (should (equal "[?]" (task-conductor-project--task-type-icon "unknown")))
+  (should (equal "[?]" (task-conductor-project--task-type-icon nil))))
+
+(ert-deftest task-conductor-project-task-status-icon ()
+  ;; Each task status maps to its bracketed icon.
+  (should (equal "[ ]" (task-conductor-project--task-status-icon "open")))
+  (should (equal "[>]" (task-conductor-project--task-status-icon "in-progress")))
+  (should (equal "[x]" (task-conductor-project--task-status-icon "done")))
+  (should (equal "[x]" (task-conductor-project--task-status-icon "closed")))
+  (should (equal "[!]" (task-conductor-project--task-status-icon "blocked")))
+  (should (equal "[ ]" (task-conductor-project--task-status-icon nil))))
+
+(ert-deftest task-conductor-project-format-task-entry ()
+  ;; Formats a task plist into the expected display string.
+  (let ((task (list :id 42 :title "Do thing" :type "task" :status "open")))
+    (should (equal "    [T][ ] #42 Do thing"
+                   (task-conductor-project--format-task-entry task))))
+  (let ((task (list :id 7 :title "Fix bug" :type "bug" :status "in-progress")))
+    (should (equal "    [B][>] #7 Fix bug"
+                   (task-conductor-project--format-task-entry task)))))
+
+(ert-deftest task-conductor-project-insert-task-children-with-tasks ()
+  ;; Inserts task sections as children when fetch returns tasks.
+  (with-project-buffer
+    (let ((inhibit-read-only t))
+      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
+                 (lambda (_path)
+                   (list (list :id 1 :title "First" :type "task" :status "open")
+                         (list :id 2 :title "Second" :type "bug" :status "done")))))
+        (magit-insert-section (task-conductor-project-root)
+          (task-conductor-project--insert-task-children "/proj"))
+        (let ((text (buffer-string)))
+          (should (string-match-p "\\[T\\]\\[ \\] #1 First" text))
+          (should (string-match-p "\\[B\\]\\[x\\] #2 Second" text)))))))
+
+(ert-deftest task-conductor-project-insert-task-children-error ()
+  ;; Inserts warning-face text when fetch returns an error.
+  (with-project-buffer
+    (let ((inhibit-read-only t))
+      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
+                 (lambda (_path) (list :error "CLI not found"))))
+        (magit-insert-section (task-conductor-project-root)
+          (task-conductor-project--insert-task-children "/proj"))
+        (let ((text (buffer-string)))
+          (should (string-match-p "CLI not found" text)))))))
+
+(ert-deftest task-conductor-project-insert-task-children-empty ()
+  ;; Inserts nothing when fetch returns empty list.
+  (with-project-buffer
+    (let ((inhibit-read-only t))
+      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
+                 (lambda (_path) nil)))
+        (magit-insert-section (task-conductor-project-root)
+          (task-conductor-project--insert-task-children "/proj"))
+        (should (string-empty-p (buffer-string)))))))
+
+(ert-deftest task-conductor-project-insert-task-children-nil-path ()
+  ;; Does nothing when project-path is nil.
+  (with-project-buffer
+    (let ((inhibit-read-only t))
+      (magit-insert-section (task-conductor-project-root)
+        (task-conductor-project--insert-task-children nil))
+      (should (string-empty-p (buffer-string))))))
+
+(ert-deftest task-conductor-project-render-with-task-children ()
+  ;; Render inserts task children inside project sections.
+  (with-project-buffer
+    (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
+               (lambda (_path)
+                 (list (list :id 10 :title "A task" :type "task" :status "open")))))
+      (task-conductor-project--render
+       (list (list :project/name "proj" :project/path "/proj")))
+      (let ((text (buffer-string)))
+        (should (string-match-p "proj" text))
+        (should (string-match-p "\\[T\\]\\[ \\] #10 A task" text))))))
+
+(ert-deftest task-conductor-project-task-section-stores-value ()
+  ;; Task sections store the task plist as their value.
+  (with-project-buffer
+    (let ((task-data (list :id 5 :title "My task" :type "task" :status "open")))
+      (cl-letf (((symbol-function 'task-conductor-project--fetch-tasks)
+                 (lambda (_path) (list task-data))))
+        (task-conductor-project--render
+         (list (list :project/name "p" :project/path "/p")))
+        (goto-char (point-min))
+        ;; Navigate to the project entry, then into child task section
+        (magit-section-forward)
+        (magit-section-forward)
+        (let ((section (magit-current-section)))
+          (should (eq (oref section type) 'task-conductor-project-task))
+          (should (equal 5 (plist-get (oref section value) :id))))))))
+
 (provide 'task-conductor-project-test)
 ;;; task-conductor-project-test.el ends here
