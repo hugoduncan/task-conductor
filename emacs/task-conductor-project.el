@@ -463,11 +463,9 @@ when not connected to task-conductor."
   (let ((ctx (task-conductor-project--task-context-at-point)))
     (unless ctx
       (user-error "No task at point"))
-    (unless (task-conductor-dev-env--connected-p)
-      (user-error "Not connected to task-conductor"))
     (let* ((task-id (plist-get ctx :task-id))
            (project-dir (plist-get ctx :project-dir))
-           (result (task-conductor-dev-env--eval-sync
+           (result (task-conductor-project--eval-or-error
                     (format
                      "(task-conductor.emacs-dev-env.interface/execute-task-by-id %S %S %d)"
                      task-conductor-dev-env--dev-env-id project-dir task-id))))
