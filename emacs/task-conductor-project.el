@@ -238,10 +238,9 @@ Returns nil for unrecognized or nil states."
 (defun task-conductor-project--format-task-entry (task &optional project-path)
   "Format TASK plist as a single display line.
 Returns a string like `[T][ ] #42 Some title'.
-When a session with known state matches TASK's id, appends an execution
-status icon with a `task-conductor-task-id' text property.
-When no session is active, appends a clickable play icon instead.
-Icons are mutually exclusive: either a status icon or a play icon."
+When a session matches TASK's id, appends an execution status icon.
+For running or escalated sessions, also appends a clickable ⏹ stop icon.
+When no session is active, appends a clickable ▶ play icon instead."
   (let* ((task-id (plist-get task :id))
          (base (format "    %s%s #%d %s"
                        (task-conductor-project--task-type-icon (plist-get task :type))
@@ -249,10 +248,17 @@ Icons are mutually exclusive: either a status icon or a play icon."
                        task-id
                        (plist-get task :title)))
          (session (task-conductor-project--find-session task-id project-path))
+         (state (when session (plist-get session :state)))
          (state-icon (when session
-                       (task-conductor-project--task-execution-icon
-                        (plist-get session :state)))))
+                       (task-conductor-project--task-execution-icon state))))
     (cond
+     ((and state-icon (memq state '(:running :escalated)))
+      (concat base
+              " " (propertize state-icon 'task-conductor-task-id task-id)
+              " " (propertize "⏹"
+                              'task-conductor-task-id task-id
+                              'mouse-face 'highlight
+                              'keymap task-conductor-project--stop-icon-map)))
      (state-icon
       (concat base " " (propertize state-icon 'task-conductor-task-id task-id)))
      (session
@@ -470,6 +476,37 @@ when not connected to task-conductor."
                  task-id
                  (or (plist-get result :message) "unknown"))))))
 
+(defun task-conductor-project-cancel ()
+  "Cancel execution for the task at point.
+Extracts the session-id from the matching cached session and calls
+`stop!' on the statechart engine via nREPL.
+Signals `user-error' when not on a task section, no active session
+exists, the session is not running or escalated, or nREPL is not
+connected."
+  (interactive)
+  (let ((ctx (task-conductor-project--task-context-at-point)))
+    (unless ctx
+      (user-error "No task at point"))
+    (unless (task-conductor-dev-env--connected-p)
+      (user-error "Not connected to task-conductor"))
+    (let* ((task-id (plist-get ctx :task-id))
+           (project-dir (plist-get ctx :project-dir))
+           (session (task-conductor-project--find-session task-id project-dir)))
+      (unless session
+        (user-error "No active session for task %d" task-id))
+      (let ((state (plist-get session :state)))
+        (unless (memq state '(:running :escalated))
+          (user-error "Task %d is not running or escalated" task-id))
+        (let* ((session-id (plist-get session :session-id))
+               (result (task-conductor-project--eval-or-error
+                        (format
+                         "(task-conductor.statechart-engine.interface/stop! %S)"
+                         session-id))))
+          (if (and (listp result) (eq :error (plist-get result :status)))
+              (user-error "Cancel failed: %s"
+                          (or (plist-get result :message) "unknown"))
+            (message "Cancelled execution for task %d" task-id)))))))
+
 (defun task-conductor-project-refresh ()
   "Refresh the project list from the JVM.
 Clears the task cache so tasks are re-fetched from CLI on next expand.
@@ -573,6 +610,7 @@ Prompts for directory path and optional name."
     (define-key map (kbd "c") #'task-conductor-project-create)
     (define-key map (kbd "d") #'task-conductor-project-delete)
     (define-key map (kbd "e") #'task-conductor-project-execute)
+    (define-key map (kbd "k") #'task-conductor-project-cancel)
     (define-key map (kbd "r") #'task-conductor-project-rename)
     (define-key map (kbd "RET") #'task-conductor-project-open-dired)
     (define-key map (kbd "q") #'task-conductor-project-quit)

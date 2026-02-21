@@ -770,5 +770,148 @@ Returns the project buffer, leaving point on the task section."
     (should (eq #'task-conductor-project-execute
                 (lookup-key task-conductor-project-mode-map (kbd "e"))))))
 
+;;; Cancel command tests
+
+(defun tc-test--render-with-session (task-id project-path session-id state)
+  "Set up project buffer with a task having an active session at STATE.
+Leaves point on the task section.  The caller must ensure the dynamic
+binding for `task-conductor-dev-env--cached-sessions' is in effect."
+  (let* ((task-data (list :id task-id :title "Running" :type "task"
+                          :status "in-progress"))
+         (proj (list :project/name "p" :project/path project-path)))
+    (task-conductor-project-mode)
+    (puthash project-path (list task-data) task-conductor-project--task-cache)
+    (task-conductor-project--render (list proj))
+    (goto-char (point-min))
+    (magit-section-forward)
+    (magit-section-show (magit-current-section))
+    (magit-section-forward)
+    session-id))
+
+(ert-deftest task-conductor-project-cancel-no-task-at-point ()
+  ;; cancel raises user-error when point is on a project entry, not a task.
+  (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+             (lambda () t)))
+    (with-project-buffer
+      (task-conductor-project--render
+       (list (list :project/name "p" :project/path "/p")))
+      (goto-char (point-min))
+      (magit-section-forward)
+      (should-error (task-conductor-project-cancel) :type 'user-error))))
+
+(ert-deftest task-conductor-project-cancel-not-connected ()
+  ;; cancel raises user-error when not connected to task-conductor.
+  (with-project-buffer
+    (let ((task-conductor-dev-env--cached-sessions nil))
+      (tc-test--render-with-task 5 "/proj")
+      (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+                 (lambda () nil)))
+        (should-error (task-conductor-project-cancel) :type 'user-error)))))
+
+(ert-deftest task-conductor-project-cancel-no-session ()
+  ;; cancel raises user-error when no active session exists for the task.
+  (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+             (lambda () t)))
+    (with-project-buffer
+      (let ((task-conductor-dev-env--cached-sessions nil))
+        (tc-test--render-with-task 42 "/proj")
+        (should-error (task-conductor-project-cancel) :type 'user-error)))))
+
+(ert-deftest task-conductor-project-cancel-not-running ()
+  ;; cancel raises user-error when session state is not running or escalated.
+  (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+             (lambda () t)))
+    (with-project-buffer
+      (let ((task-conductor-dev-env--cached-sessions
+             (list (list :session-id "s1" :task-id 42
+                         :state :idle :project-dir "/proj"))))
+        (tc-test--render-with-session 42 "/proj" "s1" :idle)
+        (should-error (task-conductor-project-cancel) :type 'user-error)))))
+
+(ert-deftest task-conductor-project-cancel-calls-stop-when-running ()
+  ;; cancel calls stop! with the correct session-id for a running task.
+  (let ((eval-form nil))
+    (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+               (lambda () t))
+              ((symbol-function 'task-conductor-project--eval-or-error)
+               (lambda (form) (setq eval-form form) "sid1")))
+      (with-project-buffer
+        (let ((task-conductor-dev-env--cached-sessions
+               (list (list :session-id "sid1" :task-id 7
+                           :state :running :project-dir "/proj"))))
+          (tc-test--render-with-session 7 "/proj" "sid1" :running)
+          (task-conductor-project-cancel)
+          (should eval-form)
+          (should (string-match-p "stop!" eval-form))
+          (should (string-match-p "sid1" eval-form)))))))
+
+(ert-deftest task-conductor-project-cancel-calls-stop-when-escalated ()
+  ;; cancel calls stop! with the correct session-id for an escalated task.
+  (let ((eval-form nil))
+    (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+               (lambda () t))
+              ((symbol-function 'task-conductor-project--eval-or-error)
+               (lambda (form) (setq eval-form form) "sid-esc")))
+      (with-project-buffer
+        (let ((task-conductor-dev-env--cached-sessions
+               (list (list :session-id "sid-esc" :task-id 9
+                           :state :escalated :project-dir "/ep"))))
+          (tc-test--render-with-session 9 "/ep" "sid-esc" :escalated)
+          (task-conductor-project-cancel)
+          (should (string-match-p "stop!" eval-form))
+          (should (string-match-p "sid-esc" eval-form)))))))
+
+(ert-deftest task-conductor-project-cancel-nrepl-error ()
+  ;; cancel raises user-error when nREPL returns an error.
+  (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
+             (lambda () t))
+            ((symbol-function 'task-conductor-project--eval-or-error)
+             (lambda (_form) (list :status :error :message "not found"))))
+    (with-project-buffer
+      (let ((task-conductor-dev-env--cached-sessions
+             (list (list :session-id "s3" :task-id 3
+                         :state :running :project-dir "/p3"))))
+        (tc-test--render-with-session 3 "/p3" "s3" :running)
+        (should-error (task-conductor-project-cancel) :type 'user-error)))))
+
+(ert-deftest task-conductor-project-k-key-bound ()
+  ;; k is bound to task-conductor-project-cancel in the mode map.
+  (with-project-buffer
+    (should (eq #'task-conductor-project-cancel
+                (lookup-key task-conductor-project-mode-map (kbd "k"))))))
+
+;;; Stop icon tests
+
+(ert-deftest task-conductor-project-format-task-entry-running-shows-stop-icon ()
+  ;; Running session shows status icon and clickable stop icon.
+  (let* ((session (list :session-id "s1" :task-id 42 :state :running))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 42 :title "Do thing" :type "task" :status "in-progress"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "🔄" result))
+    (should (string-match-p "⏹" result))
+    (let ((stop-pos (string-match "⏹" result)))
+      (should (equal 42 (get-text-property stop-pos 'task-conductor-task-id result)))
+      (should (get-text-property stop-pos 'mouse-face result))
+      (should (get-text-property stop-pos 'keymap result)))))
+
+(ert-deftest task-conductor-project-format-task-entry-escalated-shows-stop-icon ()
+  ;; Escalated session shows status icon and clickable stop icon.
+  (let* ((session (list :session-id "s2" :task-id 10 :state :escalated))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 10 :title "A task" :type "task" :status "in-progress"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "🔔" result))
+    (should (string-match-p "⏹" result))))
+
+(ert-deftest task-conductor-project-format-task-entry-idle-no-stop-icon ()
+  ;; Idle session shows status icon but no stop icon.
+  (let* ((session (list :session-id "s3" :task-id 5 :state :idle))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 5 :title "Idle task" :type "task" :status "open"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "⏸" result))
+    (should-not (string-match-p "⏹" result))))
+
 (provide 'task-conductor-project-test)
 ;;; task-conductor-project-test.el ends here
