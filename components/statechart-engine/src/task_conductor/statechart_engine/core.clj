@@ -383,11 +383,22 @@
   (or (some states state-priority)
       (first (sort states))))
 
+(defn- derive-sub-state
+  "Derive the sub-state from a full state configuration set.
+  Returns :session-idle or :session-running when escalated, nil otherwise."
+  [state-config]
+  (when (:escalated state-config)
+    (cond
+      (:session-running state-config) :session-running
+      (:session-idle state-config) :session-idle)))
+
 (defn- session-summary
-  "Build a summary map for a session from its data and history."
-  [sid current-state data hist]
+  "Build a summary map for a session from its data and history.
+  state-config is the full set of active states."
+  [sid state-config data hist]
   {:session-id sid
-   :state current-state
+   :state (select-priority-state state-config)
+   :sub-state (derive-sub-state state-config)
    :task-id (:task-id data)
    :task-title (:task-title data)
    :project-dir (:project-dir data)
@@ -397,12 +408,12 @@
 
 (defn query-sessions
   "Query active sessions filtered by state.
-  Returns vec of maps with :session-id, :state, :task-id, :task-title,
-  :project-dir, :entered-state-at, :pr-num, and :branch for sessions
-  whose current state intersects the given state-filter set.
+  Returns vec of maps with :session-id, :state, :sub-state, :task-id,
+  :task-title, :project-dir, :entered-state-at, :pr-num, and :branch
+  for sessions whose current state intersects the given state-filter set.
 
-  Each session returns a single :state selected by priority
-  (:escalated > :idle > :wait-pr-merge > lexicographic fallback).
+  :state is selected by priority (:escalated > :idle > :wait-pr-merge).
+  :sub-state is :session-idle or :session-running when escalated, nil otherwise.
 
   state-filter - set of state keywords to match (e.g. #{:escalated :idle})"
   [state-filter]
@@ -413,7 +424,7 @@
              (let [current (state sid)
                    matching (set/intersection current state-filter)]
                (when (seq matching)
-                 (session-summary sid (select-priority-state matching)
+                 (session-summary sid current
                                   (get @session-data sid)
                                   (get @histories sid))))))
           session-ids)))
@@ -421,14 +432,14 @@
 (defn all-session-summaries
   "Returns summaries of all active sessions.
   Each summary contains :session-id, :state (selected by priority:
-  :escalated > :idle > :wait-pr-merge > lexicographic), :task-id,
-  :task-title, :project-dir, :entered-state-at, and optionally
-  :pr-num and :branch."
+  :escalated > :idle > :wait-pr-merge > lexicographic), :sub-state
+  (:session-idle/:session-running when escalated, nil otherwise),
+  :task-id, :task-title, :project-dir, :entered-state-at, and
+  optionally :pr-num and :branch."
   []
   (into []
         (map (fn [sid]
-               (let [current (state sid)]
-                 (session-summary sid (select-priority-state current)
-                                  (get @session-data sid)
-                                  (get @histories sid)))))
+               (session-summary sid (state sid)
+                                (get @session-data sid)
+                                (get @histories sid))))
         (keys @sessions)))
