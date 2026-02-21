@@ -2,6 +2,15 @@
 
 Past discoveries and learnings.
 
+## 2026-02-21: Emacs Dev-Env Setup Order
+
+### Don't Pre-Register on JVM Before CIDER Connects
+- `register-emacs-dev-env` on JVM before CIDER connect creates an orphan entry
+- CIDER connect triggers Emacs to auto-register its own dev-env ID
+- Result: JVM has one ID, Emacs has another — mismatch
+- Correct order: (1) CIDER connect, (2) `task-conductor-dev-env-connect` from Emacs
+- If orphans exist: disconnect Emacs, `unregister!` JVM entries, reconnect from Emacs
+
 ## 2026-02-20: Story Execution Debugging
 
 ### CLAUDECODE Env Var Blocks Subprocess
