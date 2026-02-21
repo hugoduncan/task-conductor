@@ -117,14 +117,15 @@
    as the project directory for skill invocations and escalation.
 
    Input:
-     :task/project-dir - project directory (where .mcp-tasks.edn lives)
-     :task/id          - task or story ID
+     :task/project-dir  - project directory (where .mcp-tasks.edn lives)
+     :task/id           - task or story ID
+     :task/nrepl-port   - optional nREPL port for session hooks
 
    Returns:
      :execute/session-id    - statechart session UUID
      :execute/initial-state - derived initial state keyword
      :execute/error         - error map if failed"
-  [{:task/keys [project-dir id]}]
+  [{:task/keys [project-dir id nrepl-port]}]
   {::pco/output [:execute/session-id :execute/initial-state :execute/error]}
   (let [worktree-result (mcp-tasks/work-on
                          {:project-dir project-dir :task-id id})]
@@ -142,9 +143,10 @@
                 children (when is-story
                            (fetch-children worktree-path id))
                 chart-id (if is-story :execute/story :execute/task)
-                initial-data {:project-dir worktree-path
-                              :task-id id
-                              :task-type (if is-story :story :task)}
+                initial-data (cond-> {:project-dir worktree-path
+                                      :task-id id
+                                      :task-type (if is-story :story :task)}
+                               nrepl-port (assoc :nrepl-port nrepl-port))
                 session-id (sc/start! chart-id {:data initial-data})
                 initial-state (derive-initial-state task children)]
             {:execute/session-id session-id
@@ -375,16 +377,18 @@
   [{:engine/keys [session-id]}]
   {::pco/output [:escalate/status :escalate/error :escalate/dev-env-id]}
   (let [data (sc/get-data session-id)
-        {:keys [project-dir task-id last-claude-session-id]} data
+        {:keys [project-dir task-id last-claude-session-id nrepl-port]} data
         selected (graph/query [:dev-env/selected])
         dev-env-id (:dev-env/id (:dev-env/selected selected))]
     (if dev-env-id
       ;; Start an interactive session in the dev-env for human intervention
       (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)
-            nrepl-port (read-nrepl-port project-dir)
+            ;; Prefer port from session data (set at bootstrap);
+            ;; fall back to .nrepl-port file in worktree
+            nrepl-port (or nrepl-port (read-nrepl-port project-dir))
             _ (when-not nrepl-port
                 (log/warn
-                 "No .nrepl-port found; idle/active detection disabled"
+                 "No nREPL port available; idle/active detection disabled"
                  {:project-dir project-dir
                   :session-id session-id}))
             cli-hooks (build-session-hooks session-id nrepl-port)
