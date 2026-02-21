@@ -505,7 +505,7 @@
 ;;; Task Execution
 
 (defn execute-task-by-id
-  "Start execution of a task or story. Called by Emacs via nREPL.
+  "Start execution of a task or story via the execute! EQL mutation.
   Returns {:status :ok :session-id ... :initial-state ...} or
   {:status :error ...}.
 
