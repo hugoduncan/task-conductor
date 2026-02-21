@@ -248,7 +248,7 @@
     (let [port-file (fs/path dir ".nrepl-port")]
       (when (fs/exists? port-file)
         (str/trim (slurp (fs/file port-file)))))
-    (catch Exception _ nil)))
+    (catch java.io.IOException _ nil)))
 
 (defn- build-session-hooks
   "Build CLI hooks map for idle/active detection during escalated sessions.
