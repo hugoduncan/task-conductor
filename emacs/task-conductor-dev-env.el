@@ -90,7 +90,7 @@ Used to track active claude-code sessions started by the orchestrator.")
 (defvar task-conductor-dev-env--session-hooks
   (make-hash-table :test 'equal)
   "Hash table mapping session-id to hook data plist.
-Each entry is (:on-idle (:hook-id X :timer Y) :on-close (:hook-id X :fn Y)).")
+Each entry is (:on-close (:hook-id X :fn Y)).")
 
 (defvar task-conductor-dev-env--project-dir nil
   "Project directory for CIDER session context.
@@ -206,7 +206,7 @@ Returns t if delivered, nil if command not found."
 
 (defun task-conductor-dev-env--send-hook-event (hook-type session-id reason)
   "Send hook event to the orchestrator.
-HOOK-TYPE is :on-idle or :on-close.
+HOOK-TYPE is :on-close.
 SESSION-ID identifies the session.
 REASON is :idle, :user-exit, etc."
   (condition-case err

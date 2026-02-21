@@ -388,7 +388,7 @@ rule Execute {
     -- 2. Fetch task data via EQL
     -- 3. Derive initial state
     -- 4. Start statechart session
-    -- 5. Select dev-env and register on-idle hook
+    -- 5. Select dev-env and register on-close hook
     -- 6. Send initial state as first event
     when: ExecuteRequested(project_dir, task_id)
     let worktree = WorkOn(project_dir, task_id)

@@ -91,7 +91,8 @@
         (is (string? (:message result)))))
 
     (testing "send-hook-event-by-id returns error for unknown id"
-      (let [result (core/send-hook-event-by-id "unknown" :on-idle "s1" :idle)]
+      (let [result (core/send-hook-event-by-id
+                    "unknown" :on-close "s1" :user-exit)]
         (is (= :error (:status result)))
         (is (string? (:message result)))))
 
@@ -159,10 +160,11 @@
       (let [dev-env (core/make-emacs-dev-env)
             callback (fn [_] :called)]
         (with-register-hook-responder dev-env
-          (let [hook-id (protocol/register-hook dev-env "s1" :on-idle callback)]
+          (let [hook-id (protocol/register-hook
+                         dev-env "s1" :on-close callback)]
             (is (uuid? hook-id))
             (let [hook (get-in @(:state dev-env) [:hooks hook-id])]
-              (is (= :on-idle (:type hook)))
+              (is (= :on-close (:type hook)))
               (is (= callback (:callback hook))))))
         (core/shutdown dev-env)))))
 
@@ -173,25 +175,11 @@
             received (atom nil)
             callback (fn [ctx] (reset! received ctx))]
         (with-register-hook-responder dev-env
-          (protocol/register-hook dev-env "sess-1" :on-idle callback))
-        (core/send-hook-event dev-env :on-idle "sess-1" :idle)
+          (protocol/register-hook dev-env "sess-1" :on-close callback))
+        (core/send-hook-event dev-env :on-close "sess-1" :user-exit)
         (is (= "sess-1" (:session-id @received)))
-        (is (= :idle (:reason @received)))
+        (is (= :user-exit (:reason @received)))
         (is (inst? (:timestamp @received)))
-        (core/shutdown dev-env)))
-
-    (testing "does not invoke non-matching hooks"
-      (let [dev-env (core/make-emacs-dev-env)
-            idle-called (atom false)
-            close-called (atom false)]
-        (with-register-hook-responder dev-env
-          (protocol/register-hook
-           dev-env "s1" :on-idle (fn [_] (reset! idle-called true)))
-          (protocol/register-hook
-           dev-env "s1" :on-close (fn [_] (reset! close-called true))))
-        (core/send-hook-event dev-env :on-close "s1" :user-exit)
-        (is (false? @idle-called))
-        (is (true? @close-called))
         (core/shutdown dev-env)))))
 
 (deftest close-session-test
@@ -489,35 +477,19 @@
             hook3-called (atom false)]
         ;; Register hooks - second one will throw
         (with-register-hook-responder dev-env
-          (protocol/register-hook dev-env "s1" :on-idle
+          (protocol/register-hook dev-env "s1" :on-close
                                   (fn [_] (reset! hook1-called true)))
-          (protocol/register-hook dev-env "s1" :on-idle
+          (protocol/register-hook dev-env "s1" :on-close
                                   (fn [_] (throw (ex-info "Hook error" {}))))
-          (protocol/register-hook dev-env "s1" :on-idle
+          (protocol/register-hook dev-env "s1" :on-close
                                   (fn [_] (reset! hook3-called true))))
         ;; Send event - should not throw
-        (is (true? (core/send-hook-event dev-env :on-idle "s1" :idle)))
+        (is (true? (core/send-hook-event dev-env :on-close "s1" :user-exit)))
         ;; All non-throwing hooks should have been called
         ;; Note: hook execution order depends on map iteration order
         ;; so we just verify the throwing hook didn't prevent others
         (is (or @hook1-called @hook3-called)
             "At least one non-throwing hook should execute")
-        (core/shutdown dev-env)))
-
-    (testing "does not affect other hook types when one type throws"
-      (let [dev-env (core/make-emacs-dev-env)
-            close-called (atom false)]
-        ;; Register throwing idle hook and normal close hook
-        (with-register-hook-responder dev-env
-          (protocol/register-hook dev-env "s1" :on-idle
-                                  (fn [_] (throw (ex-info "Idle error" {}))))
-          (protocol/register-hook dev-env "s1" :on-close
-                                  (fn [_] (reset! close-called true))))
-        ;; Trigger idle - should not affect close hook
-        (core/send-hook-event dev-env :on-idle "s1" :idle)
-        ;; Trigger close - should work
-        (core/send-hook-event dev-env :on-close "s1" :user-exit)
-        (is (true? @close-called))
         (core/shutdown dev-env)))))
 
 ;;; Registry Cleanup Tests

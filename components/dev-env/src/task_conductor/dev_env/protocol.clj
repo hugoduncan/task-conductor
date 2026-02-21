@@ -49,7 +49,6 @@
       session-id - The session to watch for events (string)
       hook-type  - Keyword indicating the event type:
                    :on-close - Session closed (by user, error, or timeout)
-                   :on-idle  - Session waiting for user input
       callback   - Function (fn [context]) called when event occurs
 
     Returns a hook registration ID.

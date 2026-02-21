@@ -49,18 +49,19 @@
             hook-id (protocol/register-hook
                      dev-env
                      "sess-456"
-                     :on-idle
+                     :on-close
                      callback)
             hooks @(:hooks dev-env)
             hook (get hooks hook-id)]
-        (is (= :on-idle (:type hook)))
+        (is (= :on-close (:type hook)))
         (is (= "sess-456" (:session-id hook)))
         (is (= callback (:callback hook)))))
 
     (testing "generates unique hook-ids"
       (let [dev-env (protocol/make-noop-dev-env)
-            id1 (protocol/register-hook dev-env "sess-1" :on-close (fn [_] nil))
-            id2 (protocol/register-hook dev-env "sess-2" :on-idle (fn [_] nil))]
+            cb (fn [_] nil)
+            id1 (protocol/register-hook dev-env "s-1" :on-close cb)
+            id2 (protocol/register-hook dev-env "s-2" :on-close cb)]
         (is (not= id1 id2))))))
 
 (deftest query-transcript-test

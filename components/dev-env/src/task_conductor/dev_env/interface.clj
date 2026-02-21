@@ -8,7 +8,7 @@
 
 (def ^:private valid-hook-types
   "The set of supported hook types for register-hook."
-  #{:on-close :on-idle})
+  #{:on-close})
 
 (defn start-session
   "Resume a Claude session interactively in the dev environment.
@@ -32,7 +32,6 @@
     session-id - The session to watch for events (string)
     hook-type  - Keyword indicating the event type:
                  :on-close - Session closed (by user, error, or timeout)
-                 :on-idle  - Session waiting for user input
     callback   - Function (fn [context]) called when event occurs
 
   Returns a hook registration ID.
@@ -98,7 +97,7 @@
     dev-env    - A DevEnv implementation
     session-id - The session to watch for events (string)
     hook-map   - Map of hook-type to callback function
-                 e.g., {:on-close fn1 :on-idle fn2}
+                 e.g., {:on-close fn1}
 
   Returns a map of hook-type to hook registration."
   [dev-env session-id hook-map]
