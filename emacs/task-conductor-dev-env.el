@@ -115,7 +115,9 @@ A list of plists, each with :project/path, :project/name, and optionally
   "Return non-nil if connected to task-conductor as a dev-env."
   (and task-conductor-dev-env--dev-env-id
        (fboundp 'cider-connected-p)
-       (cider-connected-p)))
+       (let ((default-directory (or task-conductor-dev-env--project-dir
+                                    default-directory)))
+         (cider-connected-p))))
 
 ;;; UUID generation
 
@@ -264,17 +266,40 @@ Returns t on success."
 
 ;;; Command handlers
 
+(defun task-conductor-dev-env--plist-to-json-safe (obj)
+  "Convert nested plist/list tree so `json-encode' produces correct JSON.
+Plists (keyword-headed lists) become hash-tables (JSON objects).
+Other lists become vectors (JSON arrays).  Scalars pass through."
+  (cond
+   ((and (listp obj) obj (keywordp (car obj)))
+    ;; Plist → hash-table so json-encode emits a JSON object
+    (let ((ht (make-hash-table :test 'equal))
+          (rest obj))
+      (while rest
+        (let ((k (substring (symbol-name (car rest)) 1))
+              (v (task-conductor-dev-env--plist-to-json-safe (cadr rest))))
+          (puthash k v ht))
+        (setq rest (cddr rest)))
+      ht))
+   ((listp obj)
+    ;; List → vector so json-encode emits a JSON array
+    (vconcat (mapcar #'task-conductor-dev-env--plist-to-json-safe obj)))
+   (t obj)))
+
 (defun task-conductor-dev-env--hooks-to-settings-args (hooks)
   "Convert HOOKS map to Claude CLI --settings arguments.
-HOOKS is a hash-table mapping event types to hook specifications,
-as received from the JVM via parseedn.
+HOOKS is a plist (converted from EDN via edn-to-plist) mapping event
+types to hook specifications.
 Returns a list of (\"--settings\" json-string) or nil if HOOKS is nil."
-  ;; Claude CLI --settings requires JSON (not EDN).  `json-encode'
-  ;; treats the plist (:hooks <hash-table>) as a JSON object: keyword
-  ;; keys become strings (stripping ":"), and the hash-table from
-  ;; parseedn is recursively converted to a nested JSON object.
+  ;; edn-to-plist converts EDN vectors to lists and maps to plists.
+  ;; json-encode misinterprets lists-of-plists as alists (objects)
+  ;; instead of arrays.  plist-to-json-safe converts the tree so
+  ;; plists become hash-tables and lists become vectors.
   (when hooks
-    (list "--settings" (json-encode `(:hooks ,hooks)))))
+    (list "--settings"
+          (json-encode
+           (task-conductor-dev-env--plist-to-json-safe
+            `(:hooks ,hooks))))))
 
 (cl-defun task-conductor-dev-env--handle-start-session (params)
   "Handle :start-session command with PARAMS.

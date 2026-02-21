@@ -1,8 +1,37 @@
 (ns task-conductor.mcp-tasks.core
   "Core CLI wrapper for mcp-tasks operations.
   Provides synchronous execution of mcp-tasks commands with EDN parsing."
-  (:require [babashka.process :as p]
+  (:require [babashka.fs :as fs]
+            [babashka.process :as p]
             [cheshire.core :as json]))
+
+;;; Project Directory Resolution
+
+(defn- find-main-git-checkout
+  "When project-dir has .mcp-tasks.edn but no .git, scan immediate
+  subdirectories for the main git checkout (where .git is a directory,
+  not a worktree link file). Returns the path of the main checkout,
+  or nil if none found."
+  [project-dir]
+  (when (and (fs/directory? project-dir)
+             (fs/exists? (fs/path project-dir ".mcp-tasks.edn"))
+             (not (fs/exists? (fs/path project-dir ".git"))))
+    (some (fn [child]
+            (when (fs/directory? child)
+              (let [git (fs/path child ".git")]
+                (when (fs/directory? git)
+                  (str child)))))
+          (fs/list-dir project-dir))))
+
+(defn resolve-project-dir
+  "Resolve the effective project directory for CLI operations.
+  If project-dir is not a git repo but contains .mcp-tasks.edn,
+  finds the main git checkout in a subdirectory."
+  [project-dir]
+  (if (fs/exists? (fs/path project-dir ".git"))
+    project-dir
+    (or (find-main-git-checkout project-dir)
+        project-dir)))
 
 ;;; Nullable Support
 
@@ -87,6 +116,9 @@
   "Execute mcp-tasks CLI with args in the given project directory.
   Always uses --format edn for native Clojure parsing.
 
+  If project-dir is not a git repo but contains .mcp-tasks.edn,
+  resolves to the main git checkout in a subdirectory.
+
   Returns parsed EDN on success, or error map on failure:
   {:error :cli-error :exit-code N :stderr \"...\"}
   {:error :io-error :message \"...\"}
@@ -100,8 +132,9 @@
   (if *nullable*
     (nullable-run-cli *nullable* opts)
     (try
-      (let [full-args (into ["mcp-tasks"] (conj (vec args) "--format" "edn"))
-            result (apply p/shell {:dir project-dir
+      (let [resolved-dir (resolve-project-dir project-dir)
+            full-args (into ["mcp-tasks"] (conj (vec args) "--format" "edn"))
+            result (apply p/shell {:dir resolved-dir
                                    :out :string
                                    :err :string
                                    :continue true}

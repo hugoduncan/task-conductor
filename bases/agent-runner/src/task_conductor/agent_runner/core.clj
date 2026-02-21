@@ -52,31 +52,46 @@
                (or (seq from-relevant) (seq to-relevant)))
       (emacs-dev-env/notify-all-sessions-changed!))))
 
+(def ^:private bootstrap-config
+  "Configuration stored at bootstrap time.
+   Contains :nrepl-port when provided."
+  (atom {}))
+
+(defn nrepl-port
+  "Return the nREPL port stored at bootstrap time, or nil."
+  []
+  (:nrepl-port @bootstrap-config))
+
 (defn bootstrap!
   "Log which namespaces were loaded, register transition logging,
    and verify the graph is operational.
+   Accepts optional opts map with :nrepl-port to store for session use.
    Returns a map with :namespaces loaded and :graph-operational? status."
-  []
-  (sc/add-transition-listener! ::transition-log log-transition)
-  (sc/add-transition-listener! ::session-notify notify-on-session-state-change)
-  (let [operational? (try
-                       (some? (graph/env))
-                       (catch Exception _ false))
-        ns-list     (resolver-namespaces)]
-    (println "[agent-runner] Bootstrap complete:"
-             (count ns-list) "resolver namespaces,"
-             "graph operational:" operational?)
-    {:namespaces ns-list
-     :graph-operational? operational?}))
+  ([] (bootstrap! {}))
+  ([opts]
+   (reset! bootstrap-config (select-keys opts [:nrepl-port]))
+   (sc/add-transition-listener! ::transition-log log-transition)
+   (sc/add-transition-listener! ::session-notify notify-on-session-state-change)
+   (let [operational? (try
+                        (some? (graph/env))
+                        (catch Exception _ false))
+         ns-list     (resolver-namespaces)]
+     (println "[agent-runner] Bootstrap complete:"
+              (count ns-list) "resolver namespaces,"
+              "graph operational:" operational?)
+     {:namespaces ns-list
+      :graph-operational? operational?})))
 
 (defn- execute-and-start!
   "Call execute! mutation via EQL, then send initial-state event to
    start the statechart. Returns {:session-id :state :error}."
   [project-dir task-id]
-  (let [result (graph/query
+  (let [nrepl-port (nrepl-port)
+        result (graph/query
                 [`(resolvers/execute!
-                   {:task/project-dir ~project-dir
-                    :task/id ~task-id})])
+                   ~(cond-> {:task/project-dir project-dir
+                             :task/id task-id}
+                      nrepl-port (assoc :task/nrepl-port nrepl-port)))])
         {:execute/keys [session-id initial-state error]}
         (get result `resolvers/execute!)]
     (if error

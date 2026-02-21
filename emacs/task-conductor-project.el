@@ -196,12 +196,14 @@ Nil until first use; initialized by `task-conductor-project-mode'.")
 (defvar task-conductor-project--play-icon-map
   (let ((map (make-sparse-keymap)))
     (define-key map [mouse-1] #'task-conductor-project-execute)
+    (define-key map (kbd "RET") #'task-conductor-project-execute)
     map)
   "Keymap for the ▶ play icon on task lines without an active session.")
 
 (defvar task-conductor-project--stop-icon-map
   (let ((map (make-sparse-keymap)))
     (define-key map [mouse-1] #'task-conductor-project-cancel)
+    (define-key map (kbd "RET") #'task-conductor-project-cancel)
     map)
   "Keymap for the ⏹ stop icon on task lines with a running or escalated session.")
 
@@ -521,6 +523,8 @@ after refresh.  Preserves which project sections were expanded."
     ;; Clear first so non-expanded paths don't retain stale data, then
     ;; re-populate expanded paths before --render (which reads from
     ;; cache only — cache miss means no children shown).
+    (unless task-conductor-project--task-cache
+      (setq task-conductor-project--task-cache (make-hash-table :test #'equal)))
     (clrhash task-conductor-project--task-cache)
     (dolist (path expanded)
       (puthash path (task-conductor-project--fetch-tasks path)
@@ -608,19 +612,18 @@ Prompts for directory path and optional name."
 
 ;;; Mode
 
-(defvar task-conductor-project-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map magit-section-mode-map)
-    (define-key map (kbd "g") #'task-conductor-project-refresh)
-    (define-key map (kbd "c") #'task-conductor-project-create)
-    (define-key map (kbd "d") #'task-conductor-project-delete)
-    (define-key map (kbd "e") #'task-conductor-project-execute)
-    (define-key map (kbd "k") #'task-conductor-project-cancel)
-    (define-key map (kbd "r") #'task-conductor-project-rename)
-    (define-key map (kbd "RET") #'task-conductor-project-open-dired)
-    (define-key map (kbd "q") #'task-conductor-project-quit)
-    map)
-  "Keymap for `task-conductor-project-mode'.")
+(defvar-keymap task-conductor-project-mode-map
+  :doc "Keymap for `task-conductor-project-mode'."
+  :parent magit-section-mode-map
+  "g"   #'task-conductor-project-refresh
+  "c"   #'task-conductor-project-create
+  "d"   #'task-conductor-project-delete
+  "e"   #'task-conductor-project-execute
+  "k"   #'task-conductor-project-cancel
+  "r"   #'task-conductor-project-rename
+  "RET" #'task-conductor-project-open-dired
+  "t"   #'task-conductor-project-open-tasks
+  "q"   #'task-conductor-project-quit)
 
 (define-derived-mode task-conductor-project-mode magit-section-mode
   "TC Projects"

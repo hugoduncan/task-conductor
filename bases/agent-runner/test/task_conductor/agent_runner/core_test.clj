@@ -109,7 +109,17 @@
               notify-removed (sc/remove-transition-listener!
                               ::agent-runner/session-notify)]
           (is (= ::agent-runner/transition-log log-removed))
-          (is (= ::agent-runner/session-notify notify-removed)))))))
+          (is (= ::agent-runner/session-notify notify-removed)))))
+
+    (testing "stores nrepl-port when provided"
+      (with-agent-runner-state
+        (agent-runner/bootstrap! {:nrepl-port "7888"})
+        (is (= "7888" (agent-runner/nrepl-port)))))
+
+    (testing "returns nil nrepl-port when not provided"
+      (with-agent-runner-state
+        (agent-runner/bootstrap!)
+        (is (nil? (agent-runner/nrepl-port)))))))
 
 ;;; Notification Tests
 

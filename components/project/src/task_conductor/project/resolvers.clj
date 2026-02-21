@@ -14,6 +14,7 @@
    [task-conductor.project.execute :as execute]
    [task-conductor.statechart-engine.interface :as sc]
    [babashka.fs :as fs]
+   [babashka.process :as process]
    [taoensso.timbre :as log]))
 
 ;;; Resolvers
@@ -92,13 +93,33 @@
   (let [t (:task/type task)]
     (or (= :story t) (= "story" t))))
 
+(defn- pr-merged?
+  "Check if a PR has been merged on GitHub.
+   Shells out to `gh pr view` in the given project directory.
+   Returns true when merged, false otherwise (including on error)."
+  [project-dir pr-num]
+  (try
+    (let [result (process/shell
+                  {:dir project-dir :out :string :err :string}
+                  "gh" "pr" "view" (str pr-num)
+                  "--json" "state" "--jq" ".state")]
+      (= "MERGED" (str/trim (:out result))))
+    (catch Exception _
+      false)))
+
 (defn- task->execute-map
-  "Convert EQL task map to execute format (unnamespaced keys)."
-  [task]
-  {:status (keyword (name (or (:task/status task) :open)))
-   :meta (:task/meta task)
-   :pr-num (:task/pr-num task)
-   :code-reviewed (:task/code-reviewed task)})
+  "Convert EQL task map to execute format (unnamespaced keys).
+   When project-dir is provided and task has a :pr-num, checks
+   GitHub for merge status."
+  ([task] (task->execute-map task nil))
+  ([task project-dir]
+   (let [pr-num (:task/pr-num task)]
+     {:status (keyword (name (or (:task/status task) :open)))
+      :meta (:task/meta task)
+      :pr-num pr-num
+      :code-reviewed (:task/code-reviewed task)
+      :pr-merged? (when (and pr-num project-dir)
+                    (pr-merged? project-dir pr-num))})))
 
 (defn- derive-initial-state
   "Derive initial state based on task type."
@@ -117,14 +138,15 @@
    as the project directory for skill invocations and escalation.
 
    Input:
-     :task/project-dir - project directory (where .mcp-tasks.edn lives)
-     :task/id          - task or story ID
+     :task/project-dir  - project directory (where .mcp-tasks.edn lives)
+     :task/id           - task or story ID
+     :task/nrepl-port   - optional nREPL port for session hooks
 
    Returns:
      :execute/session-id    - statechart session UUID
      :execute/initial-state - derived initial state keyword
      :execute/error         - error map if failed"
-  [{:task/keys [project-dir id]}]
+  [{:task/keys [project-dir id nrepl-port]}]
   {::pco/output [:execute/session-id :execute/initial-state :execute/error]}
   (let [worktree-result (mcp-tasks/work-on
                          {:project-dir project-dir :task-id id})]
@@ -142,9 +164,10 @@
                 children (when is-story
                            (fetch-children worktree-path id))
                 chart-id (if is-story :execute/story :execute/task)
-                initial-data {:project-dir worktree-path
-                              :task-id id
-                              :task-type (if is-story :story :task)}
+                initial-data (cond-> {:project-dir worktree-path
+                                      :task-id id
+                                      :task-type (if is-story :story :task)}
+                               nrepl-port (assoc :nrepl-port nrepl-port))
                 session-id (sc/start! chart-id {:data initial-data})
                 initial-state (derive-initial-state task children)]
             {:execute/session-id session-id
@@ -181,62 +204,72 @@
 (defn- no-progress?
   "Check if skill made no progress.
    For most states: new-state == pre-skill-state
-   For :has-tasks: state unchanged AND open children count unchanged"
+   For :has-tasks: state unchanged AND open children count unchanged
+   :complete is never no-progress — it means the story is closed."
   [pre-skill-state new-state pre-open-children new-open-children]
-  (let [was-has-tasks (= :has-tasks pre-skill-state)
-        is-has-tasks (= :has-tasks new-state)]
-    (if (and was-has-tasks is-has-tasks)
-      ;; For :has-tasks state, check open children count
-      (= pre-open-children new-open-children)
-      ;; For other states, check if derived state matches
-      (= pre-skill-state new-state))))
+  (if (= :complete new-state)
+    false
+    (let [was-has-tasks (= :has-tasks pre-skill-state)
+          is-has-tasks (= :has-tasks new-state)]
+      (if (and was-has-tasks is-has-tasks)
+        (= pre-open-children new-open-children)
+        (= pre-skill-state new-state)))))
+
+(defn- skill-failed?
+  "Return true when the CLI result indicates the skill did not succeed.
+   Checks both explicit :error key (timeout/interrupt) and non-zero exit code."
+  [result]
+  (or (:error result)
+      (and (:exit-code result) (not (zero? (:exit-code result))))))
 
 (defn- on-skill-complete
   "Handle skill completion. Re-derives state and sends event to statechart.
    Called from virtual thread when claude-cli promise delivers.
    Guards against session being stopped during skill execution.
    Detects no-progress and escalates to dev-env with Claude session-id.
-   When :on-complete is set in session data, sends that event directly
-   on success instead of re-deriving (used for terminal actions like merge)."
+   When :on-complete is set, sends it directly on success — skips
+   re-derivation to avoid races with external state propagation."
   [session-id result]
   (try
     (let [data (sc/get-data session-id)
           {:keys [project-dir task-id task-type
                   pre-skill-state pre-skill-open-children
                   on-complete]} data]
-      (if (:error result)
-        ;; Skill failed - send error event
+      (cond
+        (skill-failed? result)
         (sc/send! session-id :error)
-        (if on-complete
-          ;; Fixed outcome - send predetermined event
-          ;; (e.g. merge → :complete)
-          (sc/send! session-id on-complete)
-          ;; Re-derive state and check for progress
-          (let [task (fetch-task project-dir task-id)
-                children (when (= :story task-type)
-                           (fetch-children project-dir task-id))
-                children-maps (mapv task->execute-map children)
-                new-state (if (= :story task-type)
-                            (execute/derive-story-state
-                             (task->execute-map task)
-                             children-maps)
-                            (execute/derive-task-state
-                             (task->execute-map task)))
-                new-open-children (when (= :story task-type)
-                                    (execute/count-open-children
-                                     children-maps))]
-            (if (no-progress? pre-skill-state new-state
-                              pre-skill-open-children new-open-children)
-              ;; No progress - store Claude session-id and escalate
-              (do
-                (sc/update-data! session-id
-                                 #(assoc
-                                   %
-                                   :last-claude-session-id
-                                   (:session-id result)))
-                (sc/send! session-id :no-progress))
-              ;; Progress made - send new state as event
-              (sc/send! session-id new-state))))))
+
+        ;; When on-complete is set, trust the skill result and skip
+        ;; re-derivation. Avoids races where external state (e.g. GitHub
+        ;; API) hasn't propagated yet.
+        on-complete
+        (sc/send! session-id on-complete)
+
+        :else
+        (let [task (fetch-task project-dir task-id)
+              children (when (= :story task-type)
+                         (fetch-children project-dir task-id))
+              children-maps (mapv #(task->execute-map % project-dir)
+                                  children)
+              new-state (if (= :story task-type)
+                          (execute/derive-story-state
+                           (task->execute-map task project-dir)
+                           children-maps)
+                          (execute/derive-task-state
+                           (task->execute-map task project-dir)))
+              new-open-children (when (= :story task-type)
+                                  (execute/count-open-children
+                                   children-maps))]
+          (if (no-progress? pre-skill-state new-state
+                            pre-skill-open-children new-open-children)
+            (do
+              (sc/update-data! session-id
+                               #(assoc
+                                 %
+                                 :last-claude-session-id
+                                 (:session-id result)))
+              (sc/send! session-id :no-progress))
+            (sc/send! session-id new-state)))))
     (catch clojure.lang.ExceptionInfo e
       ;; Session was stopped during skill execution - ignore
       (when-not (= :session-not-found (:error (ex-data e)))
@@ -308,15 +341,16 @@
         task (fetch-task project-dir task-id)
         children (when (= :story task-type)
                    (fetch-children project-dir task-id))
-        children-maps (mapv task->execute-map children)
+        children-maps (mapv #(task->execute-map % project-dir)
+                            children)
         ;; Derive current state from task data
         ;; (matches how on-skill-complete works)
         current-derived-state (if (= :story task-type)
                                 (execute/derive-story-state
-                                 (task->execute-map task)
+                                 (task->execute-map task project-dir)
                                  children-maps)
                                 (execute/derive-task-state
-                                 (task->execute-map task)))
+                                 (task->execute-map task project-dir)))
         open-children-count (when (= :story task-type)
                               (execute/count-open-children children-maps))]
     (sc/update-data! session-id
@@ -375,16 +409,18 @@
   [{:engine/keys [session-id]}]
   {::pco/output [:escalate/status :escalate/error :escalate/dev-env-id]}
   (let [data (sc/get-data session-id)
-        {:keys [project-dir task-id last-claude-session-id]} data
+        {:keys [project-dir task-id last-claude-session-id nrepl-port]} data
         selected (graph/query [:dev-env/selected])
         dev-env-id (:dev-env/id (:dev-env/selected selected))]
     (if dev-env-id
       ;; Start an interactive session in the dev-env for human intervention
       (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)
-            nrepl-port (read-nrepl-port project-dir)
+            ;; Prefer port from session data (set at bootstrap);
+            ;; fall back to .nrepl-port file in worktree
+            nrepl-port (or nrepl-port (read-nrepl-port project-dir))
             _ (when-not nrepl-port
                 (log/warn
-                 "No .nrepl-port found; idle/active detection disabled"
+                 "No nREPL port available; idle/active detection disabled"
                  {:project-dir project-dir
                   :session-id session-id}))
             cli-hooks (build-session-hooks session-id nrepl-port)

@@ -200,10 +200,12 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
 
 (defun task-conductor-sessions--refresh ()
   "Query JVM for sessions and re-render.  No user-facing message."
-  (if (not (task-conductor-dev-env--connected-p))
-      (task-conductor-sessions--render nil)
-    (task-conductor-dev-env-query-sessions)
-    (task-conductor-sessions--render task-conductor-dev-env--cached-sessions)))
+  (when-let ((buf (get-buffer task-conductor-sessions--buffer-name)))
+    (with-current-buffer buf
+      (if (not (task-conductor-dev-env--connected-p))
+          (task-conductor-sessions--render nil)
+        (task-conductor-dev-env-query-sessions)
+        (task-conductor-sessions--render task-conductor-dev-env--cached-sessions)))))
 
 (defun task-conductor-sessions-refresh ()
   "Refresh session list from JVM and re-render."
@@ -294,15 +296,13 @@ Called by the :notify-sessions-changed handler."
 
 ;;; Mode
 
-(defvar task-conductor-sessions-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map magit-section-mode-map)
-    (define-key map (kbd "RET") #'task-conductor-sessions-goto-session)
-    (define-key map (kbd "g") #'task-conductor-sessions-refresh)
-    (define-key map (kbd "m") #'task-conductor-sessions-merge-pr)
-    (define-key map (kbd "q") #'task-conductor-sessions-quit)
-    map)
-  "Keymap for `task-conductor-sessions-mode'.")
+(defvar-keymap task-conductor-sessions-mode-map
+  :doc "Keymap for `task-conductor-sessions-mode'."
+  :parent magit-section-mode-map
+  "RET" #'task-conductor-sessions-goto-session
+  "g"   #'task-conductor-sessions-refresh
+  "m"   #'task-conductor-sessions-merge-pr
+  "q"   #'task-conductor-sessions-quit)
 
 (define-derived-mode task-conductor-sessions-mode magit-section-mode
   "TC Sessions"
