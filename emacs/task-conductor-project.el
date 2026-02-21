@@ -99,6 +99,30 @@ On any error, returns (:error \"message\")."
               (lambda (a b) (< (plist-get a :id) (plist-get b :id)))))
     (error (list :error (error-message-string err)))))
 
+;;; Session lookup
+
+(defun task-conductor-project--task-id-match-p (a b)
+  "Return non-nil if task IDs A and B refer to the same task.
+Handles numeric and string representations."
+  (or (equal a b)
+      (and (numberp a) (stringp b) (equal (number-to-string a) b))
+      (and (stringp a) (numberp b) (equal a (number-to-string b)))))
+
+(defun task-conductor-project--find-session (task-id &optional project-dir)
+  "Find a session matching TASK-ID in cached session data.
+Searches `task-conductor-dev-env--cached-sessions' for a session
+whose :task-id matches TASK-ID.  When PROJECT-DIR is non-nil, also
+filters by :project-dir.  Handles both numeric and string task-id
+comparison.  Returns the session plist or nil if not found."
+  (when task-id
+    (cl-find-if
+     (lambda (session)
+       (and (task-conductor-project--task-id-match-p
+             task-id (plist-get session :task-id))
+            (or (null project-dir)
+                (equal project-dir (plist-get session :project-dir)))))
+     task-conductor-dev-env--cached-sessions)))
+
 ;;; Project CRUD
 
 (defun task-conductor-project--eval-or-error (form)

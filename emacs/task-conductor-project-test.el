@@ -178,6 +178,53 @@
     (should-error (task-conductor-project--eval-or-error "(foo)")
                   :type 'user-error)))
 
+;;; Session lookup tests
+
+(ert-deftest task-conductor-project-find-session-match ()
+  ;; Returns the session plist when a session matches the task-id.
+  (let* ((session (list :session-id "s1" :task-id 42 :state :running))
+         (task-conductor-dev-env--cached-sessions (list session)))
+    (should (equal session (task-conductor-project--find-session 42)))))
+
+(ert-deftest task-conductor-project-find-session-no-match ()
+  ;; Returns nil when no session matches the task-id.
+  (let* ((session (list :session-id "s1" :task-id 99 :state :running))
+         (task-conductor-dev-env--cached-sessions (list session)))
+    (should-not (task-conductor-project--find-session 42))))
+
+(ert-deftest task-conductor-project-find-session-multiple-picks-correct ()
+  ;; Returns the session whose :task-id matches, ignoring others.
+  (let* ((s1 (list :session-id "s1" :task-id 10 :state :idle))
+         (s2 (list :session-id "s2" :task-id 42 :state :running))
+         (s3 (list :session-id "s3" :task-id 99 :state :idle))
+         (task-conductor-dev-env--cached-sessions (list s1 s2 s3)))
+    (should (equal s2 (task-conductor-project--find-session 42)))))
+
+(ert-deftest task-conductor-project-find-session-numeric-vs-string ()
+  ;; Matches when task-id is numeric and session stores it as string.
+  (let* ((session (list :session-id "s1" :task-id "42" :state :running))
+         (task-conductor-dev-env--cached-sessions (list session)))
+    (should (equal session (task-conductor-project--find-session 42))))
+  ;; Also matches when task-id is string and session stores it as numeric.
+  (let* ((session (list :session-id "s2" :task-id 42 :state :idle))
+         (task-conductor-dev-env--cached-sessions (list session)))
+    (should (equal session (task-conductor-project--find-session "42")))))
+
+(ert-deftest task-conductor-project-find-session-nil-task-id ()
+  ;; Returns nil when task-id is nil.
+  (let ((task-conductor-dev-env--cached-sessions
+         (list (list :session-id "s1" :task-id 1))))
+    (should-not (task-conductor-project--find-session nil))))
+
+(ert-deftest task-conductor-project-find-session-with-project-dir ()
+  ;; Filters by project-dir when provided.
+  (let* ((s1 (list :session-id "s1" :task-id 5 :project-dir "/a"))
+         (s2 (list :session-id "s2" :task-id 5 :project-dir "/b"))
+         (task-conductor-dev-env--cached-sessions (list s1 s2)))
+    (should (equal s2 (task-conductor-project--find-session 5 "/b")))
+    (should (equal s1 (task-conductor-project--find-session 5 "/a")))
+    (should-not (task-conductor-project--find-session 5 "/c"))))
+
 ;;; CLI task fetching tests
 
 (defun tc-test--make-task-hash (id title type status &optional parent-id category)
