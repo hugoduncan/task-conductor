@@ -531,9 +531,12 @@
          :error (:execute/error result)}
 
         :else
-        {:status :ok
-         :session-id (:execute/session-id result)
-         :initial-state (:execute/initial-state result)}))))
+        (let [session-id (:execute/session-id result)
+              initial-state (:execute/initial-state result)]
+          (sc/send! session-id initial-state)
+          {:status :ok
+           :session-id session-id
+           :initial-state initial-state})))))
 
 ;;; Health Check
 
