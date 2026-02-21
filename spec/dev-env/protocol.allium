@@ -32,12 +32,14 @@ external entity Event {
 value CallbackContext {
     session_id: String
     timestamp: Timestamp
-    reason: user_exit | error | timeout | idle
+    reason: user_exit | error | timeout
 }
 
 value SessionOpts {
     dir: String                                     -- working directory
     claude_session_id: String?                      -- CLI session to resume
+    hooks: Map<String, String>?                     -- CLI hook commands keyed by event type
+                                                    -- e.g. {UserPromptSubmit: "cmd", Notification: "cmd"}
     -- Note: The Clojure protocol also accepts :on-started callback in opts.
     -- Omitted here: opaque fn values are implementation-level wiring,
     -- not part of the domain contract.
@@ -73,7 +75,7 @@ entity Session {
 entity Hook {
     id: String
     session: Session
-    type: on_close | on_idle
+    type: on_close                                  -- on_idle removed: CLI hooks handle idle detection
     -- callback is opaque and implementation-defined; not modelled as a field
 }
 
@@ -167,7 +169,7 @@ rule RegisterHook {
     when: RegisterHookRequested(dev_env, session_id, hook_type, callback)
     let session = Session with id = session_id
     requires: session.status in [starting, active, idle]
-    requires: hook_type in [on_close, on_idle]
+    requires: hook_type = on_close
     ensures: Hook.created(
         session: session,
         type: hook_type,
@@ -186,15 +188,10 @@ rule FireOnCloseHooks {
         })
 }
 
-rule FireOnIdleHooks {
-    when: session: Session.status becomes idle
-    for hook in session.hooks with type = on_idle:
-        ensures: HookFired(hook, CallbackContext{
-            session_id: session.id,
-            timestamp: now,
-            reason: idle
-        })
-}
+-- Note: on_idle hooks removed.  Idle/active detection is now handled
+-- by CLI hooks (UserPromptSubmit, Notification) passed via SessionOpts.hooks.
+-- These hooks send :on-active and :on-session-idle events directly to the
+-- statechart via clj-nrepl-eval.
 
 --- Registry
 

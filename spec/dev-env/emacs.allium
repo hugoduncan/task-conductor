@@ -31,7 +31,6 @@ config {
     command_channel_capacity: Integer = 32
     poll_interval: Duration = 0.5.seconds
     poll_timeout: Duration = 5.seconds          -- per-poll await on JVM channel
-    idle_debounce: Duration = 0.5.seconds
     transcript_limit: Bytes = 100.kilobytes     -- max transcript response size
 }
 
@@ -54,28 +53,22 @@ entity EmacsDevEnv extends DevEnv {
 }
 
 value SessionState {
-    -- Subset of protocol Session.status (starting | active | idle | closed).
-    -- The JVM side only tracks starting and active; idle and closed are
-    -- detected by Emacs hooks (BellAdvice, OnCloseHandler) and delivered
-    -- as events rather than stored as state.
+    -- Subset of protocol Session.status (starting | active | closed).
+    -- The JVM side only tracks starting and active; closed is detected
+    -- by Emacs kill-buffer-hook.  Idle/active detection is handled by
+    -- CLI hooks (UserPromptSubmit, Notification), not Emacs advice.
     status: starting | active
 }
 
 value HookEntry {
-    type: on_close | on_idle
+    type: on_close                              -- on_idle removed: CLI hooks handle idle detection
     callback: Function                          -- opaque JVM callback
     session_id: String
 }
 
 value HookData {
     -- Emacs-side hook tracking per session.
-    on_idle: IdleHookData?
     on_close: CloseHookData?
-}
-
-value IdleHookData {
-    hook_id: String
-    timer: Timer?                               -- debounce timer, cancelled on each bell
 }
 
 value CloseHookData {
@@ -223,11 +216,13 @@ deferred query_events.emacs_handler              -- returns not_implemented
 
 rule HandleStartSession {
     -- Start or reuse a Claude session in Emacs.
+    -- Passes CLI hooks from opts via --settings JSON arg to Claude CLI.
     when: StartSessionCommand(params)
     let session_id = params.session_id
     let dir = params.opts.dir or project_dir or cwd
     let claude_session_id = params.opts.claude_session_id?
     let task_id = params.opts.task_id?               -- used for buffer naming
+    let hooks = params.opts.hooks?                   -- CLI hook commands
     requires: session_id exists
     ensures:
         if session_buffers.get(session_id).live:
@@ -235,7 +230,9 @@ rule HandleStartSession {
             result = {status: ok, buffer_name: existing.name}
         else:
             -- Launch claude-code in dir, optionally with --resume.
-            let buffer = claude_code_start(dir, resume: claude_session_id)
+            -- When hooks are present, pass as --settings JSON for CLI hook registration.
+            let settings = if hooks exists: { hooks: hooks } else: nil
+            let buffer = claude_code_start(dir, resume: claude_session_id, settings: settings)
             session_buffers.put(session_id, buffer)
             result = {status: ok, buffer_name: buffer.name,
                       resumed: claude_session_id exists}
@@ -259,61 +256,26 @@ rule HandleCloseSession {
 --- Hook Management (Emacs side)
 
 rule HandleRegisterHook {
+    -- Only on_close hooks are supported.  Idle/active detection is handled
+    -- by CLI hooks passed via SessionOpts.hooks.
     when: RegisterHookCommand(params)
     let session_id = params.session_id
     let hook_type = params.hook_type
     requires: session_id exists
-    requires: hook_type in [on_idle, on_close]
+    requires: hook_type = on_close
     let buffer = session_buffers.get(session_id)
     requires: buffer exists and buffer.live
     let hook_id = new_uuid
     ensures:
-        match hook_type:
-            on_idle  -> SetupOnIdleHook(session_id, hook_id)
-            on_close -> SetupOnCloseHook(session_id, hook_id)
+        SetupOnCloseHook(session_id, hook_id)
         result = {status: ok, hook_id: hook_id}
 }
 
 
---- Idle Detection
---
--- Idle = Claude is waiting for user input.  Detected via advice on
--- claude-code--notify (bell notification).  Debounced to avoid
--- duplicate events from rapid bell sequences.
-
-rule SetupOnIdleHook {
-    when: IdleHookSetupRequested(session_id, hook_id)
-    ensures: session_hooks[session_id].on_idle = IdleHookData{
-        hook_id: hook_id,
-        timer: nil
-    }
-    ensures: advice_added(claude_code_notify, BellAdvice)
-        -- Advice is added once; idempotent if already present.
-}
-
-rule BellAdvice {
-    -- Wraps claude-code--notify.  When bell fires in a tracked session
-    -- buffer, triggers debounced idle detection.
-    when: claude_code_notify_called(buffer)
-    let session_id = session_for_buffer(buffer)
-    requires: session_id exists
-    requires: session_hooks[session_id].on_idle exists
-    ensures: DebouncedIdleEvent(session_id)
-}
-
-rule DebouncedIdleEvent {
-    -- Cancel any existing debounce timer, start a new one.
-    when: BellDetected(session_id)
-    let idle_data = session_hooks[session_id].on_idle
-    ensures:
-        if idle_data.timer exists:
-            idle_data.timer.cancelled
-    ensures: idle_data.timer = delayed_timer(
-        delay: config.idle_debounce,
-        action: SendHookEvent(on_idle, session_id, idle)
-    )
-}
-
+-- Note: Idle detection (SetupOnIdleHook, BellAdvice, DebouncedIdleEvent)
+-- has been removed.  Idle/active detection is now handled by Claude Code
+-- CLI hooks (UserPromptSubmit → :on-active, Notification → :on-session-idle)
+-- registered via SessionOpts.hooks and passed to the CLI via --settings JSON.
 
 --- Close Detection
 --
@@ -364,15 +326,7 @@ rule InvokeHook {
 rule CleanupSessionHooks {
     -- Remove all hook state for a session.
     when: SessionHookCleanupRequested(session_id)
-    let hooks = session_hooks[session_id]
-    ensures:
-        if hooks.on_idle.timer exists:
-            hooks.on_idle.timer.cancelled
     ensures: session_hooks.remove(session_id)
-    ensures:
-        -- Remove bell advice when no sessions have on_idle hooks.
-        if no session in session_hooks has on_idle:
-            advice_removed(claude_code_notify, BellAdvice)
 }
 
 
