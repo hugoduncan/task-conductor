@@ -200,13 +200,20 @@
   (should-not (task-conductor-project--parse-tasks-edn ""))
   (should-not (task-conductor-project--parse-tasks-edn "  ")))
 
+(defun tc-test--make-result-ht (task-hashes)
+  "Create a {:tasks [...]} result hash-table as parseedn would return it."
+  (let ((ht (make-hash-table :test #'equal)))
+    (puthash :tasks (vconcat task-hashes) ht)
+    ht))
+
 (ert-deftest task-conductor-project-parse-tasks-edn-valid ()
-  ;; Parses hash-table vector from parseedn into list of plists.
+  ;; Parses {:tasks [...]} map from parseedn into list of plists.
   (cl-letf (((symbol-function 'parseedn-read-str)
              (lambda (_str)
-               (vector (tc-test--make-task-hash 42 "Do thing" "task" "open"
-                                                nil "simple")))))
-    (let ((result (task-conductor-project--parse-tasks-edn "[...]")))
+               (tc-test--make-result-ht
+                (list (tc-test--make-task-hash 42 "Do thing" "task" "open"
+                                               nil "simple"))))))
+    (let ((result (task-conductor-project--parse-tasks-edn "{:tasks [...]}")))
       (should (= 1 (length result)))
       (should (= 42 (plist-get (car result) :id)))
       (should (equal "Do thing" (plist-get (car result) :title)))
