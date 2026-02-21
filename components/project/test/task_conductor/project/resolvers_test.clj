@@ -865,6 +865,79 @@
                   ;; Should have transitioned from :escalated to :done
                   (is (contains? (sc/current-state session-id) :done)))))))))
 
+    (testing "passes CLI hooks when .nrepl-port exists"
+      (fs/with-temp-dir [tmp-dir]
+        (let [project-dir (str (fs/canonicalize tmp-dir))]
+          ;; Create .nrepl-port file in the worktree dir
+          (spit (str project-dir "/.nrepl-port") "7888")
+          (with-execute-state
+            (let [dev-env (dev-env-protocol/make-noop-dev-env)
+                  _ (dev-env-registry/register! dev-env :test)
+                  mcp-nullable
+                  (mcp-tasks/make-nullable
+                   {:responses
+                    {:work-on [(make-work-on-response
+                                {:worktree-path project-dir})]
+                     :show [(make-task-response {:meta {:refined "true"}})]
+                     :why-blocked [(make-blocking-response)]}})]
+              (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+                (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+                  (let [work-result
+                        (graph/query [`(resolvers/execute!
+                                        {:task/project-dir ~project-dir
+                                         :task/id 300})])
+                        session-id (:execute/session-id
+                                    (get work-result `resolvers/execute!))
+                        _ (graph/query [`(resolvers/escalate-to-dev-env!
+                                          {:engine/session-id ~session-id})])
+                        calls @(:calls dev-env)
+                        start-call (first
+                                    (filter #(= :start-session (:op %))
+                                            calls))
+                        hooks (get-in start-call [:opts :hooks])]
+                    (is (some? hooks) "hooks should be present in opts")
+                    (is (contains? hooks :UserPromptSubmit))
+                    (is (contains? hooks :Notification))
+                    ;; Verify hook commands contain session-id and port
+                    (let [active-cmd (get-in hooks
+                                             [:UserPromptSubmit 0
+                                              :hooks 0 :command])
+                          idle-cmd (get-in hooks
+                                           [:Notification 0
+                                            :hooks 0 :command])]
+                      (is (re-find (re-pattern (str session-id))
+                                   active-cmd))
+                      (is (re-find #"7888" active-cmd))
+                      (is (re-find #":on-active" active-cmd))
+                      (is (re-find (re-pattern (str session-id))
+                                   idle-cmd))
+                      (is (re-find #"7888" idle-cmd))
+                      (is (re-find #":on-session-idle" idle-cmd)))))))))))
+
+    (testing "omits hooks when .nrepl-port file is absent"
+      (with-execute-state
+        (let [dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result
+                    (graph/query [`(resolvers/execute!
+                                    {:task/project-dir "/test"
+                                     :task/id 300})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    _ (graph/query [`(resolvers/escalate-to-dev-env!
+                                      {:engine/session-id ~session-id})])
+                    calls @(:calls dev-env)
+                    start-call (first
+                                (filter #(= :start-session (:op %))
+                                        calls))]
+                (is (nil? (get-in start-call [:opts :hooks]))
+                    "hooks should be absent when no .nrepl-port")))))))
+
     (testing "returns error when no dev-env available"
       (with-execute-state
         (let [mcp-nullable (mcp-tasks/make-nullable

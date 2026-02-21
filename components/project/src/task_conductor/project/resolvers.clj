@@ -4,6 +4,7 @@
    Registered on namespace load."
   (:require
    [com.wsscode.pathom3.connect.operation :as pco]
+   [clojure.string :as str]
    [task-conductor.claude-cli.interface :as claude-cli]
    [task-conductor.dev-env.protocol :as dev-env]
    [task-conductor.dev-env.registry :as dev-env-registry]
@@ -11,7 +12,9 @@
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
    [task-conductor.project.execute :as execute]
-   [task-conductor.statechart-engine.interface :as sc]))
+   [task-conductor.statechart-engine.interface :as sc])
+  (:import
+   [java.io File]))
 
 ;;; Resolvers
 
@@ -253,6 +256,35 @@
       (when-not (= :session-not-found (:error (ex-data e)))
         (throw e)))))
 
+(defn- read-nrepl-port
+  "Read the nREPL port from .nrepl-port in the given directory."
+  [dir]
+  (try
+    (let [port-file (File. (str dir "/.nrepl-port"))]
+      (when (.exists port-file)
+        (str/trim (slurp port-file))))
+    (catch Exception _ nil)))
+
+(defn- build-session-hooks
+  "Build CLI hooks map for idle/active detection during escalated sessions.
+  Uses clj-nrepl-eval to send statechart events:
+    UserPromptSubmit -> :on-active (Claude started working)
+    Notification     -> :on-session-idle (Claude finished, waiting)"
+  [session-id nrepl-port]
+  (when nrepl-port
+    (let [ns-fn "task-conductor.statechart-engine.interface"
+          fmt (str "clj-nrepl-eval -p %s"
+                   " '(%s/send! \"%s\" %s)'")
+          send-event (fn [event-type]
+                       (format fmt nrepl-port ns-fn
+                               session-id event-type))
+          active (send-event ":on-active")
+          idle (send-event ":on-session-idle")]
+      {:UserPromptSubmit
+       [{:hooks [{:type "command" :command active}]}]
+       :Notification
+       [{:hooks [{:type "command" :command idle}]}]})))
+
 (defn- on-dev-env-close
   "Handle dev-env session close.
    Re-derives state and sends event to statechart.
@@ -359,16 +391,19 @@
         dev-env-id (:dev-env/id (:dev-env/selected selected))]
     (if dev-env-id
       ;; Start an interactive session in the dev-env for human intervention
-      (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)]
+      (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)
+            nrepl-port (read-nrepl-port project-dir)
+            cli-hooks (build-session-hooks session-id nrepl-port)
+            opts (cond-> {:dir project-dir
+                          :task-id task-id}
+                   last-claude-session-id
+                   (assoc :claude-session-id last-claude-session-id)
+                   cli-hooks
+                   (assoc :hooks cli-hooks))]
         (graph/query [`(task-conductor.dev-env.resolvers/dev-env-start-session!
                         {:dev-env/id ~dev-env-id
                          :dev-env/session-id ~session-id
-                         :dev-env/opts ~(cond-> {:dir project-dir
-                                                 :task-id task-id}
-                                          last-claude-session-id
-                                          (assoc
-                                           :claude-session-id
-                                           last-claude-session-id))})])
+                         :dev-env/opts ~opts})])
         ;; Register on-close hook to resume workflow when human finishes
         (when dev-env-instance
           (dev-env/register-hook dev-env-instance session-id :on-close
