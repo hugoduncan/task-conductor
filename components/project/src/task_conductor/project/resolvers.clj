@@ -13,7 +13,8 @@
    [task-conductor.project.registry :as registry]
    [task-conductor.project.execute :as execute]
    [task-conductor.statechart-engine.interface :as sc]
-   [babashka.fs :as fs]))
+   [babashka.fs :as fs]
+   [taoensso.timbre :as log]))
 
 ;;; Resolvers
 
@@ -381,6 +382,11 @@
       ;; Start an interactive session in the dev-env for human intervention
       (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)
             nrepl-port (read-nrepl-port project-dir)
+            _ (when-not nrepl-port
+                (log/warn
+                 "No .nrepl-port found; idle/active detection disabled"
+                 {:project-dir project-dir
+                  :session-id session-id}))
             cli-hooks (build-session-hooks session-id nrepl-port)
             opts (cond-> {:dir project-dir
                           :task-id task-id}
