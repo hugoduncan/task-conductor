@@ -152,6 +152,7 @@
     :wait-pr-merge
     :merging-pr
     :complete
+    :terminated
     :escalated
     :session-idle
     :session-running})
@@ -159,7 +160,9 @@
 (def story-states
   "Valid states for story execution."
   #{:idle :unrefined :refined :has-tasks :done
-    :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated
+    :awaiting-pr :wait-pr-merge :merging-pr
+    :complete :terminated
+    :escalated
     :session-idle :session-running})
 
 ;;; Action Expression Defs
@@ -210,6 +213,11 @@
   {:expr '(task-conductor.project.resolvers/invoke-skill!
            {:skill "squash-merge-on-gh"
             :on-complete :complete})})
+
+(def ^:private complete-story-action
+  {:expr '(task-conductor.project.resolvers/invoke-skill!
+           {:skill "complete-story"
+            :on-complete :terminated})})
 
 (def ^:private escalate-action
   {:expr
@@ -316,13 +324,23 @@
                            (sc/transition
                             {:event :no-progress :target :escalated}))
 
-    ;; Complete - task finished
-                 (sc/final {:id :complete})
+    ;; Complete - close task on mcp-tasks
+                 (sc/state {:id :complete}
+                           (sc/on-entry {}
+                                        (sc/action complete-story-action))
+                           (sc/transition
+                            {:event :terminated :target :terminated})
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
+
+                 (sc/final {:id :terminated})
 
     ;; Escalated - error, human intervention needed
                  (escalated-state
                   [:unrefined :refined :done
-                   :awaiting-pr :wait-pr-merge :complete])))
+                   :awaiting-pr :wait-pr-merge
+                   :complete :terminated])))
 
 (def story-statechart
   "Statechart for story execution.
@@ -420,13 +438,23 @@
                            (sc/transition
                             {:event :no-progress :target :escalated}))
 
-    ;; Complete - story finished
-                 (sc/final {:id :complete})
+    ;; Complete - close story on mcp-tasks
+                 (sc/state {:id :complete}
+                           (sc/on-entry {}
+                                        (sc/action complete-story-action))
+                           (sc/transition
+                            {:event :terminated :target :terminated})
+                           (sc/transition {:event :error :target :escalated})
+                           (sc/transition
+                            {:event :no-progress :target :escalated}))
+
+                 (sc/final {:id :terminated})
 
     ;; Escalated - error, human intervention needed
                  (escalated-state
                   [:unrefined :refined :has-tasks :done
-                   :awaiting-pr :wait-pr-merge :complete])))
+                   :awaiting-pr :wait-pr-merge
+                   :complete :terminated])))
 
 ;;; Statechart Registration
 ;; Register statecharts on namespace load for use by execute! mutation.

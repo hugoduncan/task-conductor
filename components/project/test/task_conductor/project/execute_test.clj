@@ -307,13 +307,14 @@
             (sc/send! sid :wait-pr-merge)
             (is (contains? (sc/current-state sid) :wait-pr-merge)))))
 
-      (testing "wait-pr-merge → complete"
+      (testing "wait-pr-merge → complete → terminated"
         (with-clean-test-env
           (sc/register! ::task-flow4 execute/task-statechart)
           (let [sid (sc/start! ::task-flow4)]
             (sc/send! sid :wait-pr-merge)
             (sc/send! sid :complete)
-            ;; Final state causes termination - configuration becomes empty
+            (is (= #{:complete} (sc/current-state sid)))
+            (sc/send! sid :terminated)
             (is (= #{} (sc/current-state sid))))))
 
       (testing "wait-pr-merge → merging-pr on :merge-pr"
@@ -391,7 +392,7 @@
             (sc/send! sid :unrefined)
             (sc/send! sid :error)
             (sc/send! sid :complete)
-            (is (= #{} (sc/current-state sid))))))
+            (is (= #{:complete} (sc/current-state sid))))))
 
       (testing "from :running sub-state"
         (with-clean-test-env
@@ -404,13 +405,14 @@
             (sc/send! sid :refined)
             (is (contains? (sc/current-state sid) :refined))))))
 
-    (testing ":complete is a final state"
-      (testing "terminates statechart (empty configuration)"
+    (testing ":terminated is the final state"
+      (testing "terminates statechart via complete → terminated"
         (with-clean-test-env
           (sc/register! ::task-final execute/task-statechart)
           (let [sid (sc/start! ::task-final)]
             (sc/send! sid :complete)
-            ;; Final state causes immediate termination
+            (is (= #{:complete} (sc/current-state sid)))
+            (sc/send! sid :terminated)
             (is (= #{} (sc/current-state sid)))))))))
 
 (deftest story-statechart-test
@@ -497,13 +499,14 @@
             (sc/send! sid :wait-pr-merge)
             (is (contains? (sc/current-state sid) :wait-pr-merge)))))
 
-      (testing "wait-pr-merge → complete"
+      (testing "wait-pr-merge → complete → terminated"
         (with-clean-test-env
           (sc/register! ::story-flow6 execute/story-statechart)
           (let [sid (sc/start! ::story-flow6)]
             (sc/send! sid :wait-pr-merge)
             (sc/send! sid :complete)
-            ;; Final state causes termination - configuration becomes empty
+            (is (= #{:complete} (sc/current-state sid)))
+            (sc/send! sid :terminated)
             (is (= #{} (sc/current-state sid))))))
 
       (testing "wait-pr-merge → merging-pr on :merge-pr"
@@ -570,7 +573,7 @@
             (sc/send! sid :unrefined)
             (sc/send! sid :error)
             (sc/send! sid :complete)
-            (is (= #{} (sc/current-state sid))))))
+            (is (= #{:complete} (sc/current-state sid))))))
 
       (testing "from :running sub-state"
         (with-clean-test-env
@@ -583,13 +586,14 @@
             (sc/send! sid :has-tasks)
             (is (contains? (sc/current-state sid) :has-tasks))))))
 
-    (testing ":complete is a final state"
-      (testing "terminates statechart (empty configuration)"
+    (testing ":terminated is the final state"
+      (testing "terminates via complete → terminated"
         (with-clean-test-env
           (sc/register! ::story-final execute/story-statechart)
           (let [sid (sc/start! ::story-final)]
             (sc/send! sid :complete)
-            ;; Final state causes immediate termination
+            (is (= #{:complete} (sc/current-state sid)))
+            (sc/send! sid :terminated)
             (is (= #{} (sc/current-state sid)))))))))
 
 (deftest task-states-test
@@ -597,8 +601,8 @@
   (testing "task-states"
     (testing "contains all task statechart states"
       (is (= #{:idle :unrefined :refined :done :awaiting-pr
-               :wait-pr-merge :merging-pr :complete :escalated
-               :session-idle :session-running}
+               :wait-pr-merge :merging-pr :complete :terminated
+               :escalated :session-idle :session-running}
              execute/task-states)))))
 
 (deftest story-states-test
@@ -606,6 +610,7 @@
   (testing "story-states"
     (testing "contains all story statechart states"
       (is (= #{:idle :unrefined :refined :has-tasks :done
-               :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated
+               :awaiting-pr :wait-pr-merge :merging-pr
+               :complete :terminated :escalated
                :session-idle :session-running}
              execute/story-states)))))
