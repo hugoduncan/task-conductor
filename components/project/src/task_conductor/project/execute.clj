@@ -386,13 +386,20 @@
                             {:event :no-progress :target :escalated}))
 
     ;; Has tasks - execute next incomplete child
+    ;; State re-derivation after child completion may skip intermediate
+    ;; states, so allow direct transitions to any downstream state.
                  (sc/state {:id :has-tasks}
                            (sc/on-entry {}
                                         (sc/action execute-story-child-action))
-      ;; Can stay in has-tasks or move to done
                            (sc/transition
                             {:event :has-tasks :target :has-tasks})
                            (sc/transition {:event :done :target :done})
+                           (sc/transition
+                            {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition
+                            {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition
+                            {:event :complete :target :complete})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition
                             {:event :no-progress :target :escalated}))
@@ -407,6 +414,10 @@
                             {:event :has-tasks :target :has-tasks})
                            (sc/transition
                             {:event :awaiting-pr :target :awaiting-pr})
+                           (sc/transition
+                            {:event :wait-pr-merge :target :wait-pr-merge})
+                           (sc/transition
+                            {:event :complete :target :complete})
                            (sc/transition {:event :error :target :escalated})
                            (sc/transition
                             {:event :no-progress :target :escalated}))
