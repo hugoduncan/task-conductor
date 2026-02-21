@@ -362,6 +362,35 @@
                        '(:command-id "cmd-2" :command :unknown :params nil))))
         (should (eq :unknown-command (plist-get response :error)))))))
 
+;;; hooks-to-settings-args Tests
+
+(ert-deftest task-conductor-dev-env-hooks-to-settings-args-nil ()
+  ;; Returns nil when hooks is nil.
+  (should-not (task-conductor-dev-env--hooks-to-settings-args nil)))
+
+(ert-deftest task-conductor-dev-env-hooks-to-settings-args-returns-settings-flag ()
+  ;; Returns ("--settings" json-string) for non-nil hooks.
+  (let ((hooks (make-hash-table :test 'equal)))
+    (puthash "UserPromptSubmit" (make-hash-table :test 'equal) hooks)
+    (let ((result (task-conductor-dev-env--hooks-to-settings-args hooks)))
+      (should (equal "--settings" (car result)))
+      (should (= 2 (length result)))
+      (should (stringp (cadr result))))))
+
+(ert-deftest task-conductor-dev-env-hooks-to-settings-args-valid-json ()
+  ;; The JSON string parses to an object with a "hooks" key.
+  (let* ((hooks (make-hash-table :test 'equal))
+         (inner (make-hash-table :test 'equal)))
+    (puthash "command" "echo test" inner)
+    (puthash "Notification" inner hooks)
+    (let* ((result (task-conductor-dev-env--hooks-to-settings-args hooks))
+           (json-str (cadr result))
+           (parsed (json-read-from-string json-str)))
+      (should (assoc 'hooks parsed))
+      (let* ((parsed-hooks (cdr (assoc 'hooks parsed)))
+             (notif (cdr (assoc 'Notification parsed-hooks))))
+        (should (equal "echo test" (cdr (assoc 'command notif))))))))
+
 ;;; State Cleanup Tests
 
 (ert-deftest task-conductor-dev-env-cleanup-session-hooks ()
