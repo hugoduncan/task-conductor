@@ -12,9 +12,8 @@
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.registry :as registry]
    [task-conductor.project.execute :as execute]
-   [task-conductor.statechart-engine.interface :as sc])
-  (:import
-   [java.io File]))
+   [task-conductor.statechart-engine.interface :as sc]
+   [babashka.fs :as fs]))
 
 ;;; Resolvers
 
@@ -246,9 +245,9 @@
   "Read the nREPL port from .nrepl-port in the given directory."
   [dir]
   (try
-    (let [port-file (File. (str dir "/.nrepl-port"))]
-      (when (.exists port-file)
-        (str/trim (slurp port-file))))
+    (let [port-file (fs/path dir ".nrepl-port")]
+      (when (fs/exists? port-file)
+        (str/trim (slurp (fs/file port-file)))))
     (catch Exception _ nil)))
 
 (defn- build-session-hooks
