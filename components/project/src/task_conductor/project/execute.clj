@@ -150,12 +150,15 @@
     :wait-pr-merge
     :merging-pr
     :complete
-    :escalated})
+    :escalated
+    :session-idle
+    :session-running})
 
 (def story-states
   "Valid states for story execution."
   #{:idle :unrefined :refined :has-tasks :done
-    :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated})
+    :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated
+    :session-idle :session-running})
 
 ;;; Action Expression Defs
 ;; Extracted to avoid deeply nested long lines in statecharts.
@@ -292,9 +295,20 @@
 
     ;; Escalated - error, human intervention needed.
     ;; on-dev-env-close re-derives state to resume.
-                 (sc/state {:id :escalated}
+    ;; Compound state with :session-idle/:session-running sub-states.
+                 (sc/state {:id :escalated :initial :session-idle}
                            (sc/on-entry {}
                                         (sc/action escalate-action))
+                           ;; Sub-states for idle/running tracking
+                           (sc/state {:id :session-idle}
+                                     (sc/transition
+                                      {:event :on-active
+                                       :target :session-running}))
+                           (sc/state {:id :session-running}
+                                     (sc/transition
+                                      {:event :on-session-idle
+                                       :target :session-idle}))
+                           ;; Outgoing transitions on compound parent
                            (sc/transition
                             {:event :unrefined :target :unrefined})
                            (sc/transition {:event :refined :target :refined})
@@ -407,9 +421,20 @@
 
     ;; Escalated - error, human intervention needed.
     ;; on-dev-env-close re-derives state to resume.
-                 (sc/state {:id :escalated}
+    ;; Compound state with :session-idle/:session-running sub-states.
+                 (sc/state {:id :escalated :initial :session-idle}
                            (sc/on-entry {}
                                         (sc/action escalate-action))
+                           ;; Sub-states for idle/running tracking
+                           (sc/state {:id :session-idle}
+                                     (sc/transition
+                                      {:event :on-active
+                                       :target :session-running}))
+                           (sc/state {:id :session-running}
+                                     (sc/transition
+                                      {:event :on-session-idle
+                                       :target :session-idle}))
+                           ;; Outgoing transitions on compound parent
                            (sc/transition
                             {:event :unrefined :target :unrefined})
                            (sc/transition {:event :refined :target :refined})
