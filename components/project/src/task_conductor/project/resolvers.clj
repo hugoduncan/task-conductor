@@ -204,15 +204,16 @@
 (defn- no-progress?
   "Check if skill made no progress.
    For most states: new-state == pre-skill-state
-   For :has-tasks: state unchanged AND open children count unchanged"
+   For :has-tasks: state unchanged AND open children count unchanged
+   :complete is never no-progress — it means the story is closed."
   [pre-skill-state new-state pre-open-children new-open-children]
-  (let [was-has-tasks (= :has-tasks pre-skill-state)
-        is-has-tasks (= :has-tasks new-state)]
-    (if (and was-has-tasks is-has-tasks)
-      ;; For :has-tasks state, check open children count
-      (= pre-open-children new-open-children)
-      ;; For other states, check if derived state matches
-      (= pre-skill-state new-state))))
+  (if (= :complete new-state)
+    false
+    (let [was-has-tasks (= :has-tasks pre-skill-state)
+          is-has-tasks (= :has-tasks new-state)]
+      (if (and was-has-tasks is-has-tasks)
+        (= pre-open-children new-open-children)
+        (= pre-skill-state new-state)))))
 
 (defn- skill-failed?
   "Return true when the CLI result indicates the skill did not succeed.

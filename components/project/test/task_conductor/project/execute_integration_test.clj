@@ -406,7 +406,9 @@
 
                 ;; Can transition directly to complete from idle
                 (sc/send! session-id :complete)
-                (is (= #{} (sc/current-state session-id)))))))))
+                ;; State is #{:complete} not #{} because on-entry
+                ;; runs async /complete-story skill
+                (is (contains? (sc/current-state session-id) :complete))))))))
 
     (testing "story progresses through :has-tasks when children complete"
       (with-integration-state

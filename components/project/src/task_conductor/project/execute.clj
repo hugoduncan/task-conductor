@@ -216,8 +216,7 @@
 
 (def ^:private complete-story-action
   {:expr '(task-conductor.project.resolvers/invoke-skill!
-           {:skill "complete-story"
-            :on-complete :terminated})})
+           {:skill "complete-story"})})
 
 (def ^:private escalate-action
   {:expr
@@ -324,10 +323,14 @@
                            (sc/transition
                             {:event :no-progress :target :escalated}))
 
-    ;; Complete - close task on mcp-tasks
+    ;; Complete - close task on mcp-tasks.
+    ;; Re-derivation after /complete-story returns :complete when
+    ;; the task is closed, so transition to :terminated on that.
                  (sc/state {:id :complete}
                            (sc/on-entry {}
                                         (sc/action complete-story-action))
+                           (sc/transition
+                            {:event :complete :target :terminated})
                            (sc/transition
                             {:event :terminated :target :terminated})
                            (sc/transition {:event :error :target :escalated})
@@ -449,10 +452,14 @@
                            (sc/transition
                             {:event :no-progress :target :escalated}))
 
-    ;; Complete - close story on mcp-tasks
+    ;; Complete - close story on mcp-tasks.
+    ;; Re-derivation after /complete-story returns :complete when
+    ;; the story is closed, so transition to :terminated on that.
                  (sc/state {:id :complete}
                            (sc/on-entry {}
                                         (sc/action complete-story-action))
+                           (sc/transition
+                            {:event :complete :target :terminated})
                            (sc/transition
                             {:event :terminated :target :terminated})
                            (sc/transition {:event :error :target :escalated})

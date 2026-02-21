@@ -1165,10 +1165,16 @@
               (mcp-tasks/make-nullable
                {:responses
                 {:work-on [(make-work-on-response)]
-                 :show [(make-task-response {:meta {:refined "true"}
-                                             :pr-num 42})
+                 :show [;; 1: execute! fetch-task
                         (make-task-response {:meta {:refined "true"}
                                              :pr-num 42})
+                        ;; 2: store-pre-skill-state! for merge
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        ;; 3: store-pre-skill-state! for complete-story
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        ;; 4: on-skill-complete re-derivation
                         (make-task-response {:meta {:refined "true"}
                                              :pr-num 42
                                              :status :closed})]
@@ -1193,23 +1199,33 @@
                     merge-result (get result `resolvers/pr-merge!)]
                 (is (= :triggered (:pr-merge/status merge-result)))
                 (is (nil? (:pr-merge/error merge-result)))
-                ;; Should have transitioned to :merging-pr
-                ;; (skill thread cleanup handled by with-execute-state finally)
-                (is (contains? (sc/current-state session-id) :merging-pr))))))))
+                ;; Merge cascades through :complete to :terminated
+                (resolvers/await-skill-threads!)
+                (is (= #{} (sc/current-state session-id))
+                    "terminates after merge and complete-story")))))))
 
     (testing "completes when merge skill succeeds regardless of API state"
-      ;; merge-pr-action sets :on-complete :complete, so a successful
-      ;; merge skill sends :complete directly without re-derivation.
+      ;; merge-pr-action sets :on-complete :complete. Entering :complete
+      ;; runs /complete-story which re-derives state to verify closure.
       (with-execute-state
         (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
               mcp-nullable
               (mcp-tasks/make-nullable
                {:responses
                 {:work-on [(make-work-on-response)]
-                 :show [(make-task-response {:meta {:refined "true"}
-                                             :pr-num 42})
+                 :show [;; execute! fetch-task
                         (make-task-response {:meta {:refined "true"}
-                                             :pr-num 42})]
+                                             :pr-num 42})
+                        ;; store-pre-skill-state! for merge skill
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        ;; store-pre-skill-state! for complete-story
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        ;; on-skill-complete re-derivation
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42
+                                             :status :closed})]
                  :why-blocked [(make-blocking-response)]}})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
