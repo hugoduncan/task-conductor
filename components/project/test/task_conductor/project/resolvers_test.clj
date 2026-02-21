@@ -489,6 +489,27 @@
                 (is
                  (contains? (sc/current-state session-id) :escalated))))))))))
 
+(testing "transitions to :escalated on non-zero exit code"
+  (with-execute-state
+    (let [cli-nullable (claude-cli/make-nullable {:exit-code 1})
+          mcp-nullable (mcp-tasks/make-nullable
+                        {:responses
+                         (task-responses {:meta {:refined "true"}})})
+          dev-env (dev-env-protocol/make-noop-dev-env)
+          _ (dev-env-registry/register! dev-env :test)]
+      (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+        (claude-cli/with-nullable-claude-cli cli-nullable
+          (let [work-result (graph/query [`(resolvers/execute!
+                                            {:task/project-dir "/test"
+                                             :task/id 103})])
+                session-id (:execute/session-id
+                            (get work-result `resolvers/execute!))
+                _ (sc/send! session-id :refined)]
+            (resolvers/await-skill-threads!)
+            (is
+             (contains? (sc/current-state session-id) :escalated)
+             "non-zero exit code triggers escalation")))))))
+
 ;;; Concurrent Skill Invocation Tests
 
 (deftest concurrent-skill-invocation-test
@@ -1150,7 +1171,7 @@
                                              :pr-num 42})
                         (make-task-response {:meta {:refined "true"}
                                              :pr-num 42
-                                             :status :done})]
+                                             :status :closed})]
                  :why-blocked [(make-blocking-response)]}})
               dev-env (dev-env-protocol/make-noop-dev-env)
               _ (dev-env-registry/register! dev-env :test)]
@@ -1175,6 +1196,39 @@
                 ;; Should have transitioned to :merging-pr
                 ;; (skill thread cleanup handled by with-execute-state finally)
                 (is (contains? (sc/current-state session-id) :merging-pr))))))))
+
+    (testing "escalates when merge skill does not change PR state"
+      (with-execute-state
+        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
+              mcp-nullable
+              (mcp-tasks/make-nullable
+               {:responses
+                {:work-on [(make-work-on-response)]
+                 :show [(make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        ;; Post-merge check: PR still open (not closed)
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})]
+                 :why-blocked [(make-blocking-response)]}})
+              dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 502})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    _ (sc/send! session-id :wait-pr-merge)
+                    _ (graph/query [`(resolvers/pr-merge!
+                                      {:engine/session-id ~session-id})])]
+                ;; Wait for skill thread to complete and re-derive
+                (resolvers/await-skill-threads!)
+                ;; PR state unchanged → no-progress → escalated
+                (is (contains? (sc/current-state session-id) :escalated)
+                    "session escalates when merge doesn't change PR")))))))
 
     (testing "returns error when session not in :wait-pr-merge"
       (with-execute-state
