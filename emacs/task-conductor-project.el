@@ -366,14 +366,12 @@ Clears the task cache so tasks are re-fetched from CLI on next expand.
 Pre-fetches tasks for currently-expanded projects so they remain visible
 after refresh.  Preserves which project sections were expanded."
   (interactive)
-  (let* ((expanded (task-conductor-project--expanded-paths))
-         (fresh-tasks (make-hash-table :test #'equal)))
-    ;; Pre-fetch fresh tasks for expanded paths before clearing cache
-    (dolist (path expanded)
-      (puthash path (task-conductor-project--fetch-tasks path) fresh-tasks))
+  (let* ((expanded (task-conductor-project--expanded-paths)))
     (clrhash task-conductor-project--task-cache)
+    ;; Pre-fetch fresh tasks for expanded paths directly into cache
     (dolist (path expanded)
-      (puthash path (gethash path fresh-tasks) task-conductor-project--task-cache))
+      (puthash path (task-conductor-project--fetch-tasks path)
+               task-conductor-project--task-cache))
     (if (not (task-conductor-dev-env--connected-p))
         (progn
           (task-conductor-project--render nil)
