@@ -200,10 +200,12 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
 
 (defun task-conductor-sessions--refresh ()
   "Query JVM for sessions and re-render.  No user-facing message."
-  (if (not (task-conductor-dev-env--connected-p))
-      (task-conductor-sessions--render nil)
-    (task-conductor-dev-env-query-sessions)
-    (task-conductor-sessions--render task-conductor-dev-env--cached-sessions)))
+  (when-let ((buf (get-buffer task-conductor-sessions--buffer-name)))
+    (with-current-buffer buf
+      (if (not (task-conductor-dev-env--connected-p))
+          (task-conductor-sessions--render nil)
+        (task-conductor-dev-env-query-sessions)
+        (task-conductor-sessions--render task-conductor-dev-env--cached-sessions)))))
 
 (defun task-conductor-sessions-refresh ()
   "Refresh session list from JVM and re-render."

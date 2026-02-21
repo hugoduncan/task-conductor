@@ -115,7 +115,9 @@ A list of plists, each with :project/path, :project/name, and optionally
   "Return non-nil if connected to task-conductor as a dev-env."
   (and task-conductor-dev-env--dev-env-id
        (fboundp 'cider-connected-p)
-       (cider-connected-p)))
+       (let ((default-directory (or task-conductor-dev-env--project-dir
+                                    default-directory)))
+         (cider-connected-p))))
 
 ;;; UUID generation
 
