@@ -26,6 +26,8 @@
 ;;   g   - Refresh project list from JVM
 ;;   c   - Create a new project
 ;;   d   - Delete project at point
+;;   e   - Execute task or story at point
+;;   k   - Cancel execution at point
 ;;   r   - Rename project at point
 ;;   RET - Open project directory in dired
 ;;   q   - Quit buffer
@@ -99,6 +101,30 @@ On any error, returns (:error \"message\")."
               (lambda (a b) (< (plist-get a :id) (plist-get b :id)))))
     (error (list :error (error-message-string err)))))
 
+;;; Session lookup
+
+(defun task-conductor-project--task-id-match-p (a b)
+  "Return non-nil if task IDs A and B refer to the same task.
+Handles numeric and string representations."
+  (or (equal a b)
+      (and (numberp a) (stringp b) (equal (number-to-string a) b))
+      (and (stringp a) (numberp b) (equal a (number-to-string b)))))
+
+(defun task-conductor-project--find-session (task-id &optional project-dir)
+  "Find a session matching TASK-ID in cached session data.
+Searches `task-conductor-dev-env--cached-sessions' for a session
+whose :task-id matches TASK-ID.  When PROJECT-DIR is non-nil, also
+filters by :project-dir.  Handles both numeric and string task-id
+comparison.  Returns the session plist or nil if not found."
+  (when task-id
+    (cl-find-if
+     (lambda (session)
+       (and (task-conductor-project--task-id-match-p
+             task-id (plist-get session :task-id))
+            (or (null project-dir)
+                (equal project-dir (plist-get session :project-dir)))))
+     task-conductor-dev-env--cached-sessions)))
+
 ;;; Project CRUD
 
 (defun task-conductor-project--eval-or-error (form)
@@ -167,6 +193,30 @@ Nil until first use; initialized by `task-conductor-project-mode'.")
 
 ;;; Task formatting
 
+(defvar task-conductor-project--play-icon-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] #'task-conductor-project-execute)
+    map)
+  "Keymap for the ▶ play icon on task lines without an active session.")
+
+(defvar task-conductor-project--stop-icon-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] #'task-conductor-project-cancel)
+    map)
+  "Keymap for the ⏹ stop icon on task lines with a running or escalated session.")
+
+(defun task-conductor-project--task-execution-icon (session-state)
+  "Return an execution status icon for SESSION-STATE, or nil.
+Maps session state keywords to unicode icons: idle, running,
+escalated, and wait-pr-merge states each have a distinct icon.
+Returns nil for unrecognized or nil states."
+  (pcase session-state
+    (:idle          "⏸")
+    (:running       "🔄")
+    (:escalated     "🔔")
+    (:wait-pr-merge "🔀")
+    (_              nil)))
+
 (defun task-conductor-project--task-type-icon (type)
   "Return a bracketed type icon for task TYPE string."
   (pcase type
@@ -186,14 +236,39 @@ Nil until first use; initialized by `task-conductor-project-mode'.")
     ((or "blocked" :blocked)             "[!]")
     (_                                   "[ ]")))
 
-(defun task-conductor-project--format-task-entry (task)
+(defun task-conductor-project--format-task-entry (task &optional project-path)
   "Format TASK plist as a single display line.
-Returns a string like `[T][ ] #42 Some title'."
-  (format "    %s%s #%d %s"
-          (task-conductor-project--task-type-icon (plist-get task :type))
-          (task-conductor-project--task-status-icon (plist-get task :status))
-          (plist-get task :id)
-          (plist-get task :title)))
+Returns a string like `[T][ ] #42 Some title'.
+When a session matches TASK's id, appends an execution status icon.
+For running or escalated sessions, also appends a clickable ⏹ stop icon.
+When no session is active, appends a clickable ▶ play icon instead."
+  (let* ((task-id (plist-get task :id))
+         (base (format "    %s%s #%d %s"
+                       (task-conductor-project--task-type-icon (plist-get task :type))
+                       (task-conductor-project--task-status-icon (plist-get task :status))
+                       task-id
+                       (plist-get task :title)))
+         (session (task-conductor-project--find-session task-id project-path))
+         (state (when session (plist-get session :state)))
+         (state-icon (when session
+                       (task-conductor-project--task-execution-icon state))))
+    (cond
+     ((and state-icon (memq state '(:running :escalated)))
+      (concat base
+              " " (propertize state-icon 'task-conductor-task-id task-id)
+              " " (propertize "⏹"
+                              'task-conductor-task-id task-id
+                              'mouse-face 'highlight
+                              'keymap task-conductor-project--stop-icon-map)))
+     (state-icon
+      (concat base " " (propertize state-icon 'task-conductor-task-id task-id)))
+     (session
+      base)
+     (t
+      (concat base " " (propertize "▶"
+                                   'task-conductor-task-id task-id
+                                   'mouse-face 'highlight
+                                   'keymap task-conductor-project--play-icon-map))))))
 
 (defun task-conductor-project--insert-task-children (project-path)
   "Insert task child sections for PROJECT-PATH from cache only.
@@ -210,7 +285,8 @@ On a cached error value, inserts a warning message."
           (magit-insert-section (task-conductor-project-task task)
             (magit-insert-heading
               (format "%s\n"
-                      (task-conductor-project--format-task-entry task))))))))))
+                      (task-conductor-project--format-task-entry
+                       task project-path))))))))))
 
 ;;; Section traversal and expansion tracking
 
@@ -360,6 +436,74 @@ expansion state and keeps the task cache intact."
 
 ;;; Interactive commands
 
+(defun task-conductor-project--task-context-at-point ()
+  "Return plist with :task-id and :project-dir from task section at point.
+Walks up from a task-conductor-project-task section to its parent
+task-conductor-project-entry section to find the project directory.
+Returns nil if not on a task section or project-dir is unavailable."
+  (when-let ((section (magit-current-section)))
+    (when (eq (oref section type) 'task-conductor-project-task)
+      (let* ((task (oref section value))
+             (task-id (plist-get task :id))
+             (parent (oref section parent))
+             (project-dir
+              (when (and parent
+                         (eq (oref parent type) 'task-conductor-project-entry))
+                (plist-get (oref parent value) :project/path))))
+        (when (and task-id project-dir)
+          (list :task-id task-id :project-dir project-dir))))))
+
+(defun task-conductor-project-execute ()
+  "Start automated execution of the task or story at point.
+Extracts task-id and project-dir from the task section at point,
+then calls the execute! mutation via nREPL.  Shows a confirmation
+message on success.  Signals `user-error' when not on a task or
+when not connected to task-conductor."
+  (interactive)
+  (let ((ctx (task-conductor-project--task-context-at-point)))
+    (unless ctx
+      (user-error "No task at point"))
+    (let* ((task-id (plist-get ctx :task-id))
+           (project-dir (plist-get ctx :project-dir))
+           (result (task-conductor-project--eval-or-error
+                    (format
+                     "(task-conductor.emacs-dev-env.interface/execute-task-by-id %S %S %d)"
+                     task-conductor-dev-env--dev-env-id project-dir task-id))))
+      (if (and (listp result) (eq :error (plist-get result :status)))
+          (message "Error starting execution of task %d: %s"
+                   task-id
+                   (or (plist-get result :message) "unknown"))
+        (message "Started execution of task %d" task-id)))))
+
+(defun task-conductor-project-cancel ()
+  "Cancel execution for the task at point.
+Extracts the session-id from the matching cached session and calls
+`stop!' on the statechart engine via nREPL.
+Signals `user-error' when not on a task section, no active session
+exists, the session is not running or escalated, or nREPL is not
+connected."
+  (interactive)
+  (let ((ctx (task-conductor-project--task-context-at-point)))
+    (unless ctx
+      (user-error "No task at point"))
+    (let* ((task-id (plist-get ctx :task-id))
+           (project-dir (plist-get ctx :project-dir))
+           (session (task-conductor-project--find-session task-id project-dir)))
+      (unless session
+        (user-error "No active session for task %d" task-id))
+      (let ((state (plist-get session :state)))
+        (unless (memq state '(:running :escalated))
+          (user-error "Task %d is not running or escalated" task-id))
+        (let* ((session-id (plist-get session :session-id))
+               (result (task-conductor-project--eval-or-error
+                        (format
+                         "(task-conductor.statechart-engine.interface/stop! %S)"
+                         session-id))))
+          (if (and (listp result) (eq :error (plist-get result :status)))
+              (user-error "Cancel failed: %s"
+                          (or (plist-get result :message) "unknown"))
+            (message "Cancelled execution for task %d" task-id)))))))
+
 (defun task-conductor-project-refresh ()
   "Refresh the project list from the JVM.
 Clears the task cache so tasks are re-fetched from CLI on next expand.
@@ -378,6 +522,7 @@ after refresh.  Preserves which project sections were expanded."
         (progn
           (task-conductor-project--render nil)
           (message "Not connected to task-conductor"))
+      (task-conductor-dev-env-query-sessions)
       (let ((result (task-conductor-project--list)))
         (if (eq :ok (plist-get result :status))
             (let ((projects (append (plist-get result :projects) nil)))
@@ -462,6 +607,8 @@ Prompts for directory path and optional name."
     (define-key map (kbd "g") #'task-conductor-project-refresh)
     (define-key map (kbd "c") #'task-conductor-project-create)
     (define-key map (kbd "d") #'task-conductor-project-delete)
+    (define-key map (kbd "e") #'task-conductor-project-execute)
+    (define-key map (kbd "k") #'task-conductor-project-cancel)
     (define-key map (kbd "r") #'task-conductor-project-rename)
     (define-key map (kbd "RET") #'task-conductor-project-open-dired)
     (define-key map (kbd "q") #'task-conductor-project-quit)

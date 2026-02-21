@@ -78,9 +78,13 @@
 ;;; State Icons
 
 (ert-deftest task-conductor-sessions-state-icon-escalated ()
-  ;; Escalated state shows lightning icon.
-  (should (string= "⚡" (task-conductor-sessions--state-icon :escalated)))
-  (should (string= "⚡" (task-conductor-sessions--state-icon "escalated"))))
+  ;; Escalated state without sub-state shows needs-attention bell icon.
+  (should (string= "🔔" (task-conductor-sessions--state-icon :escalated)))
+  (should (string= "🔔" (task-conductor-sessions--state-icon "escalated")))
+  ;; Running sub-state shows running icon.
+  (should (string= "🔄" (task-conductor-sessions--state-icon :escalated :session-running)))
+  ;; Idle sub-state falls through to default bell icon.
+  (should (string= "🔔" (task-conductor-sessions--state-icon :escalated :session-idle))))
 
 (ert-deftest task-conductor-sessions-state-icon-idle ()
   ;; Idle state shows pause icon.
@@ -123,21 +127,24 @@
 (ert-deftest task-conductor-sessions-partition-empty ()
   ;; Empty list produces empty partitions.
   (let ((result (task-conductor-sessions--partition-by-state nil)))
-    (should (null (plist-get result :escalated)))
+    (should (null (plist-get result :needs-attention)))
+    (should (null (plist-get result :running)))
     (should (null (plist-get result :idle)))
     (should (null (plist-get result :wait-pr-merge)))))
 
 (ert-deftest task-conductor-sessions-partition-mixed ()
-  ;; Sessions are correctly partitioned by state.
+  ;; Escalated sessions without sub-state go to :needs-attention.
   (let ((result (task-conductor-sessions--partition-by-state test-sessions-sample)))
-    (should (= 2 (length (plist-get result :escalated))))
+    (should (= 2 (length (plist-get result :needs-attention))))
+    (should (= 0 (length (plist-get result :running))))
     (should (= 1 (length (plist-get result :idle))))
     (should (= 0 (length (plist-get result :wait-pr-merge))))))
 
 (ert-deftest task-conductor-sessions-partition-with-pr-waiting ()
   ;; :wait-pr-merge sessions are partitioned into their own group.
   (let ((result (task-conductor-sessions--partition-by-state test-sessions-with-pr)))
-    (should (= 1 (length (plist-get result :escalated))))
+    (should (= 1 (length (plist-get result :needs-attention))))
+    (should (= 0 (length (plist-get result :running))))
     (should (= 1 (length (plist-get result :idle))))
     (should (= 1 (length (plist-get result :wait-pr-merge))))))
 
@@ -147,7 +154,8 @@
   ;; Rendering empty list produces buffer with group headings.
   (with-sessions-buffer
     (task-conductor-sessions--render nil)
-    (should (string-match-p "Escalated (0)" (buffer-string)))
+    (should (string-match-p "Needs Attention (0)" (buffer-string)))
+    (should (string-match-p "Running (0)" (buffer-string)))
     (should (string-match-p "Idle (0)" (buffer-string)))
     (should (string-match-p "PR Waiting (0)" (buffer-string)))
     (should (string-match-p "(none)" (buffer-string)))))
@@ -157,13 +165,14 @@
   (with-sessions-buffer
     (task-conductor-sessions--render test-sessions-sample)
     (let ((content (buffer-string)))
-      (should (string-match-p "Escalated (2)" content))
+      (should (string-match-p "Needs Attention (2)" content))
+      (should (string-match-p "Running (0)" content))
       (should (string-match-p "Idle (1)" content))
       (should (string-match-p "PR Waiting (0)" content))
       (should (string-match-p "Fix auth" content))
       (should (string-match-p "Add tests" content))
       (should (string-match-p "Refactor DB" content))
-      (should (string-match-p "⚡" content))
+      (should (string-match-p "🔔" content))
       (should (string-match-p "⏸" content)))))
 
 (ert-deftest task-conductor-sessions-render-with-pr-waiting ()
@@ -393,7 +402,7 @@
             (task-conductor-sessions-mode))
           (task-conductor-sessions-rerender-if-live)
           (with-current-buffer buf
-            (should (string-match-p "Escalated" (buffer-string)))))
+            (should (string-match-p "Needs Attention" (buffer-string)))))
       (kill-buffer buf))))
 
 (provide 'test-task-conductor-sessions)

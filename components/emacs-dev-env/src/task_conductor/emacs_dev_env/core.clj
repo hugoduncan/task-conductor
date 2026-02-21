@@ -502,6 +502,39 @@
   (with-dev-env _dev-env dev-env-id
     (invoke-project-mutation! :delete {:project/path path})))
 
+;;; Task Execution
+
+(defn execute-task-by-id
+  "Start execution of a task or story via the execute! EQL mutation.
+  Returns {:status :ok :session-id ... :initial-state ...} or
+  {:status :error ...}.
+
+  Parameters:
+    dev-env-id  - String ID from register-emacs-dev-env
+    project-dir - Project directory path
+    task-id     - Task or story ID (integer)"
+  [dev-env-id project-dir task-id]
+  (with-dev-env _dev-env dev-env-id
+    (let [mutation-sym 'task-conductor.project.resolvers/execute!
+          query-result (graph/query
+                        [(list mutation-sym
+                               {:task/project-dir project-dir
+                                :task/id task-id})])
+          result (get query-result mutation-sym)]
+      (cond
+        (nil? result)
+        {:status :error :message "Mutation returned no result"}
+
+        (:execute/error result)
+        {:status :error
+         :message (or (:message (:execute/error result)) "Execution failed")
+         :error (:execute/error result)}
+
+        :else
+        {:status :ok
+         :session-id (:execute/session-id result)
+         :initial-state (:execute/initial-state result)}))))
+
 ;;; Health Check
 
 (def ^:const default-ping-timeout-ms
