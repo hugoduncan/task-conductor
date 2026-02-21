@@ -150,12 +150,15 @@
     :wait-pr-merge
     :merging-pr
     :complete
-    :escalated})
+    :escalated
+    :session-idle
+    :session-running})
 
 (def story-states
   "Valid states for story execution."
   #{:idle :unrefined :refined :has-tasks :done
-    :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated})
+    :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated
+    :session-idle :session-running})
 
 ;;; Action Expression Defs
 ;; Extracted to avoid deeply nested long lines in statecharts.
@@ -210,6 +213,30 @@
   {:expr
    '(task-conductor.project.resolvers/escalate-to-dev-env!
      {})})
+
+;;; Shared Statechart Elements
+
+(defn- escalated-state
+  "Build the :escalated compound state with sub-states.
+  Includes :session-idle/:session-running sub-states.
+  `resume-events` is a coll of event keywords for outgoing
+  transitions that resume normal flow."
+  [resume-events]
+  (apply sc/state {:id :escalated :initial :session-idle}
+         (sc/on-entry {}
+                      (sc/action escalate-action))
+         (sc/state {:id :session-idle}
+                   (sc/transition
+                    {:event :on-active
+                     :target :session-running}))
+         (sc/state {:id :session-running}
+                   (sc/transition
+                    {:event :on-session-idle
+                     :target :session-idle}))
+         (mapv (fn [evt] (sc/transition {:event evt :target evt}))
+               resume-events)))
+
+;;; Statechart Definitions
 
 (def task-statechart
   "Statechart for standalone task execution.
@@ -290,21 +317,10 @@
     ;; Complete - task finished
                  (sc/final {:id :complete})
 
-    ;; Escalated - error, human intervention needed.
-    ;; on-dev-env-close re-derives state to resume.
-                 (sc/state {:id :escalated}
-                           (sc/on-entry {}
-                                        (sc/action escalate-action))
-                           (sc/transition
-                            {:event :unrefined :target :unrefined})
-                           (sc/transition {:event :refined :target :refined})
-                           (sc/transition {:event :done :target :done})
-                           (sc/transition
-                            {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition
-                            {:event :wait-pr-merge :target :wait-pr-merge})
-                           (sc/transition
-                            {:event :complete :target :complete}))))
+    ;; Escalated - error, human intervention needed
+                 (escalated-state
+                  [:unrefined :refined :done
+                   :awaiting-pr :wait-pr-merge :complete])))
 
 (def story-statechart
   "Statechart for story execution.
@@ -405,23 +421,10 @@
     ;; Complete - story finished
                  (sc/final {:id :complete})
 
-    ;; Escalated - error, human intervention needed.
-    ;; on-dev-env-close re-derives state to resume.
-                 (sc/state {:id :escalated}
-                           (sc/on-entry {}
-                                        (sc/action escalate-action))
-                           (sc/transition
-                            {:event :unrefined :target :unrefined})
-                           (sc/transition {:event :refined :target :refined})
-                           (sc/transition
-                            {:event :has-tasks :target :has-tasks})
-                           (sc/transition {:event :done :target :done})
-                           (sc/transition
-                            {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition
-                            {:event :wait-pr-merge :target :wait-pr-merge})
-                           (sc/transition
-                            {:event :complete :target :complete}))))
+    ;; Escalated - error, human intervention needed
+                 (escalated-state
+                  [:unrefined :refined :has-tasks :done
+                   :awaiting-pr :wait-pr-merge :complete])))
 
 ;;; Statechart Registration
 ;; Register statecharts on namespace load for use by execute! mutation.

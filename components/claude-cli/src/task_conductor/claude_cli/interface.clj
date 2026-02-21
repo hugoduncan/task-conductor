@@ -66,6 +66,8 @@
     :disallowed-tools  - Vector of disallowed tool names
     :max-turns         - Maximum number of turns
     :mcp-config        - Path to MCP config file
+    :hooks             - Map of hook event keyword to config vectors, passed
+                         via --settings as inline JSON
     :on-line           - Callback for each raw line (fn [line] ...)
     :on-event          - Callback for each parsed event (fn [event] ...)
 

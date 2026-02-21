@@ -61,11 +61,12 @@
 ;; Step 7: Test hook registration
 ;;
 ;;   From the Clojure REPL:
-;;     (def on-idle-callback (fn [ctx] (println "Idle event:" ctx)))
-;;     (proto/register-hook (:dev-env dev-env) :on-idle on-idle-callback)
+;;     (def on-close-callback (fn [ctx] (println "Close event:" ctx)))
+;;     (proto/register-hook (:dev-env dev-env) "test-session-1" :on-close on-close-callback)
 ;;
-;;   When Claude goes idle (bell character detected), you should see
-;;   "Idle event: {...}" printed in the REPL after a 0.5s debounce.
+;;   When the Claude buffer is killed, you should see
+;;   "Close event: {...}" printed in the REPL.
+;;   Idle/active detection is now handled by CLI hooks (--settings).
 ;;
 ;; Step 8: Test query-transcript
 ;;
@@ -179,6 +180,7 @@
 
 (ert-deftest task-conductor-dev-env-handle-start-session-creates-buffer ()
   ;; Test that start-session starts a claude-code session with opts.
+  ;; claude-code--start receives nil for dir; default-directory is set instead.
   (with-task-conductor-test-state
     (let* ((test-buffer (generate-new-buffer "*test-claude*"))
            (started-with-args nil))
@@ -195,9 +197,11 @@
                                     :task-id 42)))))
               (should (eq :ok (plist-get result :status)))
               (should (gethash "sess-abc" task-conductor-dev-env--sessions))
+              ;; Dir arg is nil; default-directory handles the path
+              (should (null (car started-with-args)))
               ;; Verify claude-code--start was called with resume args
-              (should (equal "/test/dir" (car started-with-args)))
-              (should (equal '("--resume" "claude-123") (cadr started-with-args)))
+              (should (member "--resume" (cadr started-with-args)))
+              (should (member "claude-123" (cadr started-with-args)))
               ;; Verify response includes metadata
               (should (eq t (plist-get result :resumed)))
               (should (eq 42 (plist-get result :task-id)))))
@@ -218,11 +222,50 @@
                            '(:session-id "sess-no-resume"
                              :opts (:dir "/test/dir" :task-id 99)))))
               (should (eq :ok (plist-get result :status)))
-              ;; Verify claude-code--start was called without resume args
-              (should (equal "/test/dir" (car started-with-args)))
+              ;; Dir arg is nil; default-directory handles the path
+              (should (null (car started-with-args)))
+              ;; No resume or hooks means no args
               (should (null (cadr started-with-args)))
               ;; Verify response shows not resumed
               (should (null (plist-get result :resumed)))))
+        (kill-buffer test-buffer)))))
+
+(ert-deftest task-conductor-dev-env-handle-start-session-with-hooks ()
+  ;; Test that start-session passes CLI hooks via --settings to claude-code.
+  (with-task-conductor-test-state
+    (let* ((test-buffer (generate-new-buffer "*test-claude-hooks*"))
+           (started-with-args nil)
+           (hooks-table (make-hash-table :test 'equal)))
+      ;; Build a hooks map like the JVM sends
+      (puthash "UserPromptSubmit"
+               (vector (let ((h (make-hash-table :test 'equal)))
+                         (puthash "hooks"
+                                  (vector (let ((inner (make-hash-table :test 'equal)))
+                                            (puthash "type" "command" inner)
+                                            (puthash "command" "echo active" inner)
+                                            inner))
+                                  h)
+                         h))
+               hooks-table)
+      (unwind-protect
+          (cl-letf (((symbol-function 'claude-code--start)
+                     (lambda (dir &optional args)
+                       (setq started-with-args (list dir args))))
+                    ((symbol-function 'claude-code--find-claude-buffers-for-directory)
+                     (lambda (_dir) (list test-buffer))))
+            (let ((result (task-conductor-dev-env--handle-start-session
+                           `(:session-id "sess-hooks"
+                             :opts (:dir "/test/dir"
+                                    :hooks ,hooks-table)))))
+              (should (eq :ok (plist-get result :status)))
+              ;; Verify --settings arg is present
+              (let ((args (cadr started-with-args)))
+                (should (member "--settings" args))
+                ;; Verify the JSON contains hooks
+                (let ((json-str (cadr (member "--settings" args))))
+                  (should (stringp json-str))
+                  (should (string-match-p "hooks" json-str))
+                  (should (string-match-p "UserPromptSubmit" json-str))))))
         (kill-buffer test-buffer)))))
 
 (ert-deftest task-conductor-dev-env-handle-start-session-reuses-existing ()
@@ -249,10 +292,14 @@
       (should (eq :error (plist-get result2 :status))))))
 
 (ert-deftest task-conductor-dev-env-handle-register-hook-invalid-type ()
-  ;; Test that register-hook rejects invalid hook types.
+  ;; Test that register-hook rejects invalid hook types (including removed :on-idle).
   (with-task-conductor-test-state
     (let ((result (task-conductor-dev-env--handle-register-hook
                    '(:session-id "sess" :hook-type :invalid))))
+      (should (eq :error (plist-get result :status)))
+      (should (string-match-p "Invalid" (plist-get result :message))))
+    (let ((result (task-conductor-dev-env--handle-register-hook
+                   '(:session-id "sess" :hook-type :on-idle))))
       (should (eq :error (plist-get result :status)))
       (should (string-match-p "Invalid" (plist-get result :message))))))
 
@@ -315,17 +362,45 @@
                        '(:command-id "cmd-2" :command :unknown :params nil))))
         (should (eq :unknown-command (plist-get response :error)))))))
 
+;;; hooks-to-settings-args Tests
+
+(ert-deftest task-conductor-dev-env-hooks-to-settings-args-nil ()
+  ;; Returns nil when hooks is nil.
+  (should-not (task-conductor-dev-env--hooks-to-settings-args nil)))
+
+(ert-deftest task-conductor-dev-env-hooks-to-settings-args-returns-settings-flag ()
+  ;; Returns ("--settings" json-string) for non-nil hooks.
+  (let ((hooks (make-hash-table :test 'equal)))
+    (puthash "UserPromptSubmit" (make-hash-table :test 'equal) hooks)
+    (let ((result (task-conductor-dev-env--hooks-to-settings-args hooks)))
+      (should (equal "--settings" (car result)))
+      (should (= 2 (length result)))
+      (should (stringp (cadr result))))))
+
+(ert-deftest task-conductor-dev-env-hooks-to-settings-args-valid-json ()
+  ;; The JSON string parses to an object with a "hooks" key.
+  (let* ((hooks (make-hash-table :test 'equal))
+         (inner (make-hash-table :test 'equal)))
+    (puthash "command" "echo test" inner)
+    (puthash "Notification" inner hooks)
+    (let* ((result (task-conductor-dev-env--hooks-to-settings-args hooks))
+           (json-str (cadr result))
+           (parsed (json-read-from-string json-str)))
+      (should (assoc 'hooks parsed))
+      (let* ((parsed-hooks (cdr (assoc 'hooks parsed)))
+             (notif (cdr (assoc 'Notification parsed-hooks))))
+        (should (equal "echo test" (cdr (assoc 'command notif))))))))
+
 ;;; State Cleanup Tests
 
 (ert-deftest task-conductor-dev-env-cleanup-session-hooks ()
-  ;; Test that cleanup removes hooks and cancels timers.
+  ;; Test that cleanup removes hooks from session hooks table.
   (with-task-conductor-test-state
-    (let ((timer (run-with-timer 1000 nil #'ignore)))
-      (puthash "sess-cleanup"
-               (list :on-idle (list :hook-id "h1" :timer timer))
-               task-conductor-dev-env--session-hooks)
-      (task-conductor-dev-env--cleanup-session-hooks "sess-cleanup")
-      (should-not (gethash "sess-cleanup" task-conductor-dev-env--session-hooks)))))
+    (puthash "sess-cleanup"
+             (list :on-close (list :hook-id "h1"))
+             task-conductor-dev-env--session-hooks)
+    (task-conductor-dev-env--cleanup-session-hooks "sess-cleanup")
+    (should-not (gethash "sess-cleanup" task-conductor-dev-env--session-hooks))))
 
 (provide 'test-task-conductor-dev-env)
 ;;; test-task-conductor-dev-env.el ends here

@@ -36,13 +36,15 @@
             :event event}))
 
 (def ^:private session-notify-states
-  "States that trigger session notification to dev-envs."
-  #{:escalated :idle :wait-pr-merge})
+  "States that trigger session notification to dev-envs.
+  Includes sub-states so idle↔running transitions within :escalated
+  also fire notifications."
+  #{:escalated :idle :wait-pr-merge :session-idle :session-running})
 
 (defn- notify-on-session-state-change
   "Push session data to all dev-envs when a session enters or leaves
-  an escalated/idle state.  Skips when the relevant state set is
-  unchanged (e.g. sub-state transitions within :escalated)."
+  a notify-relevant state, including sub-state transitions within
+  :escalated (idle↔running)."
   [_session-id from-state to-state _event]
   (let [from-relevant (set/intersection from-state session-notify-states)
         to-relevant   (set/intersection to-state session-notify-states)]

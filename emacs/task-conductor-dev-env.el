@@ -34,13 +34,14 @@
 ;;   3. Run M-x task-conductor-dev-env-connect
 ;;
 ;; The package polls the JVM for commands and dispatches them to
-;; claude-code.el for execution.  Hook events (idle, close) are
-;; sent back to the orchestrator.
+;; claude-code.el for execution.  Close events are sent back to the
+;; orchestrator.  Idle/active detection uses Claude CLI hooks.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'claude-code)
+(require 'json)
 (require 'parseedn)
 
 (declare-function cider-connected-p "cider-connection")
@@ -89,7 +90,7 @@ Used to track active claude-code sessions started by the orchestrator.")
 (defvar task-conductor-dev-env--session-hooks
   (make-hash-table :test 'equal)
   "Hash table mapping session-id to hook data plist.
-Each entry is (:on-idle (:hook-id X :timer Y) :on-close (:hook-id X :fn Y)).")
+Each entry is (:on-close (:hook-id X :fn Y)).")
 
 (defvar task-conductor-dev-env--project-dir nil
   "Project directory for CIDER session context.
@@ -109,8 +110,6 @@ A list of plists, each with :session-id, :state, :task-id, :task-title,
 A list of plists, each with :project/path, :project/name, and optionally
 :project/status and :project/active-sessions.")
 
-(defconst task-conductor-dev-env--idle-debounce-seconds 0.5
-  "Debounce interval for idle detection in seconds.")
 
 (defun task-conductor-dev-env--connected-p ()
   "Return non-nil if connected to task-conductor as a dev-env."
@@ -207,7 +206,7 @@ Returns t if delivered, nil if command not found."
 
 (defun task-conductor-dev-env--send-hook-event (hook-type session-id reason)
   "Send hook event to the orchestrator.
-HOOK-TYPE is :on-idle or :on-close.
+HOOK-TYPE is :on-close.
 SESSION-ID identifies the session.
 REASON is :idle, :user-exit, etc."
   (condition-case err
@@ -232,53 +231,6 @@ Returns session-id string or nil if not found."
              task-conductor-dev-env--sessions)
     result))
 
-(defun task-conductor-dev-env--on-idle-debounced (session-id)
-  "Called when bell detected in SESSION-ID's buffer, with debounce.
-Cancels any pending timer and starts a new one."
-  (let* ((hooks (gethash session-id task-conductor-dev-env--session-hooks))
-         (idle-data (plist-get hooks :on-idle))
-         (existing-timer (plist-get idle-data :timer)))
-    (when existing-timer
-      (cancel-timer existing-timer))
-    (let ((new-timer
-           (run-with-timer
-            task-conductor-dev-env--idle-debounce-seconds nil
-            (lambda ()
-              (task-conductor-dev-env--send-hook-event :on-idle session-id :idle)))))
-      (puthash session-id
-               (plist-put hooks :on-idle
-                          (plist-put idle-data :timer new-timer))
-               task-conductor-dev-env--session-hooks))))
-
-(defun task-conductor-dev-env--bell-advice (orig-fun &rest args)
-  "Advice around `claude-code--notify' to detect idle in our sessions.
-ORIG-FUN is the original function, ARGS are its arguments."
-  (let ((session-id (task-conductor-dev-env--find-session-for-buffer (current-buffer))))
-    (when session-id
-      (let* ((hooks (gethash session-id task-conductor-dev-env--session-hooks))
-             (idle-data (plist-get hooks :on-idle)))
-        (when idle-data
-          (task-conductor-dev-env--on-idle-debounced session-id)))))
-  (apply orig-fun args))
-
-(defun task-conductor-dev-env--setup-on-idle-hook (session-id hook-id)
-  "Set up :on-idle hook for SESSION-ID with HOOK-ID.
-Returns t on success."
-  (let ((hooks (or (gethash session-id task-conductor-dev-env--session-hooks)
-                   (puthash session-id '() task-conductor-dev-env--session-hooks))))
-    ;; Cancel any existing timer for this session
-    (let* ((existing (plist-get hooks :on-idle))
-           (existing-timer (plist-get existing :timer)))
-      (when existing-timer
-        (cancel-timer existing-timer)))
-    ;; Store hook data
-    (puthash session-id
-             (plist-put hooks :on-idle (list :hook-id hook-id :timer nil))
-             task-conductor-dev-env--session-hooks)
-    ;; Add advice to claude-code--notify if not already added
-    (unless (advice-member-p #'task-conductor-dev-env--bell-advice 'claude-code--notify)
-      (advice-add 'claude-code--notify :around #'task-conductor-dev-env--bell-advice))
-    t))
 
 (defun task-conductor-dev-env--on-close-handler ()
   "Handler for kill-buffer-hook to detect session close."
@@ -308,24 +260,21 @@ Returns t on success."
 
 (defun task-conductor-dev-env--cleanup-session-hooks (session-id)
   "Clean up all hooks for SESSION-ID."
-  (let ((hooks (gethash session-id task-conductor-dev-env--session-hooks)))
-    (when hooks
-      ;; Cancel idle timer if any
-      (let ((idle-timer (plist-get (plist-get hooks :on-idle) :timer)))
-        (when idle-timer
-          (cancel-timer idle-timer)))
-      ;; Remove from hash table
-      (remhash session-id task-conductor-dev-env--session-hooks)
-      ;; Remove bell advice if no more sessions with on-idle hooks
-      (let ((has-idle-hooks nil))
-        (maphash (lambda (_k v)
-                   (when (plist-get v :on-idle)
-                     (setq has-idle-hooks t)))
-                 task-conductor-dev-env--session-hooks)
-        (unless has-idle-hooks
-          (advice-remove 'claude-code--notify #'task-conductor-dev-env--bell-advice))))))
+  (remhash session-id task-conductor-dev-env--session-hooks))
 
 ;;; Command handlers
+
+(defun task-conductor-dev-env--hooks-to-settings-args (hooks)
+  "Convert HOOKS map to Claude CLI --settings arguments.
+HOOKS is a hash-table mapping event types to hook specifications,
+as received from the JVM via parseedn.
+Returns a list of (\"--settings\" json-string) or nil if HOOKS is nil."
+  ;; Claude CLI --settings requires JSON (not EDN).  `json-encode'
+  ;; treats the plist (:hooks <hash-table>) as a JSON object: keyword
+  ;; keys become strings (stripping ":"), and the hash-table from
+  ;; parseedn is recursively converted to a nested JSON object.
+  (when hooks
+    (list "--settings" (json-encode `(:hooks ,hooks)))))
 
 (cl-defun task-conductor-dev-env--handle-start-session (params)
   "Handle :start-session command with PARAMS.
@@ -334,14 +283,17 @@ OPTS can contain:
   :dir              - working directory for the session (story workspace)
   :claude-session-id - Claude session ID to resume with --resume
   :task-id          - task/story ID being worked on
+  :hooks            - CLI hooks map for idle/active detection
 
 Starts a new Claude session in the specified directory, optionally
-resuming a previous Claude conversation."
+resuming a previous Claude conversation.  When HOOKS are provided,
+they are passed to Claude CLI via --settings for event-based detection."
   (let* ((session-id (plist-get params :session-id))
          (opts (plist-get params :opts))
          (dir (plist-get opts :dir))
          (claude-session-id (plist-get opts :claude-session-id))
-         (task-id (plist-get opts :task-id)))
+         (task-id (plist-get opts :task-id))
+         (hooks (plist-get opts :hooks)))
     (unless session-id
       (cl-return-from task-conductor-dev-env--handle-start-session
         '(:status :error :message "Missing :session-id in params")))
@@ -352,12 +304,11 @@ resuming a previous Claude conversation."
         (let* ((work-dir (expand-file-name (or dir task-conductor-dev-env--project-dir default-directory)))
                (default-directory work-dir)
                (resume-args (when claude-session-id
-                              (list "--resume" claude-session-id))))
-          ;; Start claude-code with optional resume
-          ;; ARG=nil (no prefix), default-directory is already set to work-dir
-          (if resume-args
-              (claude-code--start nil resume-args)
-            (claude-code--start nil nil))
+                              (list "--resume" claude-session-id)))
+               (settings-args (task-conductor-dev-env--hooks-to-settings-args hooks))
+               (all-args (append resume-args settings-args)))
+          ;; Start claude-code with optional resume and CLI hooks
+          (claude-code--start nil (when all-args all-args))
           ;; Find the buffer that was just created
           ;; Try claude-code's function first, then fall back to matching default-directory
           (let ((bufs (or (claude-code--find-claude-buffers-for-directory work-dir)
@@ -378,7 +329,7 @@ resuming a previous Claude conversation."
 
 (cl-defun task-conductor-dev-env--handle-register-hook (params)
   "Handle :register-hook command with PARAMS.
-PARAMS should contain :session-id and :hook-type (:on-idle or :on-close).
+PARAMS should contain :session-id and :hook-type (:on-close).
 Returns response plist with :status and :hook-id on success."
   (let ((session-id (plist-get params :session-id))
         (hook-type (plist-get params :hook-type)))
@@ -388,7 +339,7 @@ Returns response plist with :status and :hook-id on success."
     (unless hook-type
       (cl-return-from task-conductor-dev-env--handle-register-hook
         '(:status :error :message "Missing :hook-type")))
-    (unless (memq hook-type '(:on-idle :on-close))
+    (unless (memq hook-type '(:on-close))
       (cl-return-from task-conductor-dev-env--handle-register-hook
         `(:status :error :message ,(format "Invalid hook-type: %s" hook-type))))
     (let ((buffer (gethash session-id task-conductor-dev-env--sessions)))
@@ -396,15 +347,9 @@ Returns response plist with :status and :hook-id on success."
         (cl-return-from task-conductor-dev-env--handle-register-hook
           `(:status :error :message ,(format "Session not found or buffer dead: %s" session-id))))
       (let ((hook-id (task-conductor-dev-env--generate-uuid)))
-        (pcase hook-type
-          (:on-idle
-           (if (task-conductor-dev-env--setup-on-idle-hook session-id hook-id)
-               `(:status :ok :hook-id ,hook-id)
-             '(:status :error :message "Failed to setup on-idle hook")))
-          (:on-close
-           (if (task-conductor-dev-env--setup-on-close-hook session-id hook-id)
-               `(:status :ok :hook-id ,hook-id)
-             '(:status :error :message "Failed to setup on-close hook"))))))))
+        (if (task-conductor-dev-env--setup-on-close-hook session-id hook-id)
+            `(:status :ok :hook-id ,hook-id)
+          '(:status :error :message "Failed to setup on-close hook"))))))
 
 (defun task-conductor-dev-env--strip-ansi-codes (string)
   "Remove ANSI escape codes from STRING."

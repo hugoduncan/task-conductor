@@ -96,7 +96,8 @@ rule NotifyOnStateChange {
 
 config {
     -- States that trigger a desktop notification on entry.
-    session_notify_states: Set<TaskState> = { escalated, idle, wait_pr_merge }
+    -- Includes sub-states so idle↔running transitions fire notifications.
+    session_notify_states: Set<TaskState> = { escalated, idle, wait_pr_merge, session_idle, session_running }
 }
 
 
@@ -176,6 +177,7 @@ rule ActiveSessions {
     ensures: result = matching.map(s => SessionSummary {
         session_id: s.id,
         state: s.current_state intersect active_states . first,
+        sub_state: derive_sub_state(s.current_state),   -- session_idle | session_running | nil
         task_id: s.task_id,
         task_title: s.task_title,
         entered_state_at: s.entered_state_at,
@@ -188,6 +190,7 @@ value SessionSummary {
     -- Session data for the sessions view display.
     session_id: String
     state: String
+    sub_state: String?                              -- session_idle | session_running (escalated only, nil otherwise)
     task_id: Integer
     task_title: String?
     entered_state_at: Timestamp?

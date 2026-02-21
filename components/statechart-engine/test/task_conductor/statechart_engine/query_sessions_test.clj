@@ -10,7 +10,8 @@
    [task-conductor.statechart-engine.test-helpers :refer [with-clean-engine]]))
 
 (def test-chart
-  "Chart with idle, running, escalated, and wait-pr-merge states."
+  "Chart with idle, running, escalated (compound with sub-states),
+  and wait-pr-merge states."
   (statechart {:initial :idle}
               (state {:id :idle}
                      (transition {:event :start :target :running}))
@@ -18,8 +19,14 @@
                      (transition {:event :error :target :escalated})
                      (transition {:event :done :target :idle})
                      (transition {:event :pr-ready :target :wait-pr-merge}))
-              (state {:id :escalated}
-                     (transition {:event :resolve :target :idle}))
+              (state {:id :escalated :initial :session-idle}
+                     (transition {:event :resolve :target :idle})
+                     (state {:id :session-idle}
+                            (transition {:event :on-active
+                                         :target :session-running}))
+                     (state {:id :session-running}
+                            (transition {:event :on-session-idle
+                                         :target :session-idle})))
               (state {:id :wait-pr-merge}
                      (transition {:event :merge-pr :target :idle}))))
 
@@ -51,6 +58,7 @@
             (is (= 1 (count result)))
             (is (= sid (:session-id (first result))))
             (is (= :escalated (:state (first result))))
+            (is (= :session-idle (:sub-state (first result))))
             (is (= 10 (:task-id (first result))))
             (is (= "Esc task" (:task-title (first result))))
             (is (inst? (:entered-state-at (first result))))))))
@@ -63,6 +71,7 @@
         (let [result (core/query-sessions #{:idle})]
           (is (= 1 (count result)))
           (is (= :idle (:state (first result))))
+          (is (nil? (:sub-state (first result))))
           (is (= 5 (:task-id (first result)))))))
 
     (testing "matches multiple filter states"
@@ -136,7 +145,14 @@
                                      :branch "main"}})
         (let [result (core/query-sessions #{:idle})]
           (is (= 99 (:pr-num (first result))))
-          (is (= "main" (:branch (first result)))))))))
+          (is (= "main" (:branch (first result)))))))
+
+    (testing "returns nil :sub-state for non-escalated sessions"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (core/start! ::chart {:data {:task-id 1}})
+        (let [result (core/query-sessions #{:idle})]
+          (is (nil? (:sub-state (first result)))))))))
 
 (deftest select-priority-state-test
   ;; Tests priority-based state selection: :escalated > :idle > lexicographic.
@@ -184,3 +200,54 @@
             (is (= "/b" (:project-dir (get by-id s2))))
             (is (= 1 (:task-id (get by-id s1))))
             (is (= 2 (:task-id (get by-id s2))))))))))
+
+(deftest sub-state-test
+  ;; Tests for :sub-state derivation in session summaries.
+  ;; Verifies that escalated sessions expose :session-idle/:session-running
+  ;; and non-escalated sessions have nil :sub-state.
+  (testing "sub-state in query-sessions"
+    (testing "returns :session-idle for newly escalated session"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (let [sid (core/start! ::chart {:data {:task-id 1}})]
+          (core/send! sid :start)
+          (core/send! sid :error)
+          (let [result (first (core/query-sessions #{:escalated}))]
+            (is (= :escalated (:state result)))
+            (is (= :session-idle (:sub-state result)))))))
+
+    (testing "returns :session-running after :on-active"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (let [sid (core/start! ::chart {:data {:task-id 2}})]
+          (core/send! sid :start)
+          (core/send! sid :error)
+          (core/send! sid :on-active)
+          (let [result (first (core/query-sessions #{:escalated}))]
+            (is (= :escalated (:state result)))
+            (is (= :session-running (:sub-state result)))))))
+
+    (testing "returns :session-idle after :on-session-idle"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (let [sid (core/start! ::chart {:data {:task-id 3}})]
+          (core/send! sid :start)
+          (core/send! sid :error)
+          (core/send! sid :on-active)
+          (core/send! sid :on-session-idle)
+          (let [result (first (core/query-sessions #{:escalated}))]
+            (is (= :session-idle (:sub-state result))))))))
+
+  (testing "sub-state in all-session-summaries"
+    (testing "includes sub-state for escalated and nil for others"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (let [s1 (core/start! ::chart {:data {:task-id 1}})
+              s2 (core/start! ::chart {:data {:task-id 2}})]
+          (core/send! s1 :start)
+          (core/send! s1 :error)
+          (core/send! s1 :on-active)
+          (let [result (core/all-session-summaries)
+                by-id (into {} (map (juxt :session-id identity)) result)]
+            (is (= :session-running (:sub-state (get by-id s1))))
+            (is (nil? (:sub-state (get by-id s2))))))))))

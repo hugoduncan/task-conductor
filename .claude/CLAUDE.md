@@ -198,7 +198,7 @@ Protocol for hosting interactive Claude sessions outside JVM.
 - `query-transcript(dev-env, session-id)` - Get conversation
 - `connected?(dev-env)` - Health check
 
-**Hook types**: `:on-close`, `:on-idle`
+**Hook types**: `:on-close`
 
 **Handoff flow**:
 1. Statechart enters running state → calls `dev-env-start-session!`

@@ -26,12 +26,14 @@ config {
     buffer_name: String = "*task-conductor-sessions*"
     refresh_interval: Duration = 5.seconds
     state_icons: Map<String, String> = {
-        escalated: "⚡",
+        needs_attention: "🔔",                  -- escalated + session_idle (or nil sub-state)
+        running: "🔄",                          -- escalated + session_running
         idle: "⏸",
         wait_pr_merge: "🔀"
     }
     state_groups: List<StateGroup> = [
-        { key: escalated, label: "Escalated" },
+        { key: needs_attention, label: "Needs Attention" },
+        { key: running, label: "Running" },
         { key: idle, label: "Idle" },
         { key: wait_pr_merge, label: "PR Waiting" }
     ]
@@ -59,6 +61,7 @@ value SessionEntry {
     -- A session as displayed in the buffer.
     session_id: String
     state: String                             -- escalated | idle | wait_pr_merge
+    sub_state: String?                        -- session_idle | session_running (escalated only)
     task_id: Integer
     task_title: String?
     entered_state_at: Timestamp?              -- when session entered current state
@@ -98,10 +101,16 @@ rule RenderSessions {
 }
 
 rule PartitionByState {
-    -- Partition sessions into groups keyed by state.
-    -- Returns plist with :escalated, :idle, :wait_pr_merge keys.
+    -- Partition sessions into four groups using state and sub_state.
+    -- Escalated sessions are split: session_running → running,
+    -- session_idle or nil sub_state → needs_attention.
+    -- Returns map with :needs_attention, :running, :idle, :wait_pr_merge keys.
     when: PartitionRequested(sessions: List<SessionEntry>)
-    ensures: result = sessions.group_by(s => s.state)
+    ensures: result = sessions.group_by(s =>
+        if s.state = escalated and s.sub_state = session_running: running
+        else if s.state = escalated: needs_attention
+        else: s.state
+    )
 }
 
 rule InsertGroup {

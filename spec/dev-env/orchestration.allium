@@ -101,6 +101,8 @@ enum TaskState {
     merging_pr
     complete
     escalated
+    session_idle                                -- escalated sub-state: waiting for attention
+    session_running                             -- escalated sub-state: actively working
 }
 
 
@@ -250,9 +252,23 @@ rule TaskStatechart {
     -- complete: terminal
     final complete
 
-    -- escalated: human intervention needed
+    -- escalated: human intervention needed (compound state)
     state escalated {
         entry: EscalateToDevEnv(session)
+
+        -- Sub-states for idle/running tracking.
+        -- IDs use session_ prefix to avoid collision with top-level :idle.
+        initial session_idle
+
+        state session_idle {
+            on on_active -> session_running
+        }
+
+        state session_running {
+            on on_session_idle -> session_idle
+        }
+
+        -- Outgoing transitions from compound parent
         on unrefined -> unrefined
         on refined -> refined
         on done -> done
@@ -338,8 +354,20 @@ rule StoryStatechart {
 
     final complete
 
+    -- escalated: human intervention needed (compound state)
     state escalated {
         entry: EscalateToDevEnv(session)
+
+        initial session_idle
+
+        state session_idle {
+            on on_active -> session_running
+        }
+
+        state session_running {
+            on on_session_idle -> session_idle
+        }
+
         on unrefined -> unrefined
         on refined -> refined
         on has_tasks -> has_tasks
@@ -360,7 +388,7 @@ rule Execute {
     -- 2. Fetch task data via EQL
     -- 3. Derive initial state
     -- 4. Start statechart session
-    -- 5. Select dev-env and register on-idle hook
+    -- 5. Select dev-env and register on-close hook
     -- 6. Send initial state as first event
     when: ExecuteRequested(project_dir, task_id)
     let worktree = WorkOn(project_dir, task_id)
@@ -380,10 +408,6 @@ rule Execute {
     else:
         DeriveTaskState(task)
     ensures: chart.started(session)
-    ensures:
-        let dev_env = SelectDevEnv(Registry)
-        if dev_env exists:
-            RegisterDevEnvHook(dev_env, session, on_idle, complete)
     ensures: chart.send(session, initial_state)
 }
 
@@ -489,12 +513,20 @@ rule NoProgress {
 rule EscalateToDevEnv {
     -- Select a dev-env, start an interactive session, register on-close
     -- hook to resume the statechart when the human finishes.
+    -- Builds CLI hooks for idle/active detection via UserPromptSubmit
+    -- and Notification events.
     when: EscalateRequested(session: ExecutionSession)
     let dev_env = SelectDevEnv(Registry)
     requires: dev_env exists
+    let nrepl_port = read_file(session.project_dir + "/.nrepl-port")
+    let hooks = {
+        UserPromptSubmit: clj_nrepl_eval(nrepl_port, send_event(session.id, on_active)),
+        Notification: clj_nrepl_eval(nrepl_port, send_event(session.id, on_session_idle))
+    }
     let opts = {
         dir: session.project_dir,
-        task_id: session.task_id
+        task_id: session.task_id,
+        hooks: hooks
     }
     -- If we have a Claude session-id from a no-progress skill,
     -- pass it for conversation resumption.
@@ -530,7 +562,8 @@ rule OnDevEnvClose {
 --- Dev-Env Hook Bridge
 --
 -- Connects dev-env hooks to statechart events.
--- Used by Execute to register on-idle → :complete events.
+-- Note: idle/active detection now uses CLI hooks (UserPromptSubmit,
+-- Notification) registered in EscalateToDevEnv, not dev-env hooks.
 
 rule RegisterDevEnvHook {
     -- Register a dev-env hook that sends a statechart event when fired.

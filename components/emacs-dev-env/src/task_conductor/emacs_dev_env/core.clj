@@ -275,7 +275,7 @@
 
   Parameters:
     dev-env   - The EmacsDevEnv instance
-    hook-type - :on-idle or :on-close
+    hook-type - :on-close
     context   - Map with :session-id, :timestamp, :reason"
   [dev-env hook-type context]
   (let [hooks (get @(:state dev-env) :hooks)]
@@ -293,9 +293,9 @@
 
   Parameters:
     dev-env    - The EmacsDevEnv instance
-    hook-type  - :on-idle or :on-close
+    hook-type  - :on-close
     session-id - The session that triggered the event
-    reason     - Why the event occurred (:user-exit, :error, :timeout, :idle)
+    reason     - Why the event occurred (:user-exit, :error, :timeout)
 
   Returns true after invoking hooks."
   [dev-env hook-type session-id reason]
@@ -356,9 +356,9 @@
 
   Parameters:
     dev-env-id - String ID returned from register-emacs-dev-env
-    hook-type  - :on-idle or :on-close
+    hook-type  - :on-close
     session-id - The session that triggered the event
-    reason     - Why the event occurred (:user-exit, :error, :timeout, :idle)
+    reason     - Why the event occurred (:user-exit, :error, :timeout)
 
   Returns true after invoking hooks, or {:error ...} if dev-env not found."
   [dev-env-id hook-type session-id reason]

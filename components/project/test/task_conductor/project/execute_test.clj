@@ -309,12 +309,33 @@
               ":done event should be ignored in :unrefined state"))))
 
     (testing "transitions to :escalated on :error"
-      (with-clean-test-env
-        (sc/register! ::task-error execute/task-statechart)
-        (let [sid (sc/start! ::task-error)]
-          (sc/send! sid :unrefined)
-          (sc/send! sid :error)
-          (is (contains? (sc/current-state sid) :escalated)))))
+      (testing "enters :escalated with :idle sub-state"
+        (with-clean-test-env
+          (sc/register! ::task-error execute/task-statechart)
+          (let [sid (sc/start! ::task-error)]
+            (sc/send! sid :unrefined)
+            (sc/send! sid :error)
+            (is (= #{:escalated :session-idle} (sc/current-state sid)))))))
+
+    (testing ":escalated sub-state transitions"
+      (testing ":on-active transitions to :running"
+        (with-clean-test-env
+          (sc/register! ::task-sub1 execute/task-statechart)
+          (let [sid (sc/start! ::task-sub1)]
+            (sc/send! sid :unrefined)
+            (sc/send! sid :error)
+            (sc/send! sid :on-active)
+            (is (= #{:escalated :session-running} (sc/current-state sid))))))
+
+      (testing ":on-session-idle transitions back to :idle"
+        (with-clean-test-env
+          (sc/register! ::task-sub2 execute/task-statechart)
+          (let [sid (sc/start! ::task-sub2)]
+            (sc/send! sid :unrefined)
+            (sc/send! sid :error)
+            (sc/send! sid :on-active)
+            (sc/send! sid :on-session-idle)
+            (is (= #{:escalated :session-idle} (sc/current-state sid)))))))
 
     (testing "transitions from :escalated to derived states"
       (testing "escalated → refined"
@@ -323,7 +344,7 @@
           (let [sid (sc/start! ::task-esc1)]
             (sc/send! sid :unrefined)
             (sc/send! sid :error)
-            (is (contains? (sc/current-state sid) :escalated))
+            (is (= #{:escalated :session-idle} (sc/current-state sid)))
             (sc/send! sid :refined)
             (is (contains? (sc/current-state sid) :refined)))))
 
@@ -343,7 +364,18 @@
             (sc/send! sid :unrefined)
             (sc/send! sid :error)
             (sc/send! sid :complete)
-            (is (= #{} (sc/current-state sid)))))))
+            (is (= #{} (sc/current-state sid))))))
+
+      (testing "from :running sub-state"
+        (with-clean-test-env
+          (sc/register! ::task-esc4 execute/task-statechart)
+          (let [sid (sc/start! ::task-esc4)]
+            (sc/send! sid :unrefined)
+            (sc/send! sid :error)
+            (sc/send! sid :on-active)
+            (is (= #{:escalated :session-running} (sc/current-state sid)))
+            (sc/send! sid :refined)
+            (is (contains? (sc/current-state sid) :refined))))))
 
     (testing ":complete is a final state"
       (testing "terminates statechart (empty configuration)"
@@ -456,12 +488,33 @@
             (is (contains? (sc/current-state sid) :merging-pr))))))
 
     (testing "transitions to :escalated on :error from any state"
-      (with-clean-test-env
-        (sc/register! ::story-error execute/story-statechart)
-        (let [sid (sc/start! ::story-error)]
-          (sc/send! sid :has-tasks)
-          (sc/send! sid :error)
-          (is (contains? (sc/current-state sid) :escalated)))))
+      (testing "enters :escalated with :idle sub-state"
+        (with-clean-test-env
+          (sc/register! ::story-error execute/story-statechart)
+          (let [sid (sc/start! ::story-error)]
+            (sc/send! sid :has-tasks)
+            (sc/send! sid :error)
+            (is (= #{:escalated :session-idle} (sc/current-state sid)))))))
+
+    (testing ":escalated sub-state transitions"
+      (testing ":on-active transitions to :running"
+        (with-clean-test-env
+          (sc/register! ::story-sub1 execute/story-statechart)
+          (let [sid (sc/start! ::story-sub1)]
+            (sc/send! sid :has-tasks)
+            (sc/send! sid :error)
+            (sc/send! sid :on-active)
+            (is (= #{:escalated :session-running} (sc/current-state sid))))))
+
+      (testing ":on-session-idle transitions back to :idle"
+        (with-clean-test-env
+          (sc/register! ::story-sub2 execute/story-statechart)
+          (let [sid (sc/start! ::story-sub2)]
+            (sc/send! sid :has-tasks)
+            (sc/send! sid :error)
+            (sc/send! sid :on-active)
+            (sc/send! sid :on-session-idle)
+            (is (= #{:escalated :session-idle} (sc/current-state sid)))))))
 
     (testing "transitions from :escalated to derived states"
       (testing "escalated → has-tasks"
@@ -470,7 +523,7 @@
           (let [sid (sc/start! ::story-esc1)]
             (sc/send! sid :has-tasks)
             (sc/send! sid :error)
-            (is (contains? (sc/current-state sid) :escalated))
+            (is (= #{:escalated :session-idle} (sc/current-state sid)))
             (sc/send! sid :has-tasks)
             (is (contains? (sc/current-state sid) :has-tasks)))))
 
@@ -490,7 +543,18 @@
             (sc/send! sid :unrefined)
             (sc/send! sid :error)
             (sc/send! sid :complete)
-            (is (= #{} (sc/current-state sid)))))))
+            (is (= #{} (sc/current-state sid))))))
+
+      (testing "from :running sub-state"
+        (with-clean-test-env
+          (sc/register! ::story-esc4 execute/story-statechart)
+          (let [sid (sc/start! ::story-esc4)]
+            (sc/send! sid :has-tasks)
+            (sc/send! sid :error)
+            (sc/send! sid :on-active)
+            (is (= #{:escalated :session-running} (sc/current-state sid)))
+            (sc/send! sid :has-tasks)
+            (is (contains? (sc/current-state sid) :has-tasks))))))
 
     (testing ":complete is a final state"
       (testing "terminates statechart (empty configuration)"
@@ -506,7 +570,8 @@
   (testing "task-states"
     (testing "contains all task statechart states"
       (is (= #{:idle :unrefined :refined :done :awaiting-pr
-               :wait-pr-merge :merging-pr :complete :escalated}
+               :wait-pr-merge :merging-pr :complete :escalated
+               :session-idle :session-running}
              execute/task-states)))))
 
 (deftest story-states-test
@@ -514,5 +579,6 @@
   (testing "story-states"
     (testing "contains all story statechart states"
       (is (= #{:idle :unrefined :refined :has-tasks :done
-               :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated}
+               :awaiting-pr :wait-pr-merge :merging-pr :complete :escalated
+               :session-idle :session-running}
              execute/story-states)))))

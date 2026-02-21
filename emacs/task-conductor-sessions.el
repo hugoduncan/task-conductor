@@ -15,8 +15,9 @@
 
 ;;; Commentary:
 
-;; Displays Claude sessions in escalated, idle, or PR-waiting states
-;; using magit-section for a collapsible, navigable UI.  Session data
+;; Displays Claude sessions grouped by attention priority: needs
+;; attention (escalated+idle), running (escalated+running), idle, and
+;; PR-waiting.  Uses magit-section for a collapsible, navigable UI.  Session data
 ;; comes from the JVM via the dev-env mechanism and is refreshed
 ;; automatically while the buffer is visible.
 ;;
@@ -86,10 +87,14 @@ Returns a string like \"3m ago\", \"1h ago\", \"2d ago\"."
   "Return non-nil if STATE represents the :wait-pr-merge session state."
   (or (eq state :wait-pr-merge) (equal state "wait-pr-merge")))
 
-(defun task-conductor-sessions--state-icon (state)
-  "Return icon string for session STATE keyword."
+(defun task-conductor-sessions--state-icon (state &optional sub-state)
+  "Return icon string for session STATE keyword.
+When STATE is escalated, SUB-STATE distinguishes idle from running."
   (pcase state
-    ((or :escalated "escalated") "⚡")
+    ((or :escalated "escalated")
+     (pcase sub-state
+       ((or :session-running "session-running") "🔄")
+       (_ "🔔")))
     ((or :idle "idle") "⏸")
     ((or :wait-pr-merge "wait-pr-merge") "🔀")
     (_ "?")))
@@ -100,11 +105,12 @@ Shows PR number and branch for :wait-pr-merge sessions."
   (let ((task-id (plist-get session :task-id))
         (task-title (or (plist-get session :task-title) "untitled"))
         (state (plist-get session :state))
+        (sub-state (plist-get session :sub-state))
         (entered (plist-get session :entered-state-at))
         (pr-num (plist-get session :pr-num))
         (branch (plist-get session :branch)))
     (format "%s #%s %s%s  %s"
-            (task-conductor-sessions--state-icon state)
+            (task-conductor-sessions--state-icon state sub-state)
             (if task-id (format "%s" task-id) "?")
             task-title
             (if (and (task-conductor-sessions--wait-pr-merge-p state)
@@ -115,15 +121,24 @@ Shows PR number and branch for :wait-pr-merge sessions."
               "")
             (task-conductor-sessions--format-relative-time entered))))
 
+(defun task-conductor-sessions--session-running-p (sub-state)
+  "Return non-nil if SUB-STATE indicates the session is running."
+  (or (eq sub-state :session-running) (equal sub-state "session-running")))
+
 (defun task-conductor-sessions--partition-by-state (sessions)
   "Partition SESSIONS into groups by state.
-Returns a plist (:escalated LIST :idle LIST :wait-pr-merge LIST)."
-  (let (escalated idle wait-pr-merge)
+Returns a plist with keys :needs-attention :running :idle :wait-pr-merge.
+Escalated sessions are split by :sub-state — :session-running goes to
+:running, everything else (including nil) to :needs-attention."
+  (let (needs-attention running idle wait-pr-merge)
     (dolist (s sessions)
       (let ((state (plist-get s :state)))
         (cond
          ((or (eq state :escalated) (equal state "escalated"))
-          (push s escalated))
+          (if (task-conductor-sessions--session-running-p
+               (plist-get s :sub-state))
+              (push s running)
+            (push s needs-attention)))
          ((or (eq state :idle) (equal state "idle"))
           (push s idle))
          ((task-conductor-sessions--wait-pr-merge-p state)
@@ -131,7 +146,8 @@ Returns a plist (:escalated LIST :idle LIST :wait-pr-merge LIST)."
          (t
           (message "task-conductor-sessions: unknown state %S in session %S"
                    state (plist-get s :session-id))))))
-    (list :escalated (nreverse escalated)
+    (list :needs-attention (nreverse needs-attention)
+          :running (nreverse running)
           :idle (nreverse idle)
           :wait-pr-merge (nreverse wait-pr-merge))))
 
@@ -159,7 +175,8 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
     (erase-buffer)
     (magit-insert-section (task-conductor-sessions-root)
       (magit-insert-heading "Claude Sessions\n")
-      (task-conductor-sessions--insert-group "Escalated" (plist-get parts :escalated))
+      (task-conductor-sessions--insert-group "Needs Attention" (plist-get parts :needs-attention))
+      (task-conductor-sessions--insert-group "Running" (plist-get parts :running))
       (task-conductor-sessions--insert-group "Idle" (plist-get parts :idle))
       (task-conductor-sessions--insert-group "PR Waiting" (plist-get parts :wait-pr-merge))))
   (goto-char (point-min)))

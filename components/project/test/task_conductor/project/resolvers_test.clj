@@ -296,7 +296,7 @@
 
 (deftest execute-test
   ;; Verify execute! mutation correctly starts statechart sessions for tasks
-  ;; and stories, derives initial state, and registers dev-env hooks.
+  ;; and stories, and derives initial state.
   (testing "execute!"
     (testing "starts statechart session for a task"
       (with-execute-state
@@ -374,7 +374,9 @@
                 (is (= :not-found (:error (:execute/error execute-result))))
                 (is (nil? (:execute/session-id execute-result)))))))))
 
-    (testing "registers dev-env hook when dev-env available"
+    (testing "does not register dev-env hooks on execute"
+      ;; Idle detection is handled by CLI hooks in escalate-to-dev-env!,
+      ;; not at execute! time.
       (with-execute-state
         (let [dev-env (dev-env-protocol/make-noop-dev-env)
               _dev-env-id (dev-env-registry/register! dev-env :test)
@@ -389,8 +391,7 @@
                     execute-result (get result `resolvers/execute!)
                     session-id (:execute/session-id execute-result)]
                 (is (string? session-id))
-                ;; Verify hook was registered
-                (is (= 1 (count @(:hooks dev-env))))))))))
+                (is (= 0 (count @(:hooks dev-env))))))))))
 
     (testing "stores session data including task context"
       (with-execute-state
@@ -865,6 +866,79 @@
                   ;; Should have transitioned from :escalated to :done
                   (is (contains? (sc/current-state session-id) :done)))))))))
 
+    (testing "passes CLI hooks when .nrepl-port exists"
+      (fs/with-temp-dir [tmp-dir]
+        (let [project-dir (str (fs/canonicalize tmp-dir))]
+          ;; Create .nrepl-port file in the worktree dir
+          (spit (str project-dir "/.nrepl-port") "7888")
+          (with-execute-state
+            (let [dev-env (dev-env-protocol/make-noop-dev-env)
+                  _ (dev-env-registry/register! dev-env :test)
+                  mcp-nullable
+                  (mcp-tasks/make-nullable
+                   {:responses
+                    {:work-on [(make-work-on-response
+                                {:worktree-path project-dir})]
+                     :show [(make-task-response {:meta {:refined "true"}})]
+                     :why-blocked [(make-blocking-response)]}})]
+              (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+                (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+                  (let [work-result
+                        (graph/query [`(resolvers/execute!
+                                        {:task/project-dir ~project-dir
+                                         :task/id 300})])
+                        session-id (:execute/session-id
+                                    (get work-result `resolvers/execute!))
+                        _ (graph/query [`(resolvers/escalate-to-dev-env!
+                                          {:engine/session-id ~session-id})])
+                        calls @(:calls dev-env)
+                        start-call (first
+                                    (filter #(= :start-session (:op %))
+                                            calls))
+                        hooks (get-in start-call [:opts :hooks])]
+                    (is (some? hooks) "hooks should be present in opts")
+                    (is (contains? hooks :UserPromptSubmit))
+                    (is (contains? hooks :Notification))
+                    ;; Verify hook commands contain session-id and port
+                    (let [active-cmd (get-in hooks
+                                             [:UserPromptSubmit 0
+                                              :hooks 0 :command])
+                          idle-cmd (get-in hooks
+                                           [:Notification 0
+                                            :hooks 0 :command])]
+                      (is (re-find (re-pattern (str session-id))
+                                   active-cmd))
+                      (is (re-find #"7888" active-cmd))
+                      (is (re-find #":on-active" active-cmd))
+                      (is (re-find (re-pattern (str session-id))
+                                   idle-cmd))
+                      (is (re-find #"7888" idle-cmd))
+                      (is (re-find #":on-session-idle" idle-cmd)))))))))))
+
+    (testing "omits hooks when .nrepl-port file is absent"
+      (with-execute-state
+        (let [dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result
+                    (graph/query [`(resolvers/execute!
+                                    {:task/project-dir "/test"
+                                     :task/id 300})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    _ (graph/query [`(resolvers/escalate-to-dev-env!
+                                      {:engine/session-id ~session-id})])
+                    calls @(:calls dev-env)
+                    start-call (first
+                                (filter #(= :start-session (:op %))
+                                        calls))]
+                (is (nil? (get-in start-call [:opts :hooks]))
+                    "hooks should be absent when no .nrepl-port")))))))
+
     (testing "returns error when no dev-env available"
       (with-execute-state
         (let [mcp-nullable (mcp-tasks/make-nullable
@@ -887,6 +961,141 @@
                  (=
                   :no-dev-env
                   (:error (:escalate/error escalate-result))))))))))))
+
+;;; Hook Command Roundtrip Tests
+
+(defn- extract-event-keyword
+  "Parse the statechart event keyword from a hook command string.
+  The command contains a send! call like:
+    (task-conductor.statechart-engine.interface/send! \"sid\" :on-active)
+  Returns the keyword (e.g. :on-active)."
+  [command-str]
+  (when-let [m (re-find #"(:[a-z-]+)\)" command-str)]
+    (keyword (subs (second m) 1))))
+
+(deftest hook-command-statechart-roundtrip-test
+  ;; Verify the full path from hook command generation to statechart
+  ;; sub-state transition. Bridges the gap between build-session-hooks
+  ;; (string generation) and statechart behavior (event handling).
+  (testing "hook command → statechart event roundtrip"
+    (testing "generated hook commands trigger correct sub-state transitions"
+      (fs/with-temp-dir [tmp-dir]
+        (let [project-dir (str (fs/canonicalize tmp-dir))]
+          (spit (str project-dir "/.nrepl-port") "7888")
+          (with-execute-state
+            (let [dev-env (dev-env-protocol/make-noop-dev-env)
+                  _ (dev-env-registry/register! dev-env :test)
+                  mcp-nullable
+                  (mcp-tasks/make-nullable
+                   {:responses
+                    {:work-on [(make-work-on-response
+                                {:worktree-path project-dir})]
+                     :show [(make-task-response)]
+                     :why-blocked [(make-blocking-response)]}})]
+              (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+                (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+                  (let [work-result
+                        (graph/query [`(resolvers/execute!
+                                        {:task/project-dir ~project-dir
+                                         :task/id 600})])
+                        session-id (:execute/session-id
+                                    (get work-result `resolvers/execute!))
+                        ;; Transition idle → unrefined → escalated
+                        ;; execute! starts in :idle, initial-state
+                        ;; tells us the derived state to send
+                        _ (sc/send! session-id :unrefined)
+                        _ (resolvers/await-skill-threads!)
+                        ;; Send :error to transition to :escalated
+                        ;; Entry action calls escalate-to-dev-env! which
+                        ;; finds dev-env + .nrepl-port and passes hooks
+                        _ (sc/send! session-id :error)
+                        _ (is (= #{:escalated :session-idle}
+                                 (sc/current-state session-id)))
+                        calls @(:calls dev-env)
+                        start-call (first
+                                    (filter #(= :start-session (:op %))
+                                            calls))
+                        hooks (get-in start-call [:opts :hooks])
+                        ;; Extract event keywords from command strings
+                        active-cmd (get-in hooks
+                                           [:UserPromptSubmit 0
+                                            :hooks 0 :command])
+                        idle-cmd (get-in hooks
+                                         [:Notification 0
+                                          :hooks 0 :command])
+                        active-event (extract-event-keyword active-cmd)
+                        idle-event (extract-event-keyword idle-cmd)]
+                    ;; Verify parsing extracted the expected events
+                    (is (= :on-active active-event)
+                        "UserPromptSubmit hook should send :on-active")
+                    (is (= :on-session-idle idle-event)
+                        "Notification hook should send :on-session-idle")
+                    ;; Send the active event extracted from hook command
+                    (sc/send! session-id active-event)
+                    (is (= #{:escalated :session-running}
+                           (sc/current-state session-id))
+                        "active hook event transitions to :session-running")
+                    ;; Send the idle event extracted from hook command
+                    (sc/send! session-id idle-event)
+                    (is (= #{:escalated :session-idle}
+                           (sc/current-state session-id))
+                        "idle hook event transitions back to :session-idle")
+                    ;; Verify commands contain the session-id for routing
+                    (is (re-find (re-pattern (str session-id)) active-cmd)
+                        "active command routes to correct session")
+                    (is (re-find (re-pattern (str session-id)) idle-cmd)
+                        "idle command routes to correct session")))))))))
+
+    (testing "hook commands contain valid send! form structure"
+      (fs/with-temp-dir [tmp-dir]
+        (let [project-dir (str (fs/canonicalize tmp-dir))]
+          (spit (str project-dir "/.nrepl-port") "9999")
+          (with-execute-state
+            (let [dev-env (dev-env-protocol/make-noop-dev-env)
+                  _ (dev-env-registry/register! dev-env :test)
+                  mcp-nullable
+                  (mcp-tasks/make-nullable
+                   {:responses
+                    {:work-on [(make-work-on-response
+                                {:worktree-path project-dir})]
+                     :show [(make-task-response {:meta {:refined "true"}})]
+                     :why-blocked [(make-blocking-response)]}})]
+              (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+                (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+                  (let [work-result
+                        (graph/query [`(resolvers/execute!
+                                        {:task/project-dir ~project-dir
+                                         :task/id 601})])
+                        session-id (:execute/session-id
+                                    (get work-result `resolvers/execute!))
+                        _ (graph/query [`(resolvers/escalate-to-dev-env!
+                                          {:engine/session-id ~session-id})])
+                        calls @(:calls dev-env)
+                        start-call (first
+                                    (filter #(= :start-session (:op %))
+                                            calls))
+                        hooks (get-in start-call [:opts :hooks])
+                        active-cmd (get-in hooks
+                                           [:UserPromptSubmit 0
+                                            :hooks 0 :command])
+                        idle-cmd (get-in hooks
+                                         [:Notification 0
+                                          :hooks 0 :command])]
+                    ;; Verify heredoc structure
+                    (is (re-find #"read -r -d '' CODE << 'EoC'" active-cmd)
+                        "uses heredoc quoting")
+                    (is (re-find #"EoC\n" active-cmd)
+                        "heredoc terminator present")
+                    ;; Verify send! targets correct namespace
+                    (is (re-find
+                         #"statechart-engine\.interface/send!"
+                         active-cmd)
+                        "calls statechart engine interface")
+                    ;; Verify clj-nrepl-eval with correct port
+                    (is (re-find #"clj-nrepl-eval -p 9999" active-cmd)
+                        "uses correct nrepl port")
+                    (is (re-find #"clj-nrepl-eval -p 9999" idle-cmd)
+                        "idle command uses correct nrepl port")))))))))))
 
 ;;; PR Merge Tests
 
