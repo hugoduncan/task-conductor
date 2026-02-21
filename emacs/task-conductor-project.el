@@ -196,12 +196,14 @@ Nil until first use; initialized by `task-conductor-project-mode'.")
 (defvar task-conductor-project--play-icon-map
   (let ((map (make-sparse-keymap)))
     (define-key map [mouse-1] #'task-conductor-project-execute)
+    (define-key map (kbd "RET") #'task-conductor-project-execute)
     map)
   "Keymap for the ▶ play icon on task lines without an active session.")
 
 (defvar task-conductor-project--stop-icon-map
   (let ((map (make-sparse-keymap)))
     (define-key map [mouse-1] #'task-conductor-project-cancel)
+    (define-key map (kbd "RET") #'task-conductor-project-cancel)
     map)
   "Keymap for the ⏹ stop icon on task lines with a running or escalated session.")
 
