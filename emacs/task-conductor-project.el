@@ -267,6 +267,7 @@ When no session is active, prepends a clickable ▶ play icon instead."
      (state-icon
       (concat indent (propertize state-icon 'task-conductor-task-id task-id) " " base))
      (session
+      (message "task-conductor: unexpected session state %S for task %S" state task-id)
       (concat indent base))
      (t
       (concat indent
