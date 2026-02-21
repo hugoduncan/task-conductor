@@ -2,6 +2,45 @@
 
 Past discoveries and learnings.
 
+## 2026-02-20: Story Execution Debugging
+
+### CLAUDECODE Env Var Blocks Subprocess
+- Claude CLI refuses to start when `CLAUDECODE=1` is inherited from parent session
+- Fix: `{:extra-env {"CLAUDECODE" ""}}` in babashka.process opts
+- Symptom: exit code 1, zero events, nil session-id
+
+### mcp-tasks Meta Keys Are Namespaced
+- CLI returns meta as `#:user{:refined "true"}` — key is `:user/refined`, not `:refined`
+- `refined?` must compare `(name k)` to handle any namespace
+
+### Statechart Re-registration on Reload
+- `(require 'task-conductor.project.execute :reload)` fails: "Chart already registered"
+- Workaround: `(in-ns 'task-conductor.project.execute)` then redefine individual fns
+- Root cause: `register-statecharts!` runs at namespace load time
+
+### Emacs Hook Timing
+- `register-hook` sent after `start-session` can fail if buffer dies before command arrives
+- Fix: always add `kill-buffer-hook` during `start-session` itself
+- `on-close-handler` should fire unconditionally for managed sessions
+
+## 2026-02-20: Emacs Dev-Env Startup
+
+### Multiple Emacs Server Sockets
+- GUI Emacs may have its own server socket (e.g., `server3766`) separate from the default `server`
+- Verify with `emacsclient -e '(emacs-pid)'` vs `M-: (emacs-pid)` in GUI
+- Use `emacsclient -s server<PID>` to target the correct instance
+- Server sockets found under `$TMPDIR/emacs<UID>/`
+
+### parseedn Returns Vectors, Not Lists
+- `parseedn-read-str` returns EDN vectors `[...]` as Emacs vectors, not lists
+- `dolist`, `car`, `cdr` fail on vectors with `wrong-type-argument listp`
+- Fix: coerce with `(append vec nil)` or add `vectorp` clause in recursive converters
+
+### Bootstrap Loads All Resolvers
+- `(task-conductor.agent-runner.core/bootstrap!)` loads all 5 resolver namespaces
+- Don't require individual resolver namespaces — use bootstrap
+- Must use heredoc for shell calls containing `!`
+
 ## 2026-02-02: EQL work-on! Debugging Session
 
 ### Parseedn UUID Handling

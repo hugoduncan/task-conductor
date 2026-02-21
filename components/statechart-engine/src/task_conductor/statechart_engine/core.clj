@@ -404,7 +404,7 @@
    :project-dir (:project-dir data)
    :pr-num (:pr-num data)
    :branch (:branch data)
-   :entered-state-at (:timestamp (peek hist))})
+   :entered-state-at (str (:timestamp (peek hist)))})
 
 (defn query-sessions
   "Query active sessions filtered by state.

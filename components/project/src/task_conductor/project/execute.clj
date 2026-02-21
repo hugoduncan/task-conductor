@@ -9,9 +9,11 @@
 
 (defn refined?
   "Check if task/story has been refined.
-   Refined status is stored in :meta map with :refined key."
+   Refined status is stored in :meta map with :refined key.
+   Handles namespaced keys (e.g. :user/refined from mcp-tasks CLI)."
   [task]
-  (some? (get-in task [:meta :refined])))
+  (let [m (:meta task)]
+    (some (fn [[k _]] (= "refined" (name k))) m)))
 
 (defn derive-task-state
   "Derive execution state for a standalone task.

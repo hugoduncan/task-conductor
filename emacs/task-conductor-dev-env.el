@@ -151,6 +151,8 @@ Handles special parseedn types like (edn-uuid \"...\")."
          (eq (car edn) 'edn-uuid)
          (stringp (cadr edn)))
     (cadr edn))
+   ((vectorp edn)
+    (mapcar #'task-conductor-dev-env--edn-to-plist (append edn nil)))
    ((listp edn)
     (mapcar #'task-conductor-dev-env--edn-to-plist edn))
    (t edn)))
@@ -233,13 +235,11 @@ Returns session-id string or nil if not found."
 
 
 (defun task-conductor-dev-env--on-close-handler ()
-  "Handler for kill-buffer-hook to detect session close."
+  "Handler for kill-buffer-hook to detect session close.
+Always notifies JVM when a managed session buffer is killed."
   (let ((session-id (task-conductor-dev-env--find-session-for-buffer (current-buffer))))
     (when session-id
-      (let* ((hooks (gethash session-id task-conductor-dev-env--session-hooks))
-             (close-data (plist-get hooks :on-close)))
-        (when close-data
-          (task-conductor-dev-env--send-hook-event :on-close session-id :user-exit))))))
+      (task-conductor-dev-env--send-hook-event :on-close session-id :user-exit))))
 
 (cl-defun task-conductor-dev-env--setup-on-close-hook (session-id hook-id)
   "Set up :on-close hook for SESSION-ID with HOOK-ID.
@@ -321,6 +321,11 @@ they are passed to Claude CLI via --settings for event-based detection."
             (if bufs
                 (let ((buf (car bufs)))
                   (puthash session-id buf task-conductor-dev-env--sessions)
+                  ;; Always set up kill-buffer-hook so on-close is
+                  ;; detected even if register-hook arrives late
+                  (with-current-buffer buf
+                    (add-hook 'kill-buffer-hook
+                              #'task-conductor-dev-env--on-close-handler nil t))
                   `(:status :ok
                     :buffer-name ,(buffer-name buf)
                     :resumed ,(if claude-session-id t nil)

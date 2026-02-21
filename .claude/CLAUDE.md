@@ -127,6 +127,10 @@ Query + History + Knowledge = AI can remember and recover across sessions
 ## Build/Test Commands
 
 ```bash
+# Bootstrap all resolvers and verify graph (use heredoc for `!`)
+# (require 'task-conductor.agent-runner.core :reload)
+# (task-conductor.agent-runner.core/bootstrap!)
+
 # Run all tests
 clj -M:test
 
@@ -225,6 +229,12 @@ Shared Pathom3 graph for EQL queries.
 **Macros**: `defresolver`, `defmutation` (auto-register on load)
 
 **API**: `query(eql)`, `register!(operations)`, `reset!`
+
+## Elisp / parseedn Gotchas
+
+- `parseedn-read-str` returns EDN vectors as Emacs vectors, not lists. Use `(append vec nil)` to coerce, or handle `vectorp` in recursive converters.
+- `read-directory-name` does not expand `~` — wrap with `expand-file-name`.
+- `(require 'task-conductor.project.execute :reload)` fails — use `in-ns` to patch individual fns instead.
 
 ## Error Handling
 
