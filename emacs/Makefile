@@ -6,16 +6,20 @@ PKG_DIR := .
 # Source files in dependency order for compilation
 SRC_FILES := \
 	$(PKG_DIR)/task-conductor-dev-env.el \
-	$(PKG_DIR)/task-conductor-sessions.el
+	$(PKG_DIR)/task-conductor-sessions.el \
+	$(PKG_DIR)/task-conductor-project.el
 
 # Test files
 TEST_FILES := \
 	$(PKG_DIR)/test/test-task-conductor-dev-env.el \
-	$(PKG_DIR)/test/test-task-conductor-sessions.el
+	$(PKG_DIR)/test/test-task-conductor-sessions.el \
+	$(PKG_DIR)/task-conductor-project-test.el
 
 # Stub files for testing (mocked dependencies)
 STUB_FILES := \
-	$(PKG_DIR)/test/stubs/claude-code.el
+	$(PKG_DIR)/test/stubs/claude-code.el \
+	$(PKG_DIR)/test/stubs/parseedn.el \
+	$(PKG_DIR)/test/stubs/mcp-tasks-browser.el
 
 help:
 	@echo "Targets:"
@@ -37,7 +41,8 @@ install-deps:
 	  --eval "(add-to-list 'package-archives '(\"nongnu\" . \"https://elpa.nongnu.org/nongnu/\"))" \
 	  --eval "(package-initialize)" \
 	  --eval "(package-refresh-contents)" \
-	  --eval "(package-install 'cider)"
+	  --eval "(package-install 'cider)" \
+	  --eval "(package-install 'magit-section)"
 
 test: install-deps
 	$(EMACS) -Q --batch -L $(PKG_DIR) -L $(PKG_DIR)/test -L $(PKG_DIR)/test/stubs \

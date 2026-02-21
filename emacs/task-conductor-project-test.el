@@ -178,5 +178,133 @@
     (should-error (task-conductor-project--eval-or-error "(foo)")
                   :type 'user-error)))
 
+;;; CLI task fetching tests
+
+(defun tc-test--make-task-hash (id title type status &optional parent-id category)
+  "Create a hash table representing a task as parseedn would return it."
+  (let ((h (make-hash-table :test #'equal)))
+    (puthash :id id h)
+    (puthash :title title h)
+    (puthash :type type h)
+    (puthash :status status h)
+    (when category (puthash :category category h))
+    (when parent-id (puthash :parent-id parent-id h))
+    h))
+
+(ert-deftest task-conductor-project-parse-tasks-edn-nil ()
+  ;; Returns nil for nil input.
+  (should-not (task-conductor-project--parse-tasks-edn nil)))
+
+(ert-deftest task-conductor-project-parse-tasks-edn-empty ()
+  ;; Returns nil for empty/whitespace input.
+  (should-not (task-conductor-project--parse-tasks-edn ""))
+  (should-not (task-conductor-project--parse-tasks-edn "  ")))
+
+(ert-deftest task-conductor-project-parse-tasks-edn-valid ()
+  ;; Parses hash-table vector from parseedn into list of plists.
+  (cl-letf (((symbol-function 'parseedn-read-str)
+             (lambda (_str)
+               (vector (tc-test--make-task-hash 42 "Do thing" "task" "open"
+                                                nil "simple")))))
+    (let ((result (task-conductor-project--parse-tasks-edn "[...]")))
+      (should (= 1 (length result)))
+      (should (= 42 (plist-get (car result) :id)))
+      (should (equal "Do thing" (plist-get (car result) :title)))
+      (should (equal "task" (plist-get (car result) :type)))
+      (should (equal "open" (plist-get (car result) :status)))
+      (should (equal "simple" (plist-get (car result) :category))))))
+
+(ert-deftest task-conductor-project-parse-tasks-edn-parse-error ()
+  ;; Returns nil when parseedn signals an error.
+  (cl-letf (((symbol-function 'parseedn-read-str)
+             (lambda (_str) (error "parse error"))))
+    (should-not (task-conductor-project--parse-tasks-edn "bad edn"))))
+
+(ert-deftest task-conductor-project-fetch-tasks-returns-root-only ()
+  ;; Filters out tasks with a :parent-id, keeping only root tasks.
+  (cl-letf (((symbol-function 'task-conductor-project--call-mcp-tasks-status)
+             (lambda (_path status)
+               (if (equal status "open") "open-edn" nil)))
+            ((symbol-function 'task-conductor-project--parse-tasks-edn)
+             (lambda (edn-str)
+               (when edn-str
+                 (list (list :id 1 :title "root" :type "task"
+                             :status "open" :category "simple")
+                       (list :id 2 :title "child" :type "task"
+                             :status "open" :category "simple"
+                             :parent-id 99))))))
+    (let ((result (task-conductor-project--fetch-tasks "/proj")))
+      (should (= 1 (length result)))
+      (should (= 1 (plist-get (car result) :id)))
+      (should (equal "root" (plist-get (car result) :title))))))
+
+(ert-deftest task-conductor-project-fetch-tasks-deduplicates ()
+  ;; De-duplicates tasks that appear in both open and in-progress results.
+  (cl-letf (((symbol-function 'task-conductor-project--call-mcp-tasks-status)
+             (lambda (_path _status) "edn"))
+            ((symbol-function 'task-conductor-project--parse-tasks-edn)
+             (lambda (_edn-str)
+               (list (list :id 5 :title "dup" :type "task"
+                           :status "open" :category "simple")))))
+    (let ((result (task-conductor-project--fetch-tasks "/proj")))
+      (should (= 1 (length result)))
+      (should (= 5 (plist-get (car result) :id))))))
+
+(ert-deftest task-conductor-project-fetch-tasks-sorted-by-id ()
+  ;; Returns tasks sorted by :id ascending.
+  (cl-letf (((symbol-function 'task-conductor-project--call-mcp-tasks-status)
+             (lambda (_path status)
+               (if (equal status "open") "open" "inprogress")))
+            ((symbol-function 'task-conductor-project--parse-tasks-edn)
+             (lambda (edn-str)
+               (cond
+                ((equal edn-str "open")
+                 (list (list :id 30 :title "third" :type "task"
+                             :status "open" :category "simple")
+                       (list :id 10 :title "first" :type "task"
+                             :status "open" :category "simple")))
+                ((equal edn-str "inprogress")
+                 (list (list :id 20 :title "second" :type "task"
+                             :status "in-progress" :category "simple")))))))
+    (let ((result (task-conductor-project--fetch-tasks "/proj")))
+      (should (= 3 (length result)))
+      (should (= 10 (plist-get (nth 0 result) :id)))
+      (should (= 20 (plist-get (nth 1 result) :id)))
+      (should (= 30 (plist-get (nth 2 result) :id))))))
+
+(ert-deftest task-conductor-project-fetch-tasks-output-keys ()
+  ;; Returned plists have only the expected keys (no :parent-id).
+  (cl-letf (((symbol-function 'task-conductor-project--call-mcp-tasks-status)
+             (lambda (_path _status) "edn"))
+            ((symbol-function 'task-conductor-project--parse-tasks-edn)
+             (lambda (_edn-str)
+               (list (list :id 7 :title "t" :type "task"
+                           :status "open" :category "simple")))))
+    (let* ((result (task-conductor-project--fetch-tasks "/proj"))
+           (task (car result)))
+      (should (plist-get task :id))
+      (should (plist-get task :title))
+      (should (plist-get task :type))
+      (should (plist-get task :status))
+      (should-not (plist-get task :parent-id)))))
+
+(ert-deftest task-conductor-project-fetch-tasks-cli-error ()
+  ;; Returns (:error ...) when CLI call signals an error.
+  (cl-letf (((symbol-function 'task-conductor-project--call-mcp-tasks-status)
+             (lambda (_path _status) (error "No such file"))))
+    (let ((result (task-conductor-project--fetch-tasks "/proj")))
+      (should (eq :error (car result)))
+      (should (stringp (cadr result))))))
+
+(ert-deftest task-conductor-project-fetch-tasks-empty-results ()
+  ;; Returns empty list when CLI returns nil/empty for both statuses.
+  (cl-letf (((symbol-function 'task-conductor-project--call-mcp-tasks-status)
+             (lambda (_path _status) nil))
+            ((symbol-function 'task-conductor-project--parse-tasks-edn)
+             (lambda (_edn-str) nil)))
+    (let ((result (task-conductor-project--fetch-tasks "/proj")))
+      (should (listp result))
+      (should (null result)))))
+
 (provide 'task-conductor-project-test)
 ;;; task-conductor-project-test.el ends here

@@ -4,7 +4,7 @@
 
 ;; Author: task-conductor contributors
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1") (magit-section "4.0.0"))
+;; Package-Requires: ((emacs "28.1") (magit-section "4.0.0") (parseedn "1.0.0"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/hugoduncan/task-conductor
 
@@ -35,8 +35,71 @@
 
 (require 'cl-lib)
 (require 'magit-section)
+(require 'parseedn)
 (require 'task-conductor-dev-env)
 (require 'mcp-tasks-browser)
+
+;;; CLI task fetching
+
+(defun task-conductor-project--call-mcp-tasks-status (project-path status)
+  "Call mcp-tasks CLI for STATUS tasks in PROJECT-PATH.
+Returns output string on success (exit 0), nil on non-zero exit.
+Signals an error if the CLI executable is not found."
+  (let ((output-buffer (generate-new-buffer " *tc-mcp-tasks-out*")))
+    (unwind-protect
+        (let* ((default-directory project-path)
+               (exit-code (call-process "mcp-tasks" nil output-buffer nil
+                                        "list" "--status" status "--format" "edn")))
+          (when (= exit-code 0)
+            (with-current-buffer output-buffer (buffer-string))))
+      (kill-buffer output-buffer))))
+
+(defun task-conductor-project--parse-tasks-edn (edn-str)
+  "Parse EDN-STR from mcp-tasks CLI output.
+Expects {:tasks [...] :metadata {...}} map format.
+Returns list of raw task plists (all fields), or nil on empty/failed parse.
+parseedn returns hash-tables for maps and vectors for arrays."
+  (when (and edn-str (not (string-empty-p (string-trim edn-str))))
+    (condition-case nil
+        (let* ((parsed (parseedn-read-str edn-str))
+               (tasks-vec (when (hash-table-p parsed) (gethash :tasks parsed)))
+               (raw-list (when (vectorp tasks-vec) (append tasks-vec nil))))
+          (mapcar #'task-conductor-dev-env--edn-to-plist raw-list))
+      (error nil))))
+
+(defun task-conductor-project--fetch-tasks (project-path)
+  "Fetch open and in-progress root tasks from mcp-tasks for PROJECT-PATH.
+Calls mcp-tasks CLI directly; does not use the JVM nREPL connection.
+Returns a list of task plists with :id, :title, :type, :status, :category,
+sorted by :id ascending.  Root tasks are those without a :parent-id.
+On any error, returns (:error \"message\")."
+  (condition-case err
+      (let* ((open-str (task-conductor-project--call-mcp-tasks-status
+                        project-path "open"))
+             (in-progress-str (task-conductor-project--call-mcp-tasks-status
+                               project-path "in-progress"))
+             (open-tasks (task-conductor-project--parse-tasks-edn open-str))
+             (in-progress-tasks (task-conductor-project--parse-tasks-edn
+                                 in-progress-str))
+             (all-tasks (append open-tasks in-progress-tasks))
+             (root-tasks (cl-remove-if
+                          (lambda (task) (plist-get task :parent-id))
+                          all-tasks))
+             (seen (make-hash-table :test #'equal))
+             (unique nil))
+        (dolist (task root-tasks)
+          (let ((id (plist-get task :id)))
+            (unless (gethash id seen)
+              (puthash id t seen)
+              (push (list :id id
+                          :title (plist-get task :title)
+                          :type (plist-get task :type)
+                          :status (plist-get task :status)
+                          :category (plist-get task :category))
+                    unique))))
+        (sort (nreverse unique)
+              (lambda (a b) (< (plist-get a :id) (plist-get b :id)))))
+    (error (list :error (error-message-string err)))))
 
 ;;; Project CRUD
 
