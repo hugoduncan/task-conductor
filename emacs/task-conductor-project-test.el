@@ -404,7 +404,7 @@
   (should-not (task-conductor-project--task-execution-icon :other)))
 
 (ert-deftest task-conductor-project-format-task-entry-with-session ()
-  ;; Appends execution icon when a matching session is found.
+  ;; Prepends execution icon when a matching session is found.
   (let* ((session (list :session-id "s1" :task-id 42 :state :running))
          (task-conductor-dev-env--cached-sessions (list session))
          (task (list :id 42 :title "Do thing" :type "task" :status "open"))
@@ -423,7 +423,7 @@
     (should (equal 10 (get-text-property icon-pos 'task-conductor-task-id result)))))
 
 (ert-deftest task-conductor-project-format-task-entry-no-session ()
-  ;; Play icon appended with correct text properties when no session matches.
+  ;; Play icon prepended with correct text properties when no session matches.
   (let* ((task-conductor-dev-env--cached-sessions nil)
          (task (list :id 42 :title "Do thing" :type "task" :status "open"))
          (result (task-conductor-project--format-task-entry task)))

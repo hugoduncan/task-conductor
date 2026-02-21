@@ -238,12 +238,14 @@ Returns nil for unrecognized or nil states."
 
 (defun task-conductor-project--format-task-entry (task &optional project-path)
   "Format TASK plist as a single display line.
-Returns a string like `[T][ ] #42 Some title'.
-When a session matches TASK's id, appends an execution status icon.
-For running or escalated sessions, also appends a clickable ⏹ stop icon.
-When no session is active, appends a clickable ▶ play icon instead."
+Returns a string like `    ▶ [T][ ] #42 Some title'.
+Icons appear at the start of the line after the indent.
+When a session matches TASK's id, prepends an execution status icon.
+For running or escalated sessions, also prepends a clickable ⏹ stop icon.
+When no session is active, prepends a clickable ▶ play icon instead."
   (let* ((task-id (plist-get task :id))
-         (base (format "    %s%s #%d %s"
+         (indent "    ")
+         (base (format "%s%s #%d %s"
                        (task-conductor-project--task-type-icon (plist-get task :type))
                        (task-conductor-project--task-status-icon (plist-get task :status))
                        task-id
@@ -254,21 +256,26 @@ When no session is active, appends a clickable ▶ play icon instead."
                        (task-conductor-project--task-execution-icon state))))
     (cond
      ((and state-icon (memq state '(:running :escalated)))
-      (concat base
-              " " (propertize state-icon 'task-conductor-task-id task-id)
-              " " (propertize "⏹"
-                              'task-conductor-task-id task-id
-                              'mouse-face 'highlight
-                              'keymap task-conductor-project--stop-icon-map)))
+      (concat indent
+              (propertize state-icon 'task-conductor-task-id task-id)
+              " "
+              (propertize "⏹"
+                          'task-conductor-task-id task-id
+                          'mouse-face 'highlight
+                          'keymap task-conductor-project--stop-icon-map)
+              " " base))
      (state-icon
-      (concat base " " (propertize state-icon 'task-conductor-task-id task-id)))
+      (concat indent (propertize state-icon 'task-conductor-task-id task-id) " " base))
      (session
-      base)
+      (message "task-conductor: unexpected session state %S for task %S" state task-id)
+      (concat indent base))
      (t
-      (concat base " " (propertize "▶"
-                                   'task-conductor-task-id task-id
-                                   'mouse-face 'highlight
-                                   'keymap task-conductor-project--play-icon-map))))))
+      (concat indent
+              (propertize "▶"
+                          'task-conductor-task-id task-id
+                          'mouse-face 'highlight
+                          'keymap task-conductor-project--play-icon-map)
+              " " base)))))
 
 (defun task-conductor-project--insert-task-children (project-path)
   "Insert task child sections for PROJECT-PATH from cache only.
