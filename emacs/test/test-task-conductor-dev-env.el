@@ -391,6 +391,30 @@
              (notif (cdr (assoc 'Notification parsed-hooks))))
         (should (equal "echo test" (cdr (assoc 'command notif))))))))
 
+(ert-deftest task-conductor-dev-env-hooks-to-settings-args-plist-arrays ()
+  ;; Plist hooks (from edn-to-plist) produce correct JSON with arrays.
+  (let* ((hooks '(:UserPromptSubmit
+                  ((:hooks ((:type "command" :command "echo active"))))
+                  :Notification
+                  ((:hooks ((:type "command" :command "echo idle"))))))
+         (result (task-conductor-dev-env--hooks-to-settings-args hooks))
+         (json-str (cadr result))
+         (parsed (json-read-from-string json-str)))
+    (should (assoc 'hooks parsed))
+    (let* ((parsed-hooks (cdr (assoc 'hooks parsed)))
+           (submit (cdr (assoc 'UserPromptSubmit parsed-hooks)))
+           (notif (cdr (assoc 'Notification parsed-hooks))))
+      ;; Values must be arrays (vectors in elisp), not objects
+      (should (vectorp submit))
+      (should (vectorp notif))
+      ;; Inner hooks arrays must also be vectors
+      (should (vectorp (cdr (assoc 'hooks (aref submit 0)))))
+      ;; Command value is preserved
+      (should (equal "echo active"
+                     (cdr (assoc 'command
+                                 (aref (cdr (assoc 'hooks (aref submit 0)))
+                                       0))))))))
+
 ;;; State Cleanup Tests
 
 (ert-deftest task-conductor-dev-env-cleanup-session-hooks ()
