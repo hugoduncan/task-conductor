@@ -762,13 +762,11 @@ Returns the project buffer, leaving point on the task section."
       (should-error (task-conductor-project-execute) :type 'user-error))))
 
 (ert-deftest task-conductor-project-execute-success ()
-  ;; Calls eval-sync with execute! form and shows confirmation message.
+  ;; Calls eval-or-error with execute! form and shows confirmation message.
   (with-project-buffer
     (tc-test--render-with-task 7 "/proj")
     (let ((eval-form nil))
-      (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
-                 (lambda () t))
-                ((symbol-function 'task-conductor-dev-env--eval-sync)
+      (cl-letf (((symbol-function 'task-conductor-project--eval-or-error)
                  (lambda (form)
                    (setq eval-form form)
                    (list :status :ok :session-id "s1"))))
@@ -779,26 +777,22 @@ Returns the project buffer, leaving point on the task section."
         (should (string-match-p "7" eval-form))))))
 
 (ert-deftest task-conductor-project-execute-error-result ()
-  ;; Shows error message when execute-task-by-id returns :error status.
+  ;; Shows error message when eval-or-error returns :error status.
   (with-project-buffer
     (tc-test--render-with-task 3 "/proj")
-    (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
-               (lambda () t))
-              ((symbol-function 'task-conductor-dev-env--eval-sync)
+    (cl-letf (((symbol-function 'task-conductor-project--eval-or-error)
                (lambda (_form)
                  (list :status :error :message "task not found"))))
       ;; Should not signal; just display error message
       (task-conductor-project-execute))))
 
 (ert-deftest task-conductor-project-execute-nrepl-error ()
-  ;; Shows error message when nREPL signals an error (not just returns one).
+  ;; Shows error message when eval-or-error returns error from caught exception.
   (with-project-buffer
     (tc-test--render-with-task 4 "/proj")
-    (cl-letf (((symbol-function 'task-conductor-dev-env--connected-p)
-               (lambda () t))
-              ((symbol-function 'task-conductor-dev-env--eval-sync)
+    (cl-letf (((symbol-function 'task-conductor-project--eval-or-error)
                (lambda (_form)
-                 (error "nREPL connection lost"))))
+                 (list :status :error :message "nREPL connection lost"))))
       ;; Should not signal; eval-or-error catches and returns error plist
       (task-conductor-project-execute))))
 
@@ -844,7 +838,7 @@ The caller must ensure a dynamic binding for
       (let ((task-conductor-dev-env--cached-sessions
              (list (list :session-id "s1" :task-id 5
                          :state :running :project-dir "/proj"))))
-        (tc-test--render-with-session 5 "/proj" "s1" :running)
+        (tc-test--render-with-session 5 "/proj")
         (should-error (task-conductor-project-cancel) :type 'user-error)))))
 
 (ert-deftest task-conductor-project-cancel-no-session ()
@@ -864,7 +858,7 @@ The caller must ensure a dynamic binding for
       (let ((task-conductor-dev-env--cached-sessions
              (list (list :session-id "s1" :task-id 42
                          :state :idle :project-dir "/proj"))))
-        (tc-test--render-with-session 42 "/proj" "s1" :idle)
+        (tc-test--render-with-session 42 "/proj")
         (should-error (task-conductor-project-cancel) :type 'user-error)))))
 
 (ert-deftest task-conductor-project-cancel-calls-stop-when-running ()
@@ -878,7 +872,7 @@ The caller must ensure a dynamic binding for
         (let ((task-conductor-dev-env--cached-sessions
                (list (list :session-id "sid1" :task-id 7
                            :state :running :project-dir "/proj"))))
-          (tc-test--render-with-session 7 "/proj" "sid1" :running)
+          (tc-test--render-with-session 7 "/proj")
           (task-conductor-project-cancel)
           (should eval-form)
           (should (string-match-p "stop!" eval-form))
@@ -895,7 +889,7 @@ The caller must ensure a dynamic binding for
         (let ((task-conductor-dev-env--cached-sessions
                (list (list :session-id "sid-esc" :task-id 9
                            :state :escalated :project-dir "/ep"))))
-          (tc-test--render-with-session 9 "/ep" "sid-esc" :escalated)
+          (tc-test--render-with-session 9 "/ep")
           (task-conductor-project-cancel)
           (should (string-match-p "stop!" eval-form))
           (should (string-match-p "sid-esc" eval-form)))))))
@@ -910,7 +904,7 @@ The caller must ensure a dynamic binding for
       (let ((task-conductor-dev-env--cached-sessions
              (list (list :session-id "s3" :task-id 3
                          :state :running :project-dir "/p3"))))
-        (tc-test--render-with-session 3 "/p3" "s3" :running)
+        (tc-test--render-with-session 3 "/p3")
         (should-error (task-conductor-project-cancel) :type 'user-error)))))
 
 (ert-deftest task-conductor-project-k-key-bound ()
