@@ -226,18 +226,25 @@
    Called from virtual thread when claude-cli promise delivers.
    Guards against session being stopped during skill execution.
    Detects no-progress and escalates to dev-env with Claude session-id.
-   When :on-complete is set in session data, verifies state actually changed
-   before sending the event — escalates if no progress was made."
+   When :on-complete is set, sends it directly on success — skips
+   re-derivation to avoid races with external state propagation."
   [session-id result]
   (try
     (let [data (sc/get-data session-id)
           {:keys [project-dir task-id task-type
                   pre-skill-state pre-skill-open-children
                   on-complete]} data]
-      (if (skill-failed? result)
-        ;; Skill failed - send error event
+      (cond
+        (skill-failed? result)
         (sc/send! session-id :error)
-        ;; Re-derive state and check for progress
+
+        ;; When on-complete is set, trust the skill result and skip
+        ;; re-derivation. Avoids races where external state (e.g. GitHub
+        ;; API) hasn't propagated yet.
+        on-complete
+        (sc/send! session-id on-complete)
+
+        :else
         (let [task (fetch-task project-dir task-id)
               children (when (= :story task-type)
                          (fetch-children project-dir task-id))
@@ -254,7 +261,6 @@
                                    children-maps))]
           (if (no-progress? pre-skill-state new-state
                             pre-skill-open-children new-open-children)
-            ;; No progress - store Claude session-id and escalate
             (do
               (sc/update-data! session-id
                                #(assoc
@@ -262,8 +268,7 @@
                                  :last-claude-session-id
                                  (:session-id result)))
               (sc/send! session-id :no-progress))
-            ;; Progress made - send on-complete or derived state
-            (sc/send! session-id (or on-complete new-state))))))
+            (sc/send! session-id new-state)))))
     (catch clojure.lang.ExceptionInfo e
       ;; Session was stopped during skill execution - ignore
       (when-not (= :session-not-found (:error (ex-data e)))
