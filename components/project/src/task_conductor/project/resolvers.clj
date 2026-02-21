@@ -258,11 +258,14 @@
   [session-id nrepl-port]
   (when nrepl-port
     (let [ns-fn "task-conductor.statechart-engine.interface"
-          fmt (str "clj-nrepl-eval -p %s"
-                   " '(%s/send! \"%s\" %s)'")
+          ;; Heredoc quoting avoids shell mangling of ! in send!
           send-event (fn [event-type]
-                       (format fmt nrepl-port ns-fn
-                               session-id event-type))
+                       (str "read -r -d '' CODE << 'EoC' || true\n"
+                            "(" ns-fn "/send! \"" session-id "\" "
+                            event-type ")\n"
+                            "EoC\n"
+                            "clj-nrepl-eval -p " nrepl-port
+                            " \"$CODE\""))
           active (send-event ":on-active")
           idle (send-event ":on-session-idle")]
       {:UserPromptSubmit
