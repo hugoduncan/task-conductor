@@ -521,6 +521,8 @@ after refresh.  Preserves which project sections were expanded."
     ;; Clear first so non-expanded paths don't retain stale data, then
     ;; re-populate expanded paths before --render (which reads from
     ;; cache only — cache miss means no children shown).
+    (unless task-conductor-project--task-cache
+      (setq task-conductor-project--task-cache (make-hash-table :test #'equal)))
     (clrhash task-conductor-project--task-cache)
     (dolist (path expanded)
       (puthash path (task-conductor-project--fetch-tasks path)
