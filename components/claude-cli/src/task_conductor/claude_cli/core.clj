@@ -35,7 +35,8 @@
 (defn build-args
   "Build CLI arguments vector from options map.
   Always includes --output-format stream-json, --verbose, and --print.
-  Maps: :model, :allowed-tools, :disallowed-tools, :max-turns, :mcp-config.
+  Maps: :model, :allowed-tools, :disallowed-tools, :max-turns, :mcp-config,
+  :hooks.
   The :prompt value goes last without a flag."
   [opts]
   (let [{:keys
@@ -44,7 +45,8 @@
           allowed-tools
           disallowed-tools
           max-turns
-          mcp-config]} opts]
+          mcp-config
+          hooks]} opts]
     (cond-> ["claude" "--output-format" "stream-json" "--verbose"
              "--print"]
       model (into ["--model" model])
@@ -54,6 +56,8 @@
                           ["--disallowedTools" (str/join "," disallowed-tools)])
       max-turns (into ["--max-turns" (str max-turns)])
       mcp-config (into ["--mcp-config" mcp-config])
+      (seq hooks) (into ["--settings"
+                         (json/write-str {:hooks hooks})])
       prompt (conj prompt))))
 
 (defn- parse-json-line

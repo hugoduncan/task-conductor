@@ -1,6 +1,7 @@
 (ns task-conductor.claude-cli-test.core-test
   "Tests for Claude CLI core functionality."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.data.json :as json]
+            [clojure.test :refer [deftest is testing]]
             [task-conductor.claude-cli.core :as core]))
 
 ;; Tests that build-args correctly translates options
@@ -54,6 +55,58 @@
       (testing "adds --mcp-config flag"
         (is (= (into base-args ["--mcp-config" "/path/to/config.json"])
                (core/build-args {:mcp-config "/path/to/config.json"})))))
+
+    (testing "with :hooks"
+      (testing "adds --settings with JSON for single hook type"
+        (let [hooks {:UserPromptSubmit
+                     [{:hooks [{:type "command"
+                                :command "my-cmd"}]}]}
+              args (core/build-args {:hooks hooks})
+              settings-idx (.indexOf ^java.util.List args "--settings")
+              settings-json (get args (inc settings-idx))]
+          (is (pos? settings-idx))
+          (is (= {"hooks"
+                  {"UserPromptSubmit"
+                   [{"hooks" [{"type" "command"
+                               "command" "my-cmd"}]}]}}
+                 (json/read-str settings-json)))))
+      (testing "adds --settings with JSON for multiple hook types"
+        (let [hooks {:UserPromptSubmit
+                     [{:hooks [{:type "command"
+                                :command "cmd-a"}]}]
+                     :Notification
+                     [{:matcher "idle"
+                       :hooks [{:type "command"
+                                :command "cmd-b"}]}]}
+              args (core/build-args {:hooks hooks})
+              settings-json (get args (inc (.indexOf ^java.util.List
+                                            args "--settings")))
+              parsed (json/read-str settings-json)]
+          (is (= [{"hooks" [{"type" "command"
+                             "command" "cmd-a"}]}]
+                 (get-in parsed ["hooks" "UserPromptSubmit"])))
+          (is (= [{"matcher" "idle"
+                   "hooks" [{"type" "command"
+                             "command" "cmd-b"}]}]
+                 (get-in parsed ["hooks" "Notification"])))))
+      (testing "omits --settings when hooks map is empty"
+        (is (= base-args (core/build-args {:hooks {}}))))
+      (testing "omits --settings when hooks is nil"
+        (is (= base-args (core/build-args {:hooks nil})))))
+
+    (testing "with :hooks and other options"
+      (testing "places --settings before prompt"
+        (let [args (core/build-args
+                    {:prompt "go"
+                     :model "sonnet"
+                     :hooks {:Notification
+                             [{:hooks [{:type "command"
+                                        :command "x"}]}]}})
+              prompt-idx (.indexOf ^java.util.List args "go")
+              settings-idx (.indexOf ^java.util.List args "--settings")]
+          (is (pos? settings-idx))
+          (is (< settings-idx prompt-idx)
+              "--settings appears before prompt"))))
 
     (testing "with all options"
       (testing "includes all flags in correct order with prompt last"
