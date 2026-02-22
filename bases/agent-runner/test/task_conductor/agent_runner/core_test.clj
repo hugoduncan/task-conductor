@@ -64,7 +64,8 @@
 
 (defn- make-task-response
   [overrides]
-  {:task (merge {:type :task
+  {:task (merge {:title "Test task"
+                 :type :task
                  :status :open
                  :title "test-task"
                  :meta nil
