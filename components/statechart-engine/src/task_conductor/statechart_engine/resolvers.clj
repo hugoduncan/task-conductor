@@ -34,11 +34,10 @@
   {:engine/session-data (core/get-data session-id)})
 
 (graph/defresolver engine-active-sessions
-  "Sessions needing attention: escalated, idle, or waiting for PR merge."
+  "All non-terminal sessions (sessions are removed on reaching a final state)."
   []
   {::pco/output [:engine/active-sessions]}
-  {:engine/active-sessions
-   (core/query-sessions #{:escalated :idle :wait-pr-merge})})
+  {:engine/active-sessions (core/all-session-summaries)})
 
 ;;; Mutations
 

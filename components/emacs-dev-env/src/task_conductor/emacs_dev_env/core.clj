@@ -368,7 +368,7 @@
 ;;; Session Query
 
 (defn query-sessions-by-id
-  "Query sessions in escalated/idle states. Called by Emacs via nREPL.
+  "Query all non-terminal sessions. Called by Emacs via nREPL.
   Returns {:status :ok :sessions [...]} or {:status :error ...}.
 
   Validates that the caller is a registered dev-env."
