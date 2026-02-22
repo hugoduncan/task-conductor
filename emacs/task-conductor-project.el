@@ -123,7 +123,8 @@ comparison.  Returns the session plist or nil if not found."
        (and (task-conductor-project--task-id-match-p
              task-id (plist-get session :task-id))
             (or (null project-dir)
-                (equal project-dir (plist-get session :project-dir)))))
+                (string-prefix-p project-dir
+                                 (or (plist-get session :project-dir) "")))))
      task-conductor-dev-env--cached-sessions)))
 
 ;;; Project CRUD
@@ -226,7 +227,7 @@ Returns nil for unrecognized or nil states."
     (:terminated     "✘")
     (:done           "□")
     (:awaiting-pr    "↑")
-    (:has-tasks      "▶")
+    (:has-tasks      "⚙")
     (_               nil)))
 
 (defun task-conductor-project--task-type-icon (type)
@@ -267,7 +268,8 @@ When no session is active, prepends a clickable ▶ play icon instead."
          (state-icon (when session
                        (task-conductor-project--task-execution-icon state))))
     (cond
-     ((and state-icon (memq state '(:running :escalated :session-idle :session-running)))
+     ((and state-icon (memq state '(:running :escalated :session-idle :session-running
+                                    :unrefined :refined :has-tasks :merging-pr)))
       (concat indent
               (propertize state-icon 'task-conductor-task-id task-id)
               " "
