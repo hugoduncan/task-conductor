@@ -384,9 +384,7 @@
   [dev-env]
   (let [{:keys [command-chan connected?]} @(:state dev-env)]
     (when (and connected? command-chan)
-      (let [sessions (:engine/active-sessions
-                      (graph/query
-                       [:engine/active-sessions]))]
+      (let [sessions (sc/all-session-summaries)]
         (send-notification command-chan
                            :notify-sessions-changed
                            {:sessions sessions})))))

@@ -155,7 +155,7 @@
               (listener "test" #{:running} #{:wait-pr-merge} :pr-created)
               (is (pos? @notified)))))))
 
-    (testing "does not fire for non-session states"
+    (testing "fires for any state transition"
       (with-agent-runner-state
         (let [notified (atom 0)]
           (with-redefs [emacs-dev-env/notify-all-sessions-changed!
@@ -165,9 +165,9 @@
                   listener (get listeners
                                 ::agent-runner/session-notify)]
               (listener "test" #{:running} #{:completed} :done)
-              (is (zero? @notified)))))))
+              (is (pos? @notified)))))))
 
-    (testing "does not fire for no-op transitions within same notify state"
+    (testing "fires when session enters unrefined state"
       (with-agent-runner-state
         (let [notified (atom 0)]
           (with-redefs [emacs-dev-env/notify-all-sessions-changed!
@@ -176,12 +176,47 @@
             (let [listeners @engine/transition-listeners
                   listener (get listeners
                                 ::agent-runner/session-notify)]
-              ;; Both from and to contain :escalated
+              (listener "test" #{:idle} #{:unrefined} :initial-state)
+              (is (pos? @notified)))))))
+
+    (testing "fires when session enters refined state"
+      (with-agent-runner-state
+        (let [notified (atom 0)]
+          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
+                        (fn [] (swap! notified inc))]
+            (agent-runner/bootstrap!)
+            (let [listeners @engine/transition-listeners
+                  listener (get listeners
+                                ::agent-runner/session-notify)]
+              (listener "test" #{:unrefined} #{:refined} :refined)
+              (is (pos? @notified)))))))
+
+    (testing "fires for sub-state transitions within same parent state"
+      (with-agent-runner-state
+        (let [notified (atom 0)]
+          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
+                        (fn [] (swap! notified inc))]
+            (agent-runner/bootstrap!)
+            (let [listeners @engine/transition-listeners
+                  listener (get listeners
+                                ::agent-runner/session-notify)]
               (listener "test"
-                        #{:escalated :sub-a}
-                        #{:escalated :sub-b}
-                        :internal)
-              (is (zero? @notified)))))))))
+                        #{:escalated :session-idle}
+                        #{:escalated :session-running}
+                        :session-started)
+              (is (pos? @notified))))))
+
+      (testing "does not fire when from-state equals to-state"
+        (with-agent-runner-state
+          (let [notified (atom 0)]
+            (with-redefs [emacs-dev-env/notify-all-sessions-changed!
+                          (fn [] (swap! notified inc))]
+              (agent-runner/bootstrap!)
+              (let [listeners @engine/transition-listeners
+                    listener (get listeners
+                                  ::agent-runner/session-notify)]
+                (listener "test" #{:idle} #{:idle} :no-op)
+                (is (zero? @notified))))))))))
 
 ;;; run-story! Tests
 
