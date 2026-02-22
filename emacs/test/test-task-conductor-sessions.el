@@ -163,6 +163,15 @@
     (should (string-match-p "Fix auth" heading))
     (should-not (string-match-p ": Fix auth" heading))))
 
+(ert-deftest task-conductor-sessions-heading-project-name-with-colon ()
+  ;; Project names containing colons are rendered as-is without mangling.
+  (let* ((session (list :session-id "s1" :state :escalated
+                        :task-id 42 :task-title "Fix auth"
+                        :project-name "my:proj"
+                        :entered-state-at nil))
+         (heading (task-conductor-sessions--format-session-heading session)))
+    (should (string-match-p "my:proj: Fix auth" heading))))
+
 ;;; Partition By State
 
 (ert-deftest task-conductor-sessions-partition-empty ()
