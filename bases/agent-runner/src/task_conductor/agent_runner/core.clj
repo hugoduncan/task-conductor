@@ -3,7 +3,6 @@
    Requiring this namespace loads all component resolvers and statecharts
    via auto-registration on namespace load."
   (:require
-   [clojure.set :as set]
    [clojure.string :as str]
    [task-conductor.claude-cli.resolvers]
    [task-conductor.dev-env.resolvers]
@@ -35,22 +34,11 @@
             :to to-state
             :event event}))
 
-(def ^:private session-notify-states
-  "States that trigger session notification to dev-envs.
-  Includes sub-states so idle↔running transitions within :escalated
-  also fire notifications."
-  #{:escalated :idle :wait-pr-merge :session-idle :session-running})
-
 (defn- notify-on-session-state-change
-  "Push session data to all dev-envs when a session enters or leaves
-  a notify-relevant state, including sub-state transitions within
-  :escalated (idle↔running)."
+  "Push session data to all dev-envs on every state transition."
   [_session-id from-state to-state _event]
-  (let [from-relevant (set/intersection from-state session-notify-states)
-        to-relevant   (set/intersection to-state session-notify-states)]
-    (when (and (not= from-relevant to-relevant)
-               (or (seq from-relevant) (seq to-relevant)))
-      (emacs-dev-env/notify-all-sessions-changed!))))
+  (when (not= from-state to-state)
+    (emacs-dev-env/notify-all-sessions-changed!)))
 
 (def ^:private bootstrap-config
   "Configuration stored at bootstrap time.
