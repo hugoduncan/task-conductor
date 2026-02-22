@@ -147,6 +147,10 @@ clj -M:dev -m cljfmt.main fix
 bb kondo-config
 ```
 
+## Test Output
+- Kaocha summary is on the last line with ANSI codes: `clj -M:test 2>&1 | tail -1`
+- Debug log lines are prefixed with `│` — don't try to grep through them
+
 ## Architecture
 
 Polylith-style monorepo:

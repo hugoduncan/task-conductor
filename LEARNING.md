@@ -2,6 +2,12 @@
 
 Past discoveries and learnings.
 
+## 2026-02-22: Statechart Dynamic Transitions
+
+### `apply sc/state` for Dynamic Transition Lists
+- Use `(apply sc/state {:id :foo} fixed-transition1 fixed-transition2 (dynamic-transitions-vec))` to append a computed vector of transitions to a state definition
+- Self-transitions on states with on-entry actions re-trigger the entry action — avoid them
+
 ## 2026-02-21: Emacs Dev-Env Setup Order
 
 ### Don't Pre-Register on JVM Before CIDER Connects
