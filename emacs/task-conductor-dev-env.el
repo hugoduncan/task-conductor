@@ -568,11 +568,17 @@ for subsequent operations and starts the command subscription loop."
   (setq task-conductor-dev-env--nrepl-conn
         (task-conductor-nrepl-connect
          task-conductor-nrepl-host task-conductor-nrepl-port))
-  (let ((dev-env-id (task-conductor-dev-env--eval-sync
-                     "(task-conductor.emacs-dev-env.interface/register-emacs-dev-env)")))
-    (setq task-conductor-dev-env--dev-env-id dev-env-id)
-    (task-conductor-dev-env--start-poll-loop)
-    (message "Connected to task-conductor as dev-env: %s" dev-env-id)))
+  (condition-case err
+      (let ((dev-env-id (task-conductor-dev-env--eval-sync
+                         "(task-conductor.emacs-dev-env.interface/register-emacs-dev-env)")))
+        (setq task-conductor-dev-env--dev-env-id dev-env-id)
+        (task-conductor-dev-env--start-poll-loop)
+        (message "Connected to task-conductor as dev-env: %s" dev-env-id))
+    (error
+     (task-conductor-nrepl-close task-conductor-dev-env--nrepl-conn)
+     (setq task-conductor-dev-env--nrepl-conn nil)
+     (setq task-conductor-dev-env--project-dir nil)
+     (signal (car err) (cdr err)))))
 
 (defun task-conductor-dev-env-disconnect ()
   "Disconnect from task-conductor and unregister this dev-env.
