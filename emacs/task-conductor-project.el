@@ -225,7 +225,6 @@ Returns nil for unrecognized or nil states."
     (:terminated     "✘")
     (:done           "□")
     (:awaiting-pr    "↑")
-    (:has-tasks      "▶")
     (_               nil)))
 
 (defun task-conductor-project--task-type-icon (type)
@@ -378,24 +377,6 @@ expansion state."
   (cl-loop for p in projects
            maximize (length (or (plist-get p :project/name) ""))))
 
-(defun task-conductor-project--status-icon (status)
-  "Return a status icon string for STATUS keyword."
-  (pcase status
-    (:running "⚡")
-    (:escalated "⚡")
-    (:idle "⏸")
-    (_ " ")))
-
-(defun task-conductor-project--status-info (project)
-  "Return a status info string for PROJECT, or nil."
-  (when-let ((sessions (plist-get project :project/active-sessions)))
-    (let* ((first-session (car sessions))
-           (state (plist-get first-session :state))
-           (task-id (plist-get first-session :task-id))
-           (count (length sessions)))
-      (if (> count 1)
-          (format "[%s: task %s +%d]" state task-id (1- count))
-        (format "[%s: task %s]" state task-id)))))
 
 (defun task-conductor-project--format-entry (project name-width)
   "Format PROJECT entry with NAME-WIDTH padding."
