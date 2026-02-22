@@ -200,8 +200,11 @@ Autonomous states (:has-tasks, :unrefined, etc.) go to :working."
 (defun task-conductor-sessions--render (sessions)
   "Render SESSIONS into the current buffer.
 SESSIONS is a list of plists with :session-id, :state, :task-id,
-:task-title, :entered-state-at, :pr-num, :branch."
+:task-title, :entered-state-at, :pr-num, :branch.
+Preserves point position by restoring to the same magit section."
   (let ((inhibit-read-only t)
+        (saved-section-ident (when-let ((s (magit-current-section)))
+                               (magit-section-ident s)))
         (parts (task-conductor-sessions--partition-by-state sessions)))
     (erase-buffer)
     (magit-insert-section (task-conductor-sessions-root)
@@ -209,8 +212,11 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
       (task-conductor-sessions--insert-group "Needs Attention" (plist-get parts :needs-attention))
       (task-conductor-sessions--insert-group "Running" (plist-get parts :running))
       (task-conductor-sessions--insert-group "Working" (plist-get parts :working))
-      (task-conductor-sessions--insert-group "PR Waiting" (plist-get parts :wait-pr-merge))))
-  (goto-char (point-min)))
+      (task-conductor-sessions--insert-group "PR Waiting" (plist-get parts :wait-pr-merge)))
+    (if saved-section-ident
+        (when-let ((s (magit-get-section saved-section-ident)))
+          (goto-char (oref s start)))
+      (goto-char (point-min)))))
 
 ;;; Actions
 
