@@ -29,30 +29,54 @@
 
 ;;; Resolvers
 
-(graph/defresolver task-by-id
+(graph/defresolver
+  task-by-id
   "Lookup task by ID. Requires :task/id and :task/project-dir."
   [{:task/keys [id project-dir]}]
   {::pco/input [:task/id :task/project-dir]
-   ::pco/output [:task/title :task/description :task/status :task/category
-                 :task/type :task/parent-id :task/relations :task/meta
-                 :task/design :task/shared-context :task/blocking-task-ids
-                 :task/is-blocked :task/pr-num :task/code-reviewed
+   ::pco/output [:task/title
+                 :task/description
+                 :task/status
+                 :task/category
+                 :task/type
+                 :task/parent-id
+                 :task/relations
+                 :task/meta
+                 :task/design
+                 :task/shared-context
+                 :task/blocking-task-ids
+                 :task/is-blocked
+                 :task/pr-num
+                 :task/code-reviewed
                  :task/error]}
   (let [result (interface/show-task {:project-dir project-dir :task-id id})]
     (if (:error result)
-      ;; Return nil for all declared outputs so Pathom
-      ;; doesn't try other resolvers
+     ;; Return nil for all declared outputs so Pathom
+     ;; doesn't try other resolvers
       {:task/error result
-       :task/title nil :task/description nil :task/status nil
-       :task/category nil :task/type nil :task/parent-id nil
-       :task/relations nil :task/meta nil :task/design nil
-       :task/shared-context nil :task/blocking-task-ids nil
-       :task/is-blocked nil :task/pr-num nil :task/code-reviewed nil}
-      ;; Always include :task/error (nil when no error)
-      ;; so Pathom doesn't look elsewhere
-      ;; Merge with nil defaults for optional fields that CLI may not return
-      (merge {:task/pr-num nil :task/code-reviewed nil :task/error nil}
-             (prefix-keys (:task result))))))
+       :task/title nil
+       :task/description nil
+       :task/status nil
+       :task/category nil
+       :task/type nil
+       :task/parent-id nil
+       :task/relations nil
+       :task/meta nil
+       :task/design nil
+       :task/shared-context nil
+       :task/blocking-task-ids nil
+       :task/is-blocked nil
+       :task/pr-num nil
+       :task/code-reviewed nil}
+     ;; Always include :task/error (nil when no error)
+     ;; so Pathom doesn't look elsewhere
+     ;; Merge with nil defaults for optional fields that CLI may not return
+      (merge
+       {:task/title nil
+        :task/pr-num nil
+        :task/code-reviewed nil
+        :task/error nil}
+       (prefix-keys (:task result))))))
 
 (graph/defresolver tasks-list
   "List tasks with optional filters. Requires :task/project-dir.

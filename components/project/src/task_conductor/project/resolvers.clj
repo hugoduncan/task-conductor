@@ -75,7 +75,7 @@
   [project-dir task-id]
   (graph/query {:task/id task-id :task/project-dir project-dir}
                [:task/type :task/status :task/meta :task/pr-num
-                :task/code-reviewed :task/error]))
+                :task/code-reviewed :task/error :task/title]))
 
 (defn- fetch-children
   "Fetch children for a story via EQL query.
@@ -130,7 +130,8 @@
                                   (mapv task->execute-map children))
       (execute/derive-task-state execute-task))))
 
-(graph/defmutation execute!
+(graph/defmutation
+  execute!
   "Start automated execution of a task or story.
    Initializes statechart session and registers dev-env hooks.
 
@@ -161,14 +162,19 @@
            :execute/initial-state nil
            :execute/error (:task/error task)}
           (let [is-story (story? task)
-                children (when is-story
-                           (fetch-children worktree-path id))
+                children (when is-story (fetch-children worktree-path id))
                 chart-id (if is-story :execute/story :execute/task)
-                initial-data (cond-> {:project-dir worktree-path
-                                      :root-project-dir project-dir
-                                      :task-id id
-                                      :task-type (if is-story :story :task)}
-                               nrepl-port (assoc :nrepl-port nrepl-port))
+                project-name (or
+                              (:project/name (registry/get-by-path project-dir))
+                              (fs/file-name project-dir))
+                initial-data
+                (cond-> {:project-dir worktree-path
+                         :root-project-dir project-dir
+                         :task-id id
+                         :task-type (if is-story :story :task)
+                         :task-title (:task/title task)
+                         :project-name project-name}
+                  nrepl-port (assoc :nrepl-port nrepl-port))
                 session-id (sc/start! chart-id {:data initial-data})
                 initial-state (derive-initial-state task children)]
             {:execute/session-id session-id
