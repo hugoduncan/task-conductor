@@ -262,7 +262,7 @@
                       inv-opts (:opts (first invs))
                       prompt (:prompt inv-opts)]
                   (is (= 1 (count invs)))
-                  (is (= "/mcp-tasks:refine-task (MCP)" prompt)))))))))))
+                  (is (= "/mcp-tasks:refine-task (MCP) 200" prompt)))))))))))
 
 ;;; Error Path Tests
 
@@ -514,5 +514,5 @@
                       inv-opts (:opts inv)]
                   (is (= 1 (count invs)))
                   (is (= "/test" (:dir inv-opts)))
-                  (is (= "/mcp-tasks:refine-task (MCP)" (:prompt inv-opts)))
+                  (is (= "/mcp-tasks:refine-task (MCP) 600" (:prompt inv-opts)))
                   (is (instance? java.time.Instant (:timestamp inv))))))))))))
