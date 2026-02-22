@@ -70,7 +70,7 @@
 
 (defn- fetch-task
   "Fetch task data via EQL query.
-   Returns task map with :task/type, :task/status, etc.
+   Returns task map with :task/type, :task/status, :task/title, etc.
    On error, the result contains :task/error from the resolver."
   [project-dir task-id]
   (graph/query {:task/id task-id :task/project-dir project-dir}
