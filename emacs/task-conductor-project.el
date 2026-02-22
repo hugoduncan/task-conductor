@@ -205,7 +205,7 @@ Nil until first use; initialized by `task-conductor-project-mode'.")
     (define-key map [mouse-1] #'task-conductor-project-cancel)
     (define-key map (kbd "RET") #'task-conductor-project-cancel)
     map)
-  "Keymap for the ⏹ stop icon on task lines with a running or escalated session.")
+  "Keymap for the ⏹ stop icon on task lines with a running, escalated, session-idle, or session-running session.")
 
 (defun task-conductor-project--task-execution-icon (session-state)
   "Return an execution status icon for SESSION-STATE, or nil.
@@ -252,7 +252,7 @@ Returns nil for unrecognized or nil states."
 Returns a string like `    ▶ [T][ ] #42 Some title'.
 Icons appear at the start of the line after the indent.
 When a session matches TASK's id, prepends an execution status icon.
-For running or escalated sessions, also prepends a clickable ⏹ stop icon.
+For running, escalated, session-idle, or session-running sessions, also prepends a clickable ⏹ stop icon.
 When no session is active, prepends a clickable ▶ play icon instead."
   (let* ((task-id (plist-get task :id))
          (indent "    ")
