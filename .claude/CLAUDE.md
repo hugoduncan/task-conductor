@@ -249,6 +249,75 @@ Return error maps rather than throwing exceptions. Errors are data that statecha
  :message "Human readable message"}
 ```
 
+## Running Tasks and Stories
+
+### REPL Setup
+
+Start nREPL and load the graph:
+
+```bash
+clj -M:dev:nrepl -m nrepl.cmdline --port 7888
+```
+
+```clojure
+(require '[task-conductor.pathom-graph.interface :as graph]
+         '[task-conductor.mcp-tasks.resolvers]
+         '[task-conductor.statechart-engine.interface :as sc])
+```
+
+### Query Tasks via EQL
+
+```clojure
+;; Query a task by ID
+(graph/query {:task/id 42
+              :task/project-dir "/path/to/project"}
+             [:task/title :task/description :task/status :task/type])
+
+;; List all open tasks
+(graph/query {:task/project-dir "/path/to/project"
+              :task/filters {:status :open}}
+             [:task/all])
+```
+
+### Mutations
+
+```clojure
+;; Update task status
+(graph/query {} [`(task-update! {:task/project-dir "/path/to/project"
+                                 :task/id 42
+                                 :task/status :in-progress})])
+
+;; Complete a task
+(graph/query {} [`(task-complete! {:task/project-dir "/path/to/project"
+                                   :task/id 42})])
+```
+
+### Statechart Engine
+
+```clojure
+;; Register a statechart
+(sc/register! ::my-chart (sc/statechart {}
+                           (sc/state {:id :idle}
+                             (sc/transition {:event :start :target :running}))
+                           (sc/state {:id :running}
+                             (sc/transition {:event :done :target :complete}))
+                           (sc/state {:id :complete})))
+
+;; Start a session
+(def sid (sc/start! ::my-chart))
+
+;; Query state
+(sc/current-state sid)        ; => #{:idle}
+(sc/available-events sid)     ; => #{:start}
+
+;; Send events
+(sc/send! sid :start)
+(sc/current-state sid)        ; => #{:running}
+
+;; View history
+(sc/history sid)
+```
+
 ## Git Hooks
 
 Pre-commit hook runs cljfmt and clj-kondo on staged files. Configure with:
