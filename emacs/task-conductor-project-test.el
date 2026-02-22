@@ -73,38 +73,6 @@
         (should (equal "test" (plist-get (oref section value)
                                          :project/name)))))))
 
-;;; Status display tests
-
-(ert-deftest task-conductor-project-status-icon ()
-  ;; Status icons map correctly.
-  (should (equal "⚡" (task-conductor-project--status-icon :running)))
-  (should (equal "⚡" (task-conductor-project--status-icon :escalated)))
-  (should (equal "⏸" (task-conductor-project--status-icon :idle)))
-  (should (equal " " (task-conductor-project--status-icon nil))))
-
-(ert-deftest task-conductor-project-status-info-single ()
-  ;; Status info shows state and task ID for a single session.
-  (let* ((sessions (list (list :state :running :task-id 42)))
-         (project (list :project/name "p" :project/path "/p"
-                        :project/status :running
-                        :project/active-sessions sessions))
-         (info (task-conductor-project--status-info project)))
-    (should (string-match-p "running" info))
-    (should (string-match-p "task 42" info))))
-
-(ert-deftest task-conductor-project-status-info-multiple ()
-  ;; Status info shows count for multiple sessions.
-  (let* ((sessions (list (list :state :running :task-id 1)
-                         (list :state :idle :task-id 2)))
-         (project (list :project/name "p" :project/path "/p"
-                        :project/active-sessions sessions))
-         (info (task-conductor-project--status-info project)))
-    (should (string-match-p "\\+1" info))))
-
-(ert-deftest task-conductor-project-status-info-nil ()
-  ;; No status info when no sessions.
-  (let ((project (list :project/name "p" :project/path "/p")))
-    (should-not (task-conductor-project--status-info project))))
 
 (ert-deftest task-conductor-project-format-entry-with-status ()
   ;; Format shows name and path; execution status is no longer displayed at project level.
