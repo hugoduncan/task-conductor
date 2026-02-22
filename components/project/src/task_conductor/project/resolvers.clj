@@ -315,10 +315,11 @@
           active (send-event ":on-active")
           idle (send-event ":on-session-idle")]
       (log/info "Built session hooks for idle/active detection"
-                {:session-id session-id
-                 :nrepl-port nrepl-port
-                 :on-active-cmd active
-                 :on-session-idle-cmd idle})
+                {:session-id session-id :nrepl-port nrepl-port})
+      (log/debug "Session hook commands"
+                 {:session-id session-id
+                  :on-active-cmd active
+                  :on-session-idle-cmd idle})
       {:UserPromptSubmit
        [{:hooks [{:type "command" :command active}]}]
        :Notification
