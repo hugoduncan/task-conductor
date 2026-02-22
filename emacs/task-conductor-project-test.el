@@ -378,6 +378,7 @@
   (should (equal "✘" (task-conductor-project--task-execution-icon :terminated)))
   (should (equal "□" (task-conductor-project--task-execution-icon :done)))
   (should (equal "↑" (task-conductor-project--task-execution-icon :awaiting-pr)))
+  (should (equal "▶" (task-conductor-project--task-execution-icon :has-tasks)))
   (should-not (task-conductor-project--task-execution-icon nil))
   (should-not (task-conductor-project--task-execution-icon :other)))
 
