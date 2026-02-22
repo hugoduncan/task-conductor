@@ -981,6 +981,47 @@
                                               :hooks 0 :command])]
                       (is (re-find #"9999" active-cmd)))))))))))
 
+    (testing "falls back to root-project-dir .nrepl-port when worktree lacks it"
+      ;; Regression: worktree-path differs from project-dir; .nrepl-port only
+      ;; exists in the original project root, not in the worktree directory.
+      (fs/with-temp-dir [root-dir]
+        (fs/with-temp-dir [worktree-dir]
+          (let [project-dir (str (fs/canonicalize root-dir))
+                worktree-path (str (fs/canonicalize worktree-dir))]
+            (spit (str project-dir "/.nrepl-port") "8888")
+            ;; worktree-dir intentionally has no .nrepl-port file
+            (with-execute-state
+              (let [dev-env (dev-env-protocol/make-noop-dev-env)
+                    _ (dev-env-registry/register! dev-env :test)
+                    mcp-nullable
+                    (mcp-tasks/make-nullable
+                     {:responses
+                      {:work-on [(make-work-on-response
+                                  {:worktree-path worktree-path})]
+                       :show [(make-task-response {:meta {:refined "true"}})]
+                       :why-blocked [(make-blocking-response)]}})]
+                (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+                  (claude-cli/with-nullable-claude-cli
+                    (claude-cli/make-nullable)
+                    (let [work-result
+                          (graph/query [`(resolvers/execute!
+                                          {:task/project-dir ~project-dir
+                                           :task/id 300})])
+                          session-id (:execute/session-id
+                                      (get work-result `resolvers/execute!))
+                          _ (graph/query [`(resolvers/escalate-to-dev-env!
+                                            {:engine/session-id ~session-id})])
+                          calls @(:calls dev-env)
+                          start-call (first
+                                      (filter #(= :start-session (:op %))
+                                              calls))
+                          hooks (get-in start-call [:opts :hooks])]
+                      (is (some? hooks) "hooks from root-project-dir fallback")
+                      (let [active-cmd (get-in hooks
+                                               [:UserPromptSubmit 0
+                                                :hooks 0 :command])]
+                        (is (re-find #"8888" active-cmd))))))))))))
+
     (testing "omits hooks when no nrepl-port available"
       (with-execute-state
         (let [dev-env (dev-env-protocol/make-noop-dev-env)

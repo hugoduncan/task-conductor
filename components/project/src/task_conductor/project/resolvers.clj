@@ -165,6 +165,7 @@
                            (fetch-children worktree-path id))
                 chart-id (if is-story :execute/story :execute/task)
                 initial-data (cond-> {:project-dir worktree-path
+                                      :root-project-dir project-dir
                                       :task-id id
                                       :task-type (if is-story :story :task)}
                                nrepl-port (assoc :nrepl-port nrepl-port))
@@ -409,15 +410,20 @@
   [{:engine/keys [session-id]}]
   {::pco/output [:escalate/status :escalate/error :escalate/dev-env-id]}
   (let [data (sc/get-data session-id)
-        {:keys [project-dir task-id last-claude-session-id nrepl-port]} data
+        {:keys [project-dir root-project-dir task-id
+                last-claude-session-id nrepl-port]} data
         selected (graph/query [:dev-env/selected])
         dev-env-id (:dev-env/id (:dev-env/selected selected))]
     (if dev-env-id
       ;; Start an interactive session in the dev-env for human intervention
       (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)
             ;; Prefer port from session data (set at bootstrap);
-            ;; fall back to .nrepl-port file in worktree
-            nrepl-port (or nrepl-port (read-nrepl-port project-dir))
+            ;; fall back to .nrepl-port file in worktree, then in original
+            ;; project root (worktree may lack the file if it differs from root)
+            nrepl-port (or nrepl-port
+                           (read-nrepl-port project-dir)
+                           (when root-project-dir
+                             (read-nrepl-port root-project-dir)))
             _ (when-not nrepl-port
                 (log/warn
                  "No nREPL port available; idle/active detection disabled"
