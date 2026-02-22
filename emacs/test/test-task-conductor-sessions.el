@@ -135,6 +135,43 @@
          (heading (task-conductor-sessions--format-session-heading session)))
     (should-not (string-match-p "PR #99" heading))))
 
+(ert-deftest task-conductor-sessions-heading-shows-project-name ()
+  ;; When :project-name is set, heading shows "project: title" format.
+  (let* ((session (list :session-id "s1" :state :escalated
+                        :task-id 42 :task-title "Fix auth"
+                        :project-name "my-proj"
+                        :entered-state-at nil))
+         (heading (task-conductor-sessions--format-session-heading session)))
+    (should (string-match-p "my-proj: Fix auth" heading))))
+
+(ert-deftest task-conductor-sessions-heading-omits-project-prefix-when-nil ()
+  ;; When :project-name is nil, heading shows just the title with no prefix.
+  (let* ((session (list :session-id "s1" :state :escalated
+                        :task-id 42 :task-title "Fix auth"
+                        :entered-state-at nil))
+         (heading (task-conductor-sessions--format-session-heading session)))
+    (should (string-match-p "Fix auth" heading))
+    (should-not (string-match-p ": Fix auth" heading))))
+
+(ert-deftest task-conductor-sessions-heading-omits-project-prefix-when-empty ()
+  ;; When :project-name is empty string, heading shows just the title.
+  (let* ((session (list :session-id "s1" :state :escalated
+                        :task-id 42 :task-title "Fix auth"
+                        :project-name ""
+                        :entered-state-at nil))
+         (heading (task-conductor-sessions--format-session-heading session)))
+    (should (string-match-p "Fix auth" heading))
+    (should-not (string-match-p ": Fix auth" heading))))
+
+(ert-deftest task-conductor-sessions-heading-project-name-with-colon ()
+  ;; Project names containing colons are rendered as-is without mangling.
+  (let* ((session (list :session-id "s1" :state :escalated
+                        :task-id 42 :task-title "Fix auth"
+                        :project-name "my:proj"
+                        :entered-state-at nil))
+         (heading (task-conductor-sessions--format-session-heading session)))
+    (should (string-match-p "my:proj: Fix auth" heading))))
+
 ;;; Partition By State
 
 (ert-deftest task-conductor-sessions-partition-empty ()

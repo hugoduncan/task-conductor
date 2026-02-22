@@ -212,6 +212,7 @@
   ([overrides]
    {:task (merge {:type :task
                   :status :open
+                  :title "test-task"
                   :meta nil
                   :pr-num nil
                   :code-reviewed nil}
@@ -395,24 +396,73 @@
 
     (testing "stores session data including task context"
       (with-execute-state
+        (fs/with-temp-dir [tmp]
+          (let [project-dir (str (fs/canonicalize tmp))
+                _ (registry/register! project-dir {:project/name "myproj"})
+                nullable (mcp-tasks/make-nullable
+                          {:responses (story-responses
+                                       {:meta {:refined "true"}
+                                        :title "my-story"}
+                                       [{:status :open}])})]
+            (mcp-tasks/with-nullable-mcp-tasks nullable
+              (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+                (let [result (graph/query [`(resolvers/execute!
+                                             {:task/project-dir ~project-dir
+                                              :task/id 555
+                                              :task/nrepl-port "7888"})])
+                      execute-result (get result `resolvers/execute!)
+                      session-id (:execute/session-id execute-result)
+                      data (sc/get-data session-id)]
+                  (is (= "/test" (:project-dir data)))
+                  (is (= 555 (:task-id data)))
+                  (is (= :story (:task-type data)))
+                  (is (= session-id (:session-id data)))
+                  (is (= "7888" (:nrepl-port data)))
+                  (is (= "my-story" (:task-title data)))
+                  (is (= "myproj" (:project-name data))))))))))
+
+    (testing "stores nil task-title when task response has no title"
+      (with-execute-state
         (let [nullable (mcp-tasks/make-nullable
-                        {:responses (story-responses
-                                     {:meta {:refined "true"}}
-                                     [{:status :open}])})]
+                        {:responses (task-responses
+                                     {:title nil
+                                      :meta {:refined "true"}})})]
           (mcp-tasks/with-nullable-mcp-tasks nullable
             (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
               (let [result (graph/query [`(resolvers/execute!
-                                           {:task/project-dir "/my/project"
-                                            :task/id 555
-                                            :task/nrepl-port "7888"})])
+                                           {:task/project-dir "/test"
+                                            :task/id 558})])
                     execute-result (get result `resolvers/execute!)
                     session-id (:execute/session-id execute-result)
                     data (sc/get-data session-id)]
-                (is (= "/test" (:project-dir data)))
-                (is (= 555 (:task-id data)))
-                (is (= :story (:task-type data)))
-                (is (= session-id (:session-id data)))
-                (is (= "7888" (:nrepl-port data)))))))))
+                (is (contains? data :task-title)
+                    ":task-title key should be present even when nil")
+                (is (nil? (:task-title data))
+                    ":task-title should be nil when task has no title")))))))
+
+    (testing "falls back to dir basename for project-name when not registered"
+      (with-execute-state
+        (fs/with-temp-dir
+          [tmp]
+          (let [project-dir (str (fs/canonicalize tmp))
+               ;; Intentionally not registering project
+                nullable (mcp-tasks/make-nullable
+                          {:responses (task-responses
+                                       {:meta {:refined "true"}})})]
+            (mcp-tasks/with-nullable-mcp-tasks
+              nullable
+              (claude-cli/with-nullable-claude-cli
+                (claude-cli/make-nullable)
+                (let [result
+                      (graph/query
+                       [`(resolvers/execute!
+                          {:task/project-dir ~project-dir :task/id 557})])
+                      execute-result (get result `resolvers/execute!)
+                      session-id (:execute/session-id execute-result)
+                      data (sc/get-data session-id)]
+                  (is
+                   (= (fs/file-name project-dir) (:project-name data))
+                   "falls back to directory basename"))))))))
 
     (testing "omits nrepl-port from session data when not provided"
       (with-execute-state

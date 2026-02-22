@@ -121,6 +121,21 @@
         (let [result (core/query-sessions #{:idle})]
           (is (= "/tmp/proj" (:project-dir (first result)))))))
 
+    (testing "includes project-name from session data"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (core/start! ::chart {:data {:task-id 1
+                                     :project-name "my-project"}})
+        (let [result (core/query-sessions #{:idle})]
+          (is (= "my-project" (:project-name (first result)))))))
+
+    (testing "returns nil project-name when not in session data"
+      (with-clean-engine
+        (core/register! ::chart test-chart)
+        (core/start! ::chart {:data {:task-id 1}})
+        (let [result (core/query-sessions #{:idle})]
+          (is (nil? (:project-name (first result)))))))
+
     (testing "matches :wait-pr-merge sessions"
       (with-clean-engine
         (core/register! ::chart test-chart)
