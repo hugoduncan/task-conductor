@@ -16,11 +16,11 @@
 
 (declare install-project-registry-watch!)
 
-(def ^:const default-await-timeout-ms
+(def default-await-timeout-ms
   "Default timeout for await-command in milliseconds."
   30000)
 
-(def ^:const default-response-timeout-ms
+(def default-response-timeout-ms
   "Default timeout for waiting on command responses in milliseconds."
   30000)
 
