@@ -11,7 +11,7 @@
 ;; with actual Emacs and claude-code.el.
 ;;
 ;; Prerequisites:
-;; - Emacs 28.1+ with cider and claude-code.el installed
+;; - Emacs 28.1+ with claude-code.el installed
 ;; - Claude CLI installed and authenticated
 ;; - JVM with task-conductor running
 ;;
@@ -20,15 +20,14 @@
 ;;   cd /path/to/task-conductor
 ;;   clj -M:dev:nrepl
 ;;
-;; Step 2: In Emacs, connect to the nREPL server
-;;
-;;   M-x cider-connect RET localhost RET <port> RET
-;;
-;;   The port is typically written to .nrepl-port in the project directory.
-;;
-;; Step 3: Load the task-conductor-dev-env package
+;; Step 2: Load the task-conductor-dev-env package
 ;;
 ;;   M-x load-file RET /path/to/emacs/task-conductor-dev-env.el RET
+;;
+;; Step 3: Set the nREPL port
+;;
+;;   M-x customize-variable RET task-conductor-nrepl-port RET
+;;   (set to the port from .nrepl-port in the project directory)
 ;;
 ;; Step 4: Connect to task-conductor as a dev-env
 ;;
@@ -91,7 +90,7 @@
 ;;
 ;; Troubleshooting:
 ;;
-;; - "Not connected to CIDER": Run M-x cider-connect first
+;; - "Not connected to nREPL": Set port and run M-x task-conductor-dev-env-connect
 ;; - "nREPL eval error": Check that emacs-dev-env component is on classpath
 ;; - "command channel closed": The JVM may have restarted; reconnect
 ;; - Poll loop errors appear in *Messages* buffer
@@ -108,21 +107,22 @@
   "Execute BODY with clean task-conductor state."
   (declare (indent 0))
   `(let ((task-conductor-dev-env--dev-env-id nil)
+         (task-conductor-dev-env--nrepl-conn nil)
          (task-conductor-dev-env--poll-timer nil)
          (task-conductor-dev-env--sessions (make-hash-table :test 'equal))
          (task-conductor-dev-env--session-hooks (make-hash-table :test 'equal)))
      ,@body))
 
-(defmacro with-mock-cider (&rest body)
-  "Execute BODY with mocked CIDER functions."
+(defmacro with-mock-nrepl (&rest body)
+  "Execute BODY with mocked nREPL functions."
   (declare (indent 0))
-  `(cl-letf (((symbol-function 'cider-connected-p) (lambda () t))
-             ((symbol-function 'cider-nrepl-sync-request:eval)
-              (lambda (form)
-                (list "value" (prin1-to-string '(:status :ok)))))
-             ((symbol-function 'nrepl-dict-get)
+  `(cl-letf (((symbol-function 'task-conductor-nrepl-connected-p) (lambda (_conn) t))
+             ((symbol-function 'task-conductor-nrepl-eval-sync)
+              (lambda (_conn form &optional _timeout)
+                (list (cons "value" (prin1-to-string '(:status :ok))))))
+             ((symbol-function 'task-conductor-nrepl-dict-get)
               (lambda (dict key)
-                (plist-get dict (intern key)))))
+                (cdr (assoc key dict)))))
      ,@body))
 
 ;;; UUID Generation Tests
@@ -347,7 +347,7 @@
 (ert-deftest task-conductor-dev-env-dispatch-ping ()
   ;; Test that ping command returns ok status.
   (with-task-conductor-test-state
-    (with-mock-cider
+    (with-mock-nrepl
       (setq task-conductor-dev-env--dev-env-id "test-id")
       (let ((response (task-conductor-dev-env--dispatch-command
                        '(:command-id "cmd-1" :command :ping :params nil))))
@@ -356,7 +356,7 @@
 (ert-deftest task-conductor-dev-env-dispatch-unknown-command ()
   ;; Test that unknown commands return error.
   (with-task-conductor-test-state
-    (with-mock-cider
+    (with-mock-nrepl
       (setq task-conductor-dev-env--dev-env-id "test-id")
       (let ((response (task-conductor-dev-env--dispatch-command
                        '(:command-id "cmd-2" :command :unknown :params nil))))

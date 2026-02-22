@@ -4,7 +4,7 @@
 
 ;; Author: task-conductor contributors
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1") (cider "1.14.0") (claude-code "0.1.0"))
+;; Package-Requires: ((emacs "28.1") (claude-code "0.1.0"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/hugoduncan/task-conductor
 
@@ -30,7 +30,7 @@
 ;;
 ;; Usage:
 ;;   1. Start the task-conductor JVM with nREPL
-;;   2. Connect to nREPL with M-x cider-connect
+;;   2. Set `task-conductor-nrepl-port' to the nREPL port
 ;;   3. Run M-x task-conductor-dev-env-connect
 ;;
 ;; The package polls the JVM for commands and dispatches them to
@@ -43,11 +43,7 @@
 (require 'claude-code)
 (require 'json)
 (require 'parseedn)
-
-(declare-function cider-connected-p "cider-connection")
-(declare-function cider-nrepl-sync-request:eval "cider-client")
-(declare-function cider-nrepl-request:eval "cider-client")
-(declare-function nrepl-dict-get "nrepl-dict")
+(require 'task-conductor-nrepl)
 
 (defgroup task-conductor-dev-env nil
   "Emacs dev-env for task-conductor."
@@ -60,9 +56,8 @@
   :group 'task-conductor-dev-env)
 
 (defcustom task-conductor-nrepl-port nil
-  "Port for the task-conductor nREPL server.
-When nil, uses the current CIDER connection."
-  :type '(choice (const :tag "Use CIDER connection" nil)
+  "Port for the task-conductor nREPL server."
+  :type '(choice (const :tag "Not set" nil)
                  (integer :tag "Port number"))
   :group 'task-conductor-dev-env)
 
@@ -92,9 +87,12 @@ Used to track active claude-code sessions started by the orchestrator.")
   "Hash table mapping session-id to hook data plist.
 Each entry is (:on-close (:hook-id X :fn Y)).")
 
+(defvar task-conductor-dev-env--nrepl-conn nil
+  "The nREPL connection object for the task-conductor JVM.")
+
 (defvar task-conductor-dev-env--project-dir nil
-  "Project directory for CIDER session context.
-Set during connect to ensure poll loop uses correct nREPL session.")
+  "Project directory for session context.
+Used as fallback directory in start-session handler.")
 
 (defvar task-conductor-dev-env--polling nil
   "Non-nil when an async poll request is in flight.
@@ -114,10 +112,8 @@ A list of plists, each with :project/path, :project/name, and optionally
 (defun task-conductor-dev-env--connected-p ()
   "Return non-nil if connected to task-conductor as a dev-env."
   (and task-conductor-dev-env--dev-env-id
-       (fboundp 'cider-connected-p)
-       (let ((default-directory (or task-conductor-dev-env--project-dir
-                                    default-directory)))
-         (cider-connected-p))))
+       task-conductor-dev-env--nrepl-conn
+       (task-conductor-nrepl-connected-p task-conductor-dev-env--nrepl-conn)))
 
 ;;; UUID generation
 
@@ -181,19 +177,17 @@ Handles special parseedn types like (edn-uuid \"...\")."
 
 (defun task-conductor-dev-env--eval-sync (form)
   "Evaluate Clojure FORM synchronously via nREPL.
-Returns the parsed value as plist on success, or signals an error on failure.
-Uses `task-conductor-dev-env--project-dir' for CIDER session context."
-  (let ((default-directory (or task-conductor-dev-env--project-dir default-directory)))
-    (unless (cider-connected-p)
-      (user-error "Not connected to CIDER. Run M-x cider-connect first"))
-    (let* ((result (cider-nrepl-sync-request:eval form))
-           (value (nrepl-dict-get result "value"))
-           (err (nrepl-dict-get result "err"))
-           (ex (nrepl-dict-get result "ex")))
-      (when (or err ex)
-        (error "nREPL eval error for %s: %s" form (or err ex)))
-      (when value
-        (task-conductor-dev-env--edn-to-plist (parseedn-read-str value))))))
+Returns the parsed value as plist on success, or signals an error on failure."
+  (unless (task-conductor-nrepl-connected-p task-conductor-dev-env--nrepl-conn)
+    (user-error "Not connected to nREPL. Run M-x task-conductor-dev-env-connect first"))
+  (let* ((result (task-conductor-nrepl-eval-sync task-conductor-dev-env--nrepl-conn form))
+         (value (task-conductor-nrepl-dict-get result "value"))
+         (err (task-conductor-nrepl-dict-get result "err"))
+         (ex (task-conductor-nrepl-dict-get result "ex")))
+    (when (or err ex)
+      (error "nREPL eval error for %s: %s" form (or err ex)))
+    (when value
+      (task-conductor-dev-env--edn-to-plist (parseedn-read-str value)))))
 
 ;;; Response helpers
 
@@ -201,12 +195,11 @@ Uses `task-conductor-dev-env--project-dir' for CIDER session context."
   "Send RESPONSE for COMMAND-ID to the orchestrator.
 COMMAND-ID is a UUID string.  RESPONSE is a plist.
 Returns t if delivered, nil if command not found."
-  (let ((default-directory (or task-conductor-dev-env--project-dir default-directory)))
-    (task-conductor-dev-env--eval-sync
-     (format "(task-conductor.emacs-dev-env.interface/send-response-by-id %S #uuid %S %s)"
-             task-conductor-dev-env--dev-env-id
-             command-id
-             (task-conductor-dev-env--plist-to-edn response)))))
+  (task-conductor-dev-env--eval-sync
+   (format "(task-conductor.emacs-dev-env.interface/send-response-by-id %S #uuid %S %s)"
+           task-conductor-dev-env--dev-env-id
+           command-id
+           (task-conductor-dev-env--plist-to-edn response))))
 
 (defun task-conductor-dev-env--send-hook-event (hook-type session-id reason)
   "Send hook event to the orchestrator.
@@ -507,8 +500,8 @@ Returns the response to send back to the orchestrator."
   "Callback for async poll RESPONSE.
 Processes the response and dispatches commands.  Non-blocking."
   (setq task-conductor-dev-env--polling nil)
-  (let ((value (nrepl-dict-get response "value"))
-        (err (nrepl-dict-get response "err")))
+  (let ((value (task-conductor-nrepl-dict-get response "value"))
+        (err (task-conductor-nrepl-dict-get response "err")))
     (cond
      (err
       (message "task-conductor: Poll error: %s" err))
@@ -530,17 +523,18 @@ Processes the response and dispatches commands.  Non-blocking."
   "One iteration of the async command subscription loop.
 Non-blocking - uses callback for response handling."
   (when (and task-conductor-dev-env--dev-env-id
+             task-conductor-dev-env--nrepl-conn
              (not task-conductor-dev-env--polling))
     (setq task-conductor-dev-env--polling t)
-    (let ((default-directory (or task-conductor-dev-env--project-dir default-directory)))
-      (condition-case err
-          (cider-nrepl-request:eval
-           (format "(task-conductor.emacs-dev-env.interface/await-command-by-id %S 5000)"
-                   task-conductor-dev-env--dev-env-id)
-           #'task-conductor-dev-env--poll-callback)
-        (error
-         (setq task-conductor-dev-env--polling nil)
-         (message "task-conductor: Async poll error: %s" (error-message-string err)))))))
+    (condition-case err
+        (task-conductor-nrepl-eval-async
+         task-conductor-dev-env--nrepl-conn
+         (format "(task-conductor.emacs-dev-env.interface/await-command-by-id %S 5000)"
+                 task-conductor-dev-env--dev-env-id)
+         #'task-conductor-dev-env--poll-callback)
+      (error
+       (setq task-conductor-dev-env--polling nil)
+       (message "task-conductor: Async poll error: %s" (error-message-string err))))))
 
 (defun task-conductor-dev-env--start-poll-loop ()
   "Start the async command subscription poll loop."
@@ -563,14 +557,17 @@ Non-blocking - uses callback for response handling."
 ;;;###autoload
 (defun task-conductor-dev-env-connect ()
   "Connect to task-conductor and register as a dev-env.
-Requires an active CIDER connection.  Stores the dev-env-id for
-subsequent operations and starts the command subscription loop."
+Requires `task-conductor-nrepl-port' to be set.  Stores the dev-env-id
+for subsequent operations and starts the command subscription loop."
   (interactive)
-  (require 'cider)
   (when (task-conductor-dev-env--connected-p)
     (user-error "Already connected as dev-env %s" task-conductor-dev-env--dev-env-id))
-  ;; Store project directory for CIDER session context
+  (unless task-conductor-nrepl-port
+    (user-error "Set `task-conductor-nrepl-port' before connecting"))
   (setq task-conductor-dev-env--project-dir default-directory)
+  (setq task-conductor-dev-env--nrepl-conn
+        (task-conductor-nrepl-connect
+         task-conductor-nrepl-host task-conductor-nrepl-port))
   (let ((dev-env-id (task-conductor-dev-env--eval-sync
                      "(task-conductor.emacs-dev-env.interface/register-emacs-dev-env)")))
     (setq task-conductor-dev-env--dev-env-id dev-env-id)
@@ -592,6 +589,8 @@ Stops the command subscription loop before unregistering."
     (setq task-conductor-dev-env--project-dir nil)
     (setq task-conductor-dev-env--cached-sessions nil)
     (setq task-conductor-dev-env--cached-projects nil)
+    (task-conductor-nrepl-close task-conductor-dev-env--nrepl-conn)
+    (setq task-conductor-dev-env--nrepl-conn nil)
     (clrhash task-conductor-dev-env--sessions)
     (clrhash task-conductor-dev-env--session-hooks)
     (message "Disconnected from task-conductor")))
