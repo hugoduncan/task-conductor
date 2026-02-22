@@ -40,6 +40,19 @@
          :entered-state-at "2026-02-19T11:00:00Z"))
   "Sample session data including a :wait-pr-merge session.")
 
+(defvar test-sessions-with-running
+  (list
+   (list :session-id "sess-1" :state :escalated :sub-state :session-idle
+         :task-id 101 :task-title "Fix auth"
+         :entered-state-at "2026-02-19T10:00:00Z")
+   (list :session-id "sess-2" :state :escalated :sub-state :session-running
+         :task-id 102 :task-title "Add tests"
+         :entered-state-at "2026-02-19T10:30:00Z")
+   (list :session-id "sess-3" :state :idle
+         :task-id 103 :task-title "Refactor DB"
+         :entered-state-at "2026-02-19T09:00:00Z"))
+  "Sample session data with a :session-running escalated session.")
+
 ;;; Test Helpers
 
 (defmacro with-sessions-buffer (&rest body)
@@ -148,6 +161,41 @@
     (should (= 1 (length (plist-get result :idle))))
     (should (= 1 (length (plist-get result :wait-pr-merge))))))
 
+(ert-deftest task-conductor-sessions-partition-running-sub-state ()
+  ;; Escalated session with :session-running sub-state goes to :running.
+  (let* ((session (list :session-id "s1" :state :escalated :sub-state :session-running
+                        :task-id 101 :task-title "Fix auth"
+                        :entered-state-at nil))
+         (result (task-conductor-sessions--partition-by-state (list session))))
+    (should (= 1 (length (plist-get result :running))))
+    (should (= 0 (length (plist-get result :needs-attention))))))
+
+(ert-deftest task-conductor-sessions-partition-idle-sub-state ()
+  ;; Escalated session with :session-idle sub-state goes to :needs-attention.
+  (let* ((session (list :session-id "s1" :state :escalated :sub-state :session-idle
+                        :task-id 101 :task-title "Fix auth"
+                        :entered-state-at nil))
+         (result (task-conductor-sessions--partition-by-state (list session))))
+    (should (= 0 (length (plist-get result :running))))
+    (should (= 1 (length (plist-get result :needs-attention))))))
+
+(ert-deftest task-conductor-sessions-partition-no-sub-state ()
+  ;; Escalated session without :sub-state key routes to :needs-attention (backward compat).
+  (let* ((session (list :session-id "s1" :state :escalated
+                        :task-id 101 :task-title "Fix auth"
+                        :entered-state-at nil))
+         (result (task-conductor-sessions--partition-by-state (list session))))
+    (should (= 0 (length (plist-get result :running))))
+    (should (= 1 (length (plist-get result :needs-attention))))))
+
+(ert-deftest task-conductor-sessions-partition-mixed-sub-states ()
+  ;; Escalated running and idle sessions coexist in correct partitions.
+  (let ((result (task-conductor-sessions--partition-by-state test-sessions-with-running)))
+    (should (= 1 (length (plist-get result :needs-attention))))
+    (should (= 1 (length (plist-get result :running))))
+    (should (= 1 (length (plist-get result :idle))))
+    (should (= 0 (length (plist-get result :wait-pr-merge))))))
+
 ;;; Section Rendering
 
 (ert-deftest task-conductor-sessions-render-empty ()
@@ -185,6 +233,16 @@
       (should (string-match-p "PR #42" content))
       (should (string-match-p "feat-branch" content))
       (should (string-match-p "🔀" content)))))
+
+(ert-deftest task-conductor-sessions-render-running-escalated ()
+  ;; Escalated session with :session-running sub-state appears in Running group.
+  (with-sessions-buffer
+    (task-conductor-sessions--render test-sessions-with-running)
+    (let ((content (buffer-string)))
+      (should (string-match-p "Needs Attention (1)" content))
+      (should (string-match-p "Running (1)" content))
+      (should (string-match-p "🔄" content))
+      (should (string-match-p "Add tests" content)))))
 
 (ert-deftest task-conductor-sessions-render-root-section-exists ()
   ;; After render, magit-root-section is set.
