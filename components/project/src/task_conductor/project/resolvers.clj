@@ -284,9 +284,17 @@
   [dir]
   (try
     (let [port-file (fs/path dir ".nrepl-port")]
-      (when (fs/exists? port-file)
-        (str/trim (slurp (fs/file port-file)))))
-    (catch java.io.IOException _ nil)))
+      (if (fs/exists? port-file)
+        (let [port (str/trim (slurp (fs/file port-file)))]
+          (log/debug "nREPL port resolved" {:dir dir :port port})
+          port)
+        (do
+          (log/debug "nREPL port file not found" {:dir dir})
+          nil)))
+    (catch java.io.IOException e
+      (log/warn "Failed to read nREPL port file"
+                {:dir dir :error (.getMessage e)})
+      nil)))
 
 (defn- build-session-hooks
   "Build CLI hooks map for idle/active detection during escalated sessions.
@@ -306,6 +314,12 @@
                             " \"$CODE\""))
           active (send-event ":on-active")
           idle (send-event ":on-session-idle")]
+      (log/info "Built session hooks for idle/active detection"
+                {:session-id session-id :nrepl-port nrepl-port})
+      (log/debug "Session hook commands"
+                 {:session-id session-id
+                  :on-active-cmd active
+                  :on-session-idle-cmd idle})
       {:UserPromptSubmit
        [{:hooks [{:type "command" :command active}]}]
        :Notification
@@ -433,13 +447,23 @@
                              (read-nrepl-port project-dir))
                            (when root-project-dir
                              (read-nrepl-port root-project-dir)))
-            _ (when-not nrepl-port
+            _ (if nrepl-port
+                (log/info "nREPL port resolved for escalation"
+                          {:session-id session-id
+                           :nrepl-port nrepl-port
+                           :project-dir project-dir
+                           :root-project-dir root-project-dir})
                 (log/warn
                  "No nREPL port available; idle/active detection disabled"
                  {:project-dir project-dir
                   :root-project-dir root-project-dir
                   :session-id session-id}))
             cli-hooks (build-session-hooks session-id nrepl-port)
+            _ (log/info "Escalating session to dev-env"
+                        {:session-id session-id
+                         :dev-env-id dev-env-id
+                         :has-hooks (boolean cli-hooks)
+                         :has-claude-session (boolean last-claude-session-id)})
             opts (cond-> {:dir project-dir
                           :task-id task-id}
                    last-claude-session-id

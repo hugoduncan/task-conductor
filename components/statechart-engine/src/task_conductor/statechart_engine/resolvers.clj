@@ -23,6 +23,18 @@
    ::pco/output [:engine/session-state]}
   {:engine/session-state (core/state session-id)})
 
+(graph/defresolver engine-session-sub-state
+  "Derive the sub-state for a session.
+  Returns :session-idle, :session-running, or nil when not escalated."
+  [{:engine/keys [session-id]}]
+  {::pco/input [:engine/session-id]
+   ::pco/output [:engine/session-sub-state]}
+  (let [state-config (core/state session-id)]
+    {:engine/session-sub-state
+     (cond
+       (:session-running state-config) :session-running
+       (:session-idle state-config) :session-idle)}))
+
 (graph/defresolver engine-session-history [{:engine/keys [session-id]}]
   {::pco/input [:engine/session-id]
    ::pco/output [:engine/session-history]}
@@ -111,6 +123,7 @@
   [engine-sessions
    engine-charts
    engine-session-state
+   engine-session-sub-state
    engine-session-history
    engine-session-data
    engine-active-sessions

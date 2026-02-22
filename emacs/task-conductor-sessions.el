@@ -16,8 +16,9 @@
 ;;; Commentary:
 
 ;; Displays Claude sessions grouped by attention priority: needs
-;; attention (escalated+idle), running (escalated+running), idle, and
-;; PR-waiting.  Uses magit-section for a collapsible, navigable UI.  Session data
+;; attention (escalated+idle), running (escalated+running), and
+;; PR-waiting.  Non-escalated idle sessions are excluded from the view.
+;; Uses magit-section for a collapsible, navigable UI.  Session data
 ;; comes from the JVM via the dev-env mechanism and is refreshed
 ;; automatically while the buffer is visible.
 ;;
@@ -128,10 +129,11 @@ Shows PR number and branch for :wait-pr-merge sessions."
 
 (defun task-conductor-sessions--partition-by-state (sessions)
   "Partition SESSIONS into groups by state.
-Returns a plist with keys :needs-attention :running :idle :wait-pr-merge.
+Returns a plist with keys :needs-attention :running :wait-pr-merge.
+Non-escalated :idle sessions are excluded from all groups.
 Escalated sessions are split by :sub-state — :session-running goes to
 :running, everything else (including nil) to :needs-attention."
-  (let (needs-attention running idle wait-pr-merge)
+  (let (needs-attention running wait-pr-merge)
     (dolist (s sessions)
       (let ((state (plist-get s :state)))
         (cond
@@ -141,7 +143,7 @@ Escalated sessions are split by :sub-state — :session-running goes to
               (push s running)
             (push s needs-attention)))
          ((or (eq state :idle) (equal state "idle"))
-          (push s idle))
+          nil)
          ((task-conductor-sessions--wait-pr-merge-p state)
           (push s wait-pr-merge))
          (t
@@ -149,7 +151,6 @@ Escalated sessions are split by :sub-state — :session-running goes to
                    state (plist-get s :session-id))))))
     (list :needs-attention (nreverse needs-attention)
           :running (nreverse running)
-          :idle (nreverse idle)
           :wait-pr-merge (nreverse wait-pr-merge))))
 
 (defun task-conductor-sessions--insert-session-entry (session)
@@ -178,7 +179,6 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
       (magit-insert-heading "Claude Sessions\n")
       (task-conductor-sessions--insert-group "Needs Attention" (plist-get parts :needs-attention))
       (task-conductor-sessions--insert-group "Running" (plist-get parts :running))
-      (task-conductor-sessions--insert-group "Idle" (plist-get parts :idle))
       (task-conductor-sessions--insert-group "PR Waiting" (plist-get parts :wait-pr-merge))))
   (goto-char (point-min)))
 
@@ -342,7 +342,7 @@ Called by the :notify-sessions-changed handler."
 ;;;###autoload
 (defun task-conductor-sessions ()
   "Open the task-conductor sessions buffer.
-Shows Claude sessions in escalated or idle states."
+Shows escalated and PR-waiting sessions; excludes non-escalated idle sessions."
   (interactive)
   (let ((buf (get-buffer-create task-conductor-sessions--buffer-name)))
     (with-current-buffer buf
