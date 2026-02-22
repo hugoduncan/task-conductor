@@ -200,31 +200,31 @@
       (is (not (execute/refined? {:meta {}})))
       (is (not (execute/refined? {:meta {:other "x"}}))))))
 
-(deftest count-open-children-test
-  ;; Verify count-open-children treats :done and :closed as complete.
-  (testing "count-open-children"
-    (testing "counts children with :open status"
-      (is (= 2 (execute/count-open-children
+(deftest count-completed-children-test
+  ;; Verify count-completed-children counts closed/done children.
+  (testing "count-completed-children"
+    (testing "returns zero for all open"
+      (is (= 0 (execute/count-completed-children
                 [{:status :open} {:status :open}]))))
 
-    (testing "excludes :closed children"
-      (is (= 0 (execute/count-open-children
+    (testing "counts :closed children"
+      (is (= 1 (execute/count-completed-children
                 [{:status :closed}]))))
 
-    (testing "excludes :done children"
-      (is (= 0 (execute/count-open-children
+    (testing "counts :done children"
+      (is (= 1 (execute/count-completed-children
                 [{:status :done}]))))
 
-    (testing "excludes string status variants"
-      (is (= 0 (execute/count-open-children
+    (testing "counts string status variants"
+      (is (= 2 (execute/count-completed-children
                 [{:status "closed"} {:status "done"}]))))
 
     (testing "excludes :deleted children"
-      (is (= 1 (execute/count-open-children
+      (is (= 0 (execute/count-completed-children
                 [{:status :open} {:status :deleted}]))))
 
     (testing "counts mixed statuses correctly"
-      (is (= 1 (execute/count-open-children
+      (is (= 2 (execute/count-completed-children
                 [{:status :done} {:status :open} {:status :closed}]))))))
 
 ;;; Statechart Definition Tests

@@ -204,15 +204,17 @@
 (defn- no-progress?
   "Check if skill made no progress.
    For most states: new-state == pre-skill-state
-   For :has-tasks: state unchanged AND open children count unchanged
+   For :has-tasks: state unchanged AND completed children count unchanged.
+   Tracks completed count (monotonically increasing) rather than open count,
+   because new tasks can be created during execution, masking progress.
    :complete is never no-progress — it means the story is closed."
-  [pre-skill-state new-state pre-open-children new-open-children]
+  [pre-skill-state new-state pre-completed-children new-completed-children]
   (if (= :complete new-state)
     false
     (let [was-has-tasks (= :has-tasks pre-skill-state)
           is-has-tasks (= :has-tasks new-state)]
       (if (and was-has-tasks is-has-tasks)
-        (= pre-open-children new-open-children)
+        (= pre-completed-children new-completed-children)
         (= pre-skill-state new-state)))))
 
 (defn- skill-failed?
@@ -233,7 +235,7 @@
   (try
     (let [data (sc/get-data session-id)
           {:keys [project-dir task-id task-type
-                  pre-skill-state pre-skill-open-children
+                  pre-skill-state pre-skill-completed-children
                   on-complete]} data]
       (cond
         (skill-failed? result)
@@ -258,10 +260,10 @@
                           (execute/derive-task-state
                            (task->execute-map task project-dir)))
               new-open-children (when (= :story task-type)
-                                  (execute/count-open-children
+                                  (execute/count-completed-children
                                    children-maps))]
           (if (no-progress? pre-skill-state new-state
-                            pre-skill-open-children new-open-children)
+                            pre-skill-completed-children new-open-children)
             (do
               (sc/update-data! session-id
                                #(assoc
@@ -351,15 +353,16 @@
                                  children-maps)
                                 (execute/derive-task-state
                                  (task->execute-map task project-dir)))
-        open-children-count (when (= :story task-type)
-                              (execute/count-open-children children-maps))]
+        completed-children-count
+        (when (= :story task-type)
+          (execute/count-completed-children children-maps))]
     (sc/update-data! session-id
                      (fn [d]
                        (cond-> (assoc d :pre-skill-state current-derived-state)
-                         (some? open-children-count)
+                         (some? completed-children-count)
                          (assoc
-                          :pre-skill-open-children
-                          open-children-count))))))
+                          :pre-skill-completed-children
+                          completed-children-count))))))
 
 (graph/defmutation invoke-skill!
   "Invoke a skill via claude-cli based on current statechart state.

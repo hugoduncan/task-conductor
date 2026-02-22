@@ -681,13 +681,13 @@
                   (is (some #{:wait-pr-merge} events)
                       "Should have received :wait-pr-merge event"))))))))
 
-    (testing "sends :no-progress for :has-tasks when open children unchanged"
+    (testing "sends :no-progress for :has-tasks when completed count unchanged"
       (with-execute-state
         (let [cli-nullable
               (claude-cli/make-nullable
                {:exit-code 0 :events []
                 :session-id "claude-def"})
-              ;; 2 open children before and after skill
+              ;; 0 completed children before and after skill
               story-resp
               (make-task-response
                {:type :story
@@ -721,11 +721,11 @@
                   "claude-def"
                   (:last-claude-session-id (sc/get-data session-id))))))))))
 
-    (testing "sends :has-tasks event when open children count decreases"
+    (testing "sends :has-tasks event when completed children count increases"
       (with-execute-state
         (let [cli-nullable (claude-cli/make-nullable
                             {:exit-code 0 :events []})
-              ;; 2 open before, 1 after skill
+              ;; 0 completed before, 1 completed after skill
               story-resp
               (make-task-response
                {:type :story
