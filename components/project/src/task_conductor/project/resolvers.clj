@@ -428,6 +428,7 @@
                 (log/warn
                  "No nREPL port available; idle/active detection disabled"
                  {:project-dir project-dir
+                  :root-project-dir root-project-dir
                   :session-id session-id}))
             cli-hooks (build-session-hooks session-id nrepl-port)
             opts (cond-> {:dir project-dir
