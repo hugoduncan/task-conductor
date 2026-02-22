@@ -514,7 +514,9 @@
                    (=
                     "/mcp-tasks:refine-task (MCP)"
                     (:prompt (:opts (first invs)))))
-                  (is (= "/test" (:dir (:opts (first invs))))))))))))
+                  ;; Falls back to root-project-dir when worktree
+                  ;; path doesn't exist on disk
+                  (is (= "/test/dir" (:dir (:opts (first invs))))))))))))
 
     (testing "transitions to :escalated on skill error"
       (with-execute-state
