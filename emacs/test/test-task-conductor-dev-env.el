@@ -1,7 +1,7 @@
 ;;; test-task-conductor-dev-env.el --- Tests for task-conductor-dev-env -*- lexical-binding: t; -*-
 
 ;; Tests for the Emacs dev-env component of task-conductor.
-;; These tests mock external dependencies (cider, claude-code) to verify
+;; These tests mock external dependencies (nREPL, claude-code) to verify
 ;; the package's internal logic without requiring a running nREPL server.
 
 ;;; Manual Integration Testing
