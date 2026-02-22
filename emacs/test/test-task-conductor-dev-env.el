@@ -1,7 +1,7 @@
 ;;; test-task-conductor-dev-env.el --- Tests for task-conductor-dev-env -*- lexical-binding: t; -*-
 
 ;; Tests for the Emacs dev-env component of task-conductor.
-;; These tests mock external dependencies (cider, claude-code) to verify
+;; These tests mock external dependencies (nREPL, claude-code) to verify
 ;; the package's internal logic without requiring a running nREPL server.
 
 ;;; Manual Integration Testing
@@ -11,7 +11,7 @@
 ;; with actual Emacs and claude-code.el.
 ;;
 ;; Prerequisites:
-;; - Emacs 28.1+ with cider and claude-code.el installed
+;; - Emacs 28.1+ with claude-code.el installed
 ;; - Claude CLI installed and authenticated
 ;; - JVM with task-conductor running
 ;;
@@ -20,15 +20,14 @@
 ;;   cd /path/to/task-conductor
 ;;   clj -M:dev:nrepl
 ;;
-;; Step 2: In Emacs, connect to the nREPL server
-;;
-;;   M-x cider-connect RET localhost RET <port> RET
-;;
-;;   The port is typically written to .nrepl-port in the project directory.
-;;
-;; Step 3: Load the task-conductor-dev-env package
+;; Step 2: Load the task-conductor-dev-env package
 ;;
 ;;   M-x load-file RET /path/to/emacs/task-conductor-dev-env.el RET
+;;
+;; Step 3: Set the nREPL port
+;;
+;;   M-x customize-variable RET task-conductor-nrepl-port RET
+;;   (set to the port from .nrepl-port in the project directory)
 ;;
 ;; Step 4: Connect to task-conductor as a dev-env
 ;;
@@ -91,7 +90,7 @@
 ;;
 ;; Troubleshooting:
 ;;
-;; - "Not connected to CIDER": Run M-x cider-connect first
+;; - "Not connected to nREPL": Set port and run M-x task-conductor-dev-env-connect
 ;; - "nREPL eval error": Check that emacs-dev-env component is on classpath
 ;; - "command channel closed": The JVM may have restarted; reconnect
 ;; - Poll loop errors appear in *Messages* buffer
@@ -108,21 +107,22 @@
   "Execute BODY with clean task-conductor state."
   (declare (indent 0))
   `(let ((task-conductor-dev-env--dev-env-id nil)
+         (task-conductor-dev-env--nrepl-conn nil)
          (task-conductor-dev-env--poll-timer nil)
          (task-conductor-dev-env--sessions (make-hash-table :test 'equal))
          (task-conductor-dev-env--session-hooks (make-hash-table :test 'equal)))
      ,@body))
 
-(defmacro with-mock-cider (&rest body)
-  "Execute BODY with mocked CIDER functions."
+(defmacro with-mock-nrepl (&rest body)
+  "Execute BODY with mocked nREPL functions."
   (declare (indent 0))
-  `(cl-letf (((symbol-function 'cider-connected-p) (lambda () t))
-             ((symbol-function 'cider-nrepl-sync-request:eval)
-              (lambda (form)
-                (list "value" (prin1-to-string '(:status :ok)))))
-             ((symbol-function 'nrepl-dict-get)
+  `(cl-letf (((symbol-function 'task-conductor-nrepl-connected-p) (lambda (_conn) t))
+             ((symbol-function 'task-conductor-nrepl-eval-sync)
+              (lambda (_conn form &optional _timeout)
+                (list (cons "value" (prin1-to-string '(:status :ok))))))
+             ((symbol-function 'task-conductor-nrepl-dict-get)
               (lambda (dict key)
-                (plist-get dict (intern key)))))
+                (cdr (assoc key dict)))))
      ,@body))
 
 ;;; UUID Generation Tests
@@ -347,7 +347,7 @@
 (ert-deftest task-conductor-dev-env-dispatch-ping ()
   ;; Test that ping command returns ok status.
   (with-task-conductor-test-state
-    (with-mock-cider
+    (with-mock-nrepl
       (setq task-conductor-dev-env--dev-env-id "test-id")
       (let ((response (task-conductor-dev-env--dispatch-command
                        '(:command-id "cmd-1" :command :ping :params nil))))
@@ -356,7 +356,7 @@
 (ert-deftest task-conductor-dev-env-dispatch-unknown-command ()
   ;; Test that unknown commands return error.
   (with-task-conductor-test-state
-    (with-mock-cider
+    (with-mock-nrepl
       (setq task-conductor-dev-env--dev-env-id "test-id")
       (let ((response (task-conductor-dev-env--dispatch-command
                        '(:command-id "cmd-2" :command :unknown :params nil))))
@@ -414,6 +414,129 @@
                      (cdr (assoc 'command
                                  (aref (cdr (assoc 'hooks (aref submit 0)))
                                        0))))))))
+
+;;; Connect/Disconnect Lifecycle Tests
+
+(ert-deftest task-conductor-dev-env-connect-sets-state ()
+  ;; Successful connect sets conn, dev-env-id, project-dir, starts poll loop.
+  (with-task-conductor-test-state
+    (let ((task-conductor-dev-env--project-dir nil)
+          (task-conductor-dev-env--polling nil)
+          (task-conductor-dev-env--cached-sessions nil)
+          (task-conductor-dev-env--cached-projects nil)
+          (task-conductor-nrepl-port 7888)
+          (fake-conn (list :process 'fake :session "s1"))
+          (poll-started nil)
+          (close-called nil))
+      (cl-letf (((symbol-function 'task-conductor-nrepl-connect)
+                 (lambda (_host _port) fake-conn))
+                ((symbol-function 'task-conductor-nrepl-connected-p)
+                 (lambda (conn) (eq conn fake-conn)))
+                ((symbol-function 'task-conductor-nrepl-close)
+                 (lambda (_conn) (setq close-called t)))
+                ((symbol-function 'task-conductor-dev-env--eval-sync)
+                 (lambda (form)
+                   (when (string-match-p "register" form)
+                     "dev-env-42")))
+                ((symbol-function 'task-conductor-dev-env--start-poll-loop)
+                 (lambda () (setq poll-started t))))
+        (task-conductor-dev-env-connect)
+        (should (eq fake-conn task-conductor-dev-env--nrepl-conn))
+        (should (string= "dev-env-42" task-conductor-dev-env--dev-env-id))
+        (should (stringp task-conductor-dev-env--project-dir))
+        (should poll-started)
+        (should-not close-called)))))
+
+(ert-deftest task-conductor-dev-env-connect-failure-cleans-up ()
+  ;; When registration fails, nREPL connection is closed and state is reset.
+  (with-task-conductor-test-state
+    (let ((task-conductor-dev-env--project-dir nil)
+          (task-conductor-dev-env--polling nil)
+          (task-conductor-dev-env--cached-sessions nil)
+          (task-conductor-dev-env--cached-projects nil)
+          (task-conductor-nrepl-port 7888)
+          (fake-conn (list :process 'fake :session "s1"))
+          (close-called nil))
+      (cl-letf (((symbol-function 'task-conductor-nrepl-connect)
+                 (lambda (_host _port) fake-conn))
+                ((symbol-function 'task-conductor-nrepl-connected-p)
+                 (lambda (_conn) t))
+                ((symbol-function 'task-conductor-nrepl-close)
+                 (lambda (_conn) (setq close-called t)))
+                ((symbol-function 'task-conductor-dev-env--eval-sync)
+                 (lambda (_form)
+                   (error "Registration failed")))
+                ((symbol-function 'task-conductor-dev-env--start-poll-loop)
+                 #'ignore))
+        (should-error (task-conductor-dev-env-connect))
+        (should close-called)
+        (should-not task-conductor-dev-env--nrepl-conn)
+        (should-not task-conductor-dev-env--project-dir)))))
+
+(ert-deftest task-conductor-dev-env-disconnect-cleans-up-on-unregister-failure ()
+  ;; Disconnect clears all state even when unregister signals an error.
+  (with-task-conductor-test-state
+    (let ((task-conductor-dev-env--project-dir "/test/dir")
+          (task-conductor-dev-env--polling nil)
+          (task-conductor-dev-env--cached-sessions '((:id "s1")))
+          (task-conductor-dev-env--cached-projects '((:id "p1")))
+          (fake-conn (list :process 'fake :session "s1"))
+          (close-called nil))
+      (setq task-conductor-dev-env--dev-env-id "dev-env-99")
+      (setq task-conductor-dev-env--nrepl-conn fake-conn)
+      (puthash "sess-1" (generate-new-buffer "*test-lc*")
+               task-conductor-dev-env--sessions)
+      (puthash "sess-1" '(:on-close (:hook-id "h1"))
+               task-conductor-dev-env--session-hooks)
+      (cl-letf (((symbol-function 'task-conductor-nrepl-connected-p)
+                 (lambda (conn) (eq conn fake-conn)))
+                ((symbol-function 'task-conductor-nrepl-close)
+                 (lambda (_conn) (setq close-called t)))
+                ((symbol-function 'task-conductor-dev-env--eval-sync)
+                 (lambda (_form) (error "Unregister failed")))
+                ((symbol-function 'task-conductor-dev-env--stop-poll-loop)
+                 #'ignore))
+        (task-conductor-dev-env-disconnect)
+        (should close-called)
+        (should-not task-conductor-dev-env--dev-env-id)
+        (should-not task-conductor-dev-env--nrepl-conn)
+        (should-not task-conductor-dev-env--project-dir)
+        (should-not task-conductor-dev-env--cached-sessions)
+        (should-not task-conductor-dev-env--cached-projects)
+        (should (= 0 (hash-table-count task-conductor-dev-env--sessions)))
+        (should (= 0 (hash-table-count task-conductor-dev-env--session-hooks)))))))
+
+(ert-deftest task-conductor-dev-env-disconnect-normal-flow ()
+  ;; Disconnect clears all state on successful unregister.
+  (with-task-conductor-test-state
+    (let ((task-conductor-dev-env--project-dir "/test/dir")
+          (task-conductor-dev-env--polling nil)
+          (task-conductor-dev-env--cached-sessions nil)
+          (task-conductor-dev-env--cached-projects nil)
+          (fake-conn (list :process 'fake :session "s1"))
+          (close-called nil)
+          (unregister-id nil))
+      (setq task-conductor-dev-env--dev-env-id "dev-env-77")
+      (setq task-conductor-dev-env--nrepl-conn fake-conn)
+      (cl-letf (((symbol-function 'task-conductor-nrepl-connected-p)
+                 (lambda (conn) (eq conn fake-conn)))
+                ((symbol-function 'task-conductor-nrepl-close)
+                 (lambda (_conn) (setq close-called t)))
+                ((symbol-function 'task-conductor-dev-env--eval-sync)
+                 (lambda (form)
+                   (when (string-match-p "unregister" form)
+                     (setq unregister-id
+                           (when (string-match "\"\\([^\"]+\\)\"" form)
+                             (match-string 1 form))))
+                   nil))
+                ((symbol-function 'task-conductor-dev-env--stop-poll-loop)
+                 #'ignore))
+        (task-conductor-dev-env-disconnect)
+        (should (string= "dev-env-77" unregister-id))
+        (should close-called)
+        (should-not task-conductor-dev-env--dev-env-id)
+        (should-not task-conductor-dev-env--nrepl-conn)
+        (should-not task-conductor-dev-env--project-dir)))))
 
 ;;; State Cleanup Tests
 
