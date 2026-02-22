@@ -262,7 +262,7 @@
                       inv-opts (:opts (first invs))
                       prompt (:prompt inv-opts)]
                   (is (= 1 (count invs)))
-                  (is (= "/mcp-tasks:refine-task (MCP)" prompt)))))))))))
+                  (is (= "/mcp-tasks:refine-task (MCP) 200" prompt)))))))))))
 
 ;;; Error Path Tests
 
@@ -479,6 +479,184 @@
                           (contains? events :no-progress))
                       "Should progress past :has-tasks"))))))))))
 
+;;; Skill Task ID Prompt Tests
+
+(deftest skill-task-id-prompt-test
+  ;; Verify :args "{task-id}" is substituted into the prompt for each
+  ;; skill action. Uses {:error :timeout} cli-nullable so on-skill-complete
+  ;; sends :error immediately with no re-derivation, preventing cascades.
+  (testing "task ID is passed in prompt for each skill action"
+    (testing "execute-task-action includes task ID"
+      ;; Send :refined from :idle → enters :refined → fires execute-task-action
+      (with-integration-state
+        (let [cli-nullable (claude-cli/make-nullable {:error :timeout})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses
+                                         {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
+              (let [result (graph/query [`(resolvers/execute!
+                                           {:task/project-dir "/test"
+                                            :task/id 701})])
+                    session-id (:execute/session-id
+                                (get result `resolvers/execute!))]
+                (sc/send! session-id :refined)
+                (resolvers/await-skill-threads!)
+                (let [invs (claude-cli/invocations cli-nullable)
+                      prompt (:prompt (:opts (first invs)))]
+                  (is (= 1 (count invs)))
+                  (is (= "/mcp-tasks:execute-task (MCP) 701" prompt)))))))))
+
+    (testing "review-task-action includes task ID"
+      ;; Send :done from :idle → enters :done → fires review-task-action
+      (with-integration-state
+        (let [cli-nullable (claude-cli/make-nullable {:error :timeout})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses
+                                         {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks
+            mcp-nullable
+            (claude-cli/with-nullable-claude-cli
+              cli-nullable
+              (let [result
+                    (graph/query
+                     [`(resolvers/execute!
+                        {:task/project-dir "/test" :task/id 702})])
+                    session-id (:execute/session-id
+                                (get result `resolvers/execute!))]
+                (sc/send! session-id :done)
+                (resolvers/await-skill-threads!)
+                (let [invs (claude-cli/invocations cli-nullable)
+                      prompt (:prompt (:opts (first invs)))]
+                  (is (= 1 (count invs)))
+                  (is
+                   (=
+                    "/mcp-tasks:review-task-implementation (MCP) 702"
+                    prompt)))))))))
+
+    (testing "create-task-pr-action includes task ID"
+      ;; Send :awaiting-pr from :idle → enters :awaiting-pr
+      ;; → fires create-task-pr-action
+      (with-integration-state
+        (let [cli-nullable (claude-cli/make-nullable {:error :timeout})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses
+                                         {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
+              (let [result (graph/query [`(resolvers/execute!
+                                           {:task/project-dir "/test"
+                                            :task/id 703})])
+                    session-id (:execute/session-id
+                                (get result `resolvers/execute!))]
+                (sc/send! session-id :awaiting-pr)
+                (resolvers/await-skill-threads!)
+                (let [invs (claude-cli/invocations cli-nullable)
+                      prompt (:prompt (:opts (first invs)))]
+                  (is (= 1 (count invs)))
+                  (is (= "/mcp-tasks:create-task-pr (MCP) 703" prompt)))))))))
+
+    (testing "merge-pr-action includes task ID"
+      ;; :wait-pr-merge from :idle, then :merge-pr → enters :merging-pr
+      ;; → fires merge-pr-action
+      (with-integration-state
+        (let [cli-nullable (claude-cli/make-nullable {:error :timeout})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (task-responses {})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
+              (let [result (graph/query [`(resolvers/execute!
+                                           {:task/project-dir "/test"
+                                            :task/id 704})])
+                    session-id (:execute/session-id
+                                (get result `resolvers/execute!))]
+                (sc/send! session-id :wait-pr-merge)
+                (sc/send! session-id :merge-pr)
+                (resolvers/await-skill-threads!)
+                (let [invs (claude-cli/invocations cli-nullable)
+                      prompt (:prompt (:opts (first invs)))]
+                  (is (= 1 (count invs)))
+                  (is (= "/squash-merge-on-gh 704" prompt)))))))))
+
+    (testing "execute-story-child-action includes task ID"
+      ;; Story: send :has-tasks from :idle → enters :has-tasks
+      ;; → fires execute-story-child-action
+      (with-integration-state
+        (let [cli-nullable (claude-cli/make-nullable {:error :timeout})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (story-responses
+                                         {:meta {:refined "true"}}
+                                         [{:status :open}])})]
+          (mcp-tasks/with-nullable-mcp-tasks
+            mcp-nullable
+            (claude-cli/with-nullable-claude-cli
+              cli-nullable
+              (let [result
+                    (graph/query
+                     [`(resolvers/execute!
+                        {:task/project-dir "/test" :task/id 705})])
+                    session-id (:execute/session-id
+                                (get result `resolvers/execute!))]
+                (sc/send! session-id :has-tasks)
+                (resolvers/await-skill-threads!)
+                (let [invs (claude-cli/invocations cli-nullable)
+                      prompt (:prompt (:opts (first invs)))]
+                  (is (= 1 (count invs)))
+                  (is
+                   (= "/mcp-tasks:execute-story-child (MCP) 705" prompt)))))))))
+
+    (testing "review-story-action includes task ID"
+      ;; Story: send :done from :idle → enters :done → fires review-story-action
+      (with-integration-state
+        (let [cli-nullable (claude-cli/make-nullable {:error :timeout})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (story-responses
+                                         {:meta {:refined "true"}}
+                                         [{:status :closed}])})]
+          (mcp-tasks/with-nullable-mcp-tasks
+            mcp-nullable
+            (claude-cli/with-nullable-claude-cli
+              cli-nullable
+              (let [result
+                    (graph/query
+                     [`(resolvers/execute!
+                        {:task/project-dir "/test" :task/id 706})])
+                    session-id (:execute/session-id
+                                (get result `resolvers/execute!))]
+                (sc/send! session-id :done)
+                (resolvers/await-skill-threads!)
+                (let [invs (claude-cli/invocations cli-nullable)
+                      prompt (:prompt (:opts (first invs)))]
+                  (is (= 1 (count invs)))
+                  (is
+                   (=
+                    "/mcp-tasks:review-story-implementation (MCP) 706"
+                    prompt)))))))))
+
+    (testing "create-story-pr-action includes task ID"
+      ;; Story: send :awaiting-pr from :idle → enters :awaiting-pr
+      ;; → fires create-story-pr-action
+      (with-integration-state
+        (let [cli-nullable (claude-cli/make-nullable {:error :timeout})
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses (story-responses
+                                         {:meta {:refined "true"}}
+                                         [{:status :closed}])})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
+              (let [result (graph/query [`(resolvers/execute!
+                                           {:task/project-dir "/test"
+                                            :task/id 707})])
+                    session-id (:execute/session-id
+                                (get result `resolvers/execute!))]
+                (sc/send! session-id :awaiting-pr)
+                (resolvers/await-skill-threads!)
+                (let [invs (claude-cli/invocations cli-nullable)
+                      prompt (:prompt (:opts (first invs)))]
+                  (is (= 1 (count invs)))
+                  (is
+                   (= "/mcp-tasks:create-story-pr (MCP) 707" prompt)))))))))))
+
 ;;; Nullable Infrastructure Verification
 
 (deftest nullable-tracks-invocations-test
@@ -514,5 +692,5 @@
                       inv-opts (:opts inv)]
                   (is (= 1 (count invs)))
                   (is (= "/test" (:dir inv-opts)))
-                  (is (= "/mcp-tasks:refine-task (MCP)" (:prompt inv-opts)))
+                  (is (= "/mcp-tasks:refine-task (MCP) 600" (:prompt inv-opts)))
                   (is (instance? java.time.Instant (:timestamp inv))))))))))))

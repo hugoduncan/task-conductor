@@ -171,21 +171,25 @@
 
 (def ^:private refine-task-action
   {:expr '(task-conductor.project.resolvers/invoke-skill!
-           {:skill "mcp-tasks:refine-task (MCP)"})})
+           {:skill "mcp-tasks:refine-task (MCP)"
+            :args "{task-id}"})})
 
 (def ^:private execute-task-action
   {:expr '(task-conductor.project.resolvers/invoke-skill!
-           {:skill "mcp-tasks:execute-task (MCP)"})})
+           {:skill "mcp-tasks:execute-task (MCP)"
+            :args "{task-id}"})})
 
 (def ^:private review-task-action
   {:expr
    '(task-conductor.project.resolvers/invoke-skill!
      {:skill
-      "mcp-tasks:review-task-implementation (MCP)"})})
+      "mcp-tasks:review-task-implementation (MCP)"
+      :args "{task-id}"})})
 
 (def ^:private create-task-pr-action
   {:expr '(task-conductor.project.resolvers/invoke-skill!
-           {:skill "mcp-tasks:create-task-pr (MCP)"})})
+           {:skill "mcp-tasks:create-task-pr (MCP)"
+            :args "{task-id}"})})
 
 (def ^:private create-story-tasks-action
   {:expr
@@ -197,22 +201,26 @@
   {:expr
    '(task-conductor.project.resolvers/invoke-skill!
      {:skill
-      "mcp-tasks:execute-story-child (MCP)"})})
+      "mcp-tasks:execute-story-child (MCP)"
+      :args "{task-id}"})})
 
 (def ^:private review-story-action
   {:expr
    '(task-conductor.project.resolvers/invoke-skill!
      {:skill
-      "mcp-tasks:review-story-implementation (MCP)"})})
+      "mcp-tasks:review-story-implementation (MCP)"
+      :args "{task-id}"})})
 
 (def ^:private create-story-pr-action
   {:expr
    '(task-conductor.project.resolvers/invoke-skill!
-     {:skill "mcp-tasks:create-story-pr (MCP)"})})
+     {:skill "mcp-tasks:create-story-pr (MCP)"
+      :args "{task-id}"})})
 
 (def ^:private merge-pr-action
   {:expr '(task-conductor.project.resolvers/invoke-skill!
-           {:skill "squash-merge-on-gh"})})
+           {:skill "squash-merge-on-gh"
+            :args "{task-id}"})})
 
 (def ^:private complete-story-action
   {:expr '(task-conductor.project.resolvers/invoke-skill!
