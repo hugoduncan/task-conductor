@@ -167,6 +167,30 @@
               (listener "test" #{:running} #{:completed} :done)
               (is (pos? @notified)))))))
 
+    (testing "fires when session enters unrefined state"
+      (with-agent-runner-state
+        (let [notified (atom 0)]
+          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
+                        (fn [] (swap! notified inc))]
+            (agent-runner/bootstrap!)
+            (let [listeners @engine/transition-listeners
+                  listener (get listeners
+                                ::agent-runner/session-notify)]
+              (listener "test" #{:idle} #{:unrefined} :initial-state)
+              (is (pos? @notified)))))))
+
+    (testing "fires when session enters refined state"
+      (with-agent-runner-state
+        (let [notified (atom 0)]
+          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
+                        (fn [] (swap! notified inc))]
+            (agent-runner/bootstrap!)
+            (let [listeners @engine/transition-listeners
+                  listener (get listeners
+                                ::agent-runner/session-notify)]
+              (listener "test" #{:unrefined} #{:refined} :refined)
+              (is (pos? @notified)))))))
+
     (testing "fires for sub-state transitions within same parent state"
       (with-agent-runner-state
         (let [notified (atom 0)]
