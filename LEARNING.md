@@ -2,6 +2,25 @@
 
 Past discoveries and learnings.
 
+## 2026-02-22: Worktree Removal Breaks State Derivation and Skill Invocation
+
+### Deleted worktree causes cascading failures after PR merge
+- After PR merge, worktree directory (e.g. `/project/243-task-name`) is removed
+- `project-dir` in session data points to the deleted worktree
+- `fetch-task` fails with io-error (mcp-tasks can't run in non-existent dir)
+- All task fields return nil → `derive-story-state` falls back to `:unrefined`
+- `invoke-skill!` fails: `Cannot run program "claude" (in directory "...")`
+- `on-dev-env-close` also affected — couldn't detect merged PRs
+- Fix: `effective-project-dir` helper checks `fs/exists?` on `project-dir`, falls back to `root-project-dir`
+- Applied to: `on-dev-env-close`, `on-skill-complete`, `store-pre-skill-state!`, `invoke-skill!`, `escalate-to-dev-env!`, `manual-escalate!`
+- `root-project-dir` is set during `execute!` to the original input `project-dir` (before `work-on` returns worktree path)
+
+### on-dev-env-close missing project-dir for PR merge detection
+- `task->execute-map` called without `project-dir` → `:pr-merged?` always nil
+- `derive-story-state` could never reach `:complete` for merged PRs
+- Sessions stuck in `:wait-pr-merge` even after successful merge
+- Fix: pass `project-dir` (now via `effective-project-dir`) to all `task->execute-map` calls
+
 ## 2026-02-22: Hook Accumulation Causes Duplicate Skill Invocations
 
 ### Dev-env on-close hooks accumulate across escalations
