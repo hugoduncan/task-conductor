@@ -3,7 +3,8 @@
   Provides synchronous execution of mcp-tasks commands with EDN parsing."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
-            [cheshire.core :as json]))
+            [cheshire.core :as json]
+            [clojure.string :as str]))
 
 ;;; Project Directory Resolution
 
@@ -107,10 +108,12 @@
 (defn- safe-read-string
   "Read a string as Clojure data with *read-eval* disabled.
   Uses clojure.core/read-string to support ::keyword syntax which
-  clojure.edn/read-string does not handle."
+  clojure.edn/read-string does not handle.
+  Repairs :::keyword tokens (triple-colon) from mcp-tasks CLI meta keys
+  by reducing them to :keyword before reading."
   [s]
   (binding [*read-eval* false]
-    (read-string s)))
+    (read-string (str/replace s #":::(\w)" ":$1"))))
 
 (defn run-cli
   "Execute mcp-tasks CLI with args in the given project directory.

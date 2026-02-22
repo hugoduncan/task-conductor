@@ -3,6 +3,22 @@
   (:require [clojure.test :refer [deftest is testing]]
             [task-conductor.mcp-tasks.core :as core]))
 
+;;; safe-read-string tests
+;;
+;; Tests that safe-read-string handles malformed EDN from CLI output,
+;; including triple-colon keywords in meta maps.
+
+(deftest safe-read-string-test
+  (testing "safe-read-string"
+    (testing "with valid EDN"
+      (testing "parses normally"
+        (is (= {:a 1} (#'core/safe-read-string "{:a 1}")))))
+    (testing "with triple-colon keywords"
+      (testing "repairs :::key to :key"
+        (is (= {:meta {:refined "true" :pr-merged "true"}}
+               (#'core/safe-read-string
+                "{:meta {:::refined \"true\", :::pr-merged \"true\"}}")))))))
+
 ;;; build-list-args tests
 ;;
 ;; Tests that build-list-args correctly translates options
