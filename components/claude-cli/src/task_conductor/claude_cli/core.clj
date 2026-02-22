@@ -127,10 +127,13 @@
 (defn- invoke-process*
   "Real implementation of invoke-process with subprocess."
   [opts]
-  (let [{:keys [dir timeout on-line on-event _args]} opts
+  (let [{:keys [dir timeout on-line on-event _args extra-env]} opts
         args (or _args (build-args opts))
         result-promise (promise)
-        proc (p/process args (cond-> {:in "" :out :stream :err :inherit}
+        ;; Clear CLAUDECODE to allow subprocess invocation
+        env (merge {"CLAUDECODE" ""} extra-env)
+        proc (p/process args (cond-> {:in "" :out :stream :err :inherit
+                                      :extra-env env}
                                dir (assoc :dir dir)))
         ;; Schedule timeout if specified
         scheduler (when timeout (Executors/newSingleThreadScheduledExecutor))
