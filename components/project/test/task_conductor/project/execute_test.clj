@@ -99,7 +99,16 @@
                                             :pr-num 456
                                             :code-reviewed "2024-01-15"
                                             :meta {:refined "true"}}
-                                           [{:status :closed}])))))
+                                           [{:status :closed}]))))
+
+      (testing "is not returned when PR exists but children are incomplete"
+        (is (= :has-tasks
+               (execute/derive-story-state {:status :open
+                                            :pr-num 456
+                                            :code-reviewed "2024-01-15"
+                                            :meta {:refined "true"}}
+                                           [{:status :closed}
+                                            {:status :open}])))))
 
     (testing "returns :awaiting-pr"
       (testing "when all children complete and reviewed"
