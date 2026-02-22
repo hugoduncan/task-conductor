@@ -143,6 +143,9 @@ clj -M:dev:nrepl
 # Format code
 clj -M:dev -m cljfmt.main fix
 
+# Run Emacs tests (stubs dir required for claude-code mock)
+emacs --batch -L emacs/ -L emacs/test/ -L emacs/test/stubs/ -l ert -l test-task-conductor-dev-env -f ert-run-tests-batch-and-exit
+
 # Pull clj-kondo config from dependencies
 bb kondo-config
 ```
