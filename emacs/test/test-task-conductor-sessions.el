@@ -271,6 +271,18 @@
     (should (= 0 (length (plist-get result :working))))
     (should (= 0 (length (plist-get result :wait-pr-merge))))))
 
+(ert-deftest task-conductor-sessions-partition-nil-state-excluded ()
+  ;; Sessions with nil state (removed from engine) are excluded from all groups.
+  (let* ((sessions (list
+                    (list :session-id "s1" :state nil
+                          :task-id 401 :task-title "Gone"
+                          :entered-state-at nil)))
+         (result (task-conductor-sessions--partition-by-state sessions)))
+    (should (= 0 (length (plist-get result :needs-attention))))
+    (should (= 0 (length (plist-get result :running))))
+    (should (= 0 (length (plist-get result :working))))
+    (should (= 0 (length (plist-get result :wait-pr-merge))))))
+
 ;;; Section Rendering
 
 (ert-deftest task-conductor-sessions-render-empty ()
