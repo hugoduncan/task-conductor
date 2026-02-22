@@ -186,13 +186,20 @@
     (should-not (task-conductor-project--find-session nil))))
 
 (ert-deftest task-conductor-project-find-session-with-project-dir ()
-  ;; Filters by project-dir when provided.
+  ;; Filters by project-dir when provided, using prefix matching
+  ;; so worktree subdirectories match their parent project.
   (let* ((s1 (list :session-id "s1" :task-id 5 :project-dir "/a"))
          (s2 (list :session-id "s2" :task-id 5 :project-dir "/b"))
          (task-conductor-dev-env--cached-sessions (list s1 s2)))
     (should (equal s2 (task-conductor-project--find-session 5 "/b")))
     (should (equal s1 (task-conductor-project--find-session 5 "/a")))
-    (should-not (task-conductor-project--find-session 5 "/c"))))
+    (should-not (task-conductor-project--find-session 5 "/c")))
+  ;; Worktree subdirectory matches parent project path.
+  (let* ((s1 (list :session-id "s1" :task-id 10
+                   :project-dir "/proj/42-worktree"))
+         (task-conductor-dev-env--cached-sessions (list s1)))
+    (should (equal s1 (task-conductor-project--find-session 10 "/proj")))
+    (should-not (task-conductor-project--find-session 10 "/other"))))
 
 ;;; CLI task fetching tests
 
@@ -378,7 +385,7 @@
   (should (equal "✘" (task-conductor-project--task-execution-icon :terminated)))
   (should (equal "□" (task-conductor-project--task-execution-icon :done)))
   (should (equal "↑" (task-conductor-project--task-execution-icon :awaiting-pr)))
-  (should (equal "▶" (task-conductor-project--task-execution-icon :has-tasks)))
+  (should (equal "⚙" (task-conductor-project--task-execution-icon :has-tasks)))
   (should-not (task-conductor-project--task-execution-icon nil))
   (should-not (task-conductor-project--task-execution-icon :other)))
 
@@ -941,6 +948,42 @@ The caller must ensure a dynamic binding for
          (task (list :id 21 :title "Active task" :type "task" :status "in-progress"))
          (result (task-conductor-project--format-task-entry task)))
     (should (string-match-p "◇" result))
+    (should (string-match-p "⏹" result))))
+
+(ert-deftest task-conductor-project-format-task-entry-unrefined-shows-stop-icon ()
+  ;; Unrefined session shows status icon and clickable stop icon.
+  (let* ((session (list :session-id "s7" :task-id 30 :state :unrefined))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 30 :title "New task" :type "task" :status "open"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "✎" result))
+    (should (string-match-p "⏹" result))))
+
+(ert-deftest task-conductor-project-format-task-entry-refined-shows-stop-icon ()
+  ;; Refined session shows status icon and clickable stop icon.
+  (let* ((session (list :session-id "s8" :task-id 31 :state :refined))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 31 :title "Ready task" :type "task" :status "open"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "✔" result))
+    (should (string-match-p "⏹" result))))
+
+(ert-deftest task-conductor-project-format-task-entry-has-tasks-shows-stop-icon ()
+  ;; Has-tasks session shows gear icon and clickable stop icon.
+  (let* ((session (list :session-id "s9" :task-id 32 :state :has-tasks))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 32 :title "Story" :type "story" :status "open"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "⚙" result))
+    (should (string-match-p "⏹" result))))
+
+(ert-deftest task-conductor-project-format-task-entry-merging-pr-shows-stop-icon ()
+  ;; Merging-pr session shows status icon and clickable stop icon.
+  (let* ((session (list :session-id "s10" :task-id 33 :state :merging-pr))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 33 :title "Merging" :type "task" :status "in-progress"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "↺" result))
     (should (string-match-p "⏹" result))))
 
 (ert-deftest task-conductor-project-format-task-entry-unknown-session-state ()
