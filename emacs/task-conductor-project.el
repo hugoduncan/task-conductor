@@ -209,15 +209,24 @@ Nil until first use; initialized by `task-conductor-project-mode'.")
 
 (defun task-conductor-project--task-execution-icon (session-state)
   "Return an execution status icon for SESSION-STATE, or nil.
-Maps session state keywords to unicode icons: idle, running,
-escalated, and wait-pr-merge states each have a distinct icon.
+Maps every session state keyword to a distinct Unicode icon.
 Returns nil for unrecognized or nil states."
   (pcase session-state
-    (:idle          "⏸")
-    (:running       "🔄")
-    (:escalated     "🔔")
-    (:wait-pr-merge "🔀")
-    (_              nil)))
+    (:idle           "▷")
+    (:unrefined      "✎")
+    (:refined        "✔")
+    (:running        "▶")
+    (:escalated      "◆")
+    (:session-idle   "◆")
+    (:session-running "◇")
+    (:wait-pr-merge  "‖")
+    (:merging-pr     "↺")
+    (:complete       "✓")
+    (:terminated     "✘")
+    (:done           "□")
+    (:awaiting-pr    "↑")
+    (:has-tasks      "▶")
+    (_               nil)))
 
 (defun task-conductor-project--task-type-icon (type)
   "Return a bracketed type icon for task TYPE string."
@@ -257,7 +266,7 @@ When no session is active, prepends a clickable ▶ play icon instead."
          (state-icon (when session
                        (task-conductor-project--task-execution-icon state))))
     (cond
-     ((and state-icon (memq state '(:running :escalated)))
+     ((and state-icon (memq state '(:running :escalated :session-idle :session-running)))
       (concat indent
               (propertize state-icon 'task-conductor-task-id task-id)
               " "
@@ -389,16 +398,11 @@ expansion state."
         (format "[%s: task %s]" state task-id)))))
 
 (defun task-conductor-project--format-entry (project name-width)
-  "Format PROJECT entry with NAME-WIDTH padding and status."
+  "Format PROJECT entry with NAME-WIDTH padding."
   (let* ((name (or (plist-get project :project/name) "unnamed"))
          (path (or (plist-get project :project/path) ""))
-         (status (plist-get project :project/status))
-         (icon (task-conductor-project--status-icon status))
-         (padded (concat name (make-string (max 0 (- name-width (length name))) ?\s)))
-         (info (task-conductor-project--status-info project)))
-    (if info
-        (format "%s %s  %s    %s" icon padded path info)
-      (format "%s %s  %s" icon padded path))))
+         (padded (concat name (make-string (max 0 (- name-width (length name))) ?\s))))
+    (format "%s  %s" padded path)))
 
 (defun task-conductor-project--render (projects)
   "Render PROJECTS into the current buffer.

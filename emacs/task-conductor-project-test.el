@@ -107,21 +107,22 @@
     (should-not (task-conductor-project--status-info project))))
 
 (ert-deftest task-conductor-project-format-entry-with-status ()
-  ;; Format includes status icon and session info.
+  ;; Format shows name and path; execution status is no longer displayed at project level.
   (let* ((sessions (list (list :state :running :task-id 5)))
          (project (list :project/name "proj" :project/path "/proj"
                         :project/status :running
                         :project/active-sessions sessions))
          (entry (task-conductor-project--format-entry project 10)))
-    (should (string-match-p "⚡" entry))
-    (should (string-match-p "running: task 5" entry))))
+    (should (string-match-p "proj" entry))
+    (should (string-match-p "/proj" entry))
+    (should-not (string-match-p "running" entry))))
 
 (ert-deftest task-conductor-project-format-entry-no-status ()
-  ;; Format shows space icon when no status.
+  ;; Format shows name and path without any execution icons.
   (let* ((project (list :project/name "proj" :project/path "/proj"))
          (entry (task-conductor-project--format-entry project 10)))
-    (should-not (string-match-p "⚡" entry))
-    (should-not (string-match-p "⏸" entry))))
+    (should (string-match-p "proj" entry))
+    (should (string-match-p "/proj" entry))))
 
 (ert-deftest task-conductor-project-rerender-if-live ()
   ;; Rerender updates buffer from cached projects when buffer exists.
@@ -396,10 +397,19 @@
 
 (ert-deftest task-conductor-project-task-execution-icon ()
   ;; Maps each session state to its execution icon, nil for unknown.
-  (should (equal "⏸" (task-conductor-project--task-execution-icon :idle)))
-  (should (equal "🔄" (task-conductor-project--task-execution-icon :running)))
-  (should (equal "🔔" (task-conductor-project--task-execution-icon :escalated)))
-  (should (equal "🔀" (task-conductor-project--task-execution-icon :wait-pr-merge)))
+  (should (equal "▷" (task-conductor-project--task-execution-icon :idle)))
+  (should (equal "✎" (task-conductor-project--task-execution-icon :unrefined)))
+  (should (equal "✔" (task-conductor-project--task-execution-icon :refined)))
+  (should (equal "▶" (task-conductor-project--task-execution-icon :running)))
+  (should (equal "◆" (task-conductor-project--task-execution-icon :escalated)))
+  (should (equal "◆" (task-conductor-project--task-execution-icon :session-idle)))
+  (should (equal "◇" (task-conductor-project--task-execution-icon :session-running)))
+  (should (equal "‖" (task-conductor-project--task-execution-icon :wait-pr-merge)))
+  (should (equal "↺" (task-conductor-project--task-execution-icon :merging-pr)))
+  (should (equal "✓" (task-conductor-project--task-execution-icon :complete)))
+  (should (equal "✘" (task-conductor-project--task-execution-icon :terminated)))
+  (should (equal "□" (task-conductor-project--task-execution-icon :done)))
+  (should (equal "↑" (task-conductor-project--task-execution-icon :awaiting-pr)))
   (should-not (task-conductor-project--task-execution-icon nil))
   (should-not (task-conductor-project--task-execution-icon :other)))
 
@@ -409,7 +419,7 @@
          (task-conductor-dev-env--cached-sessions (list session))
          (task (list :id 42 :title "Do thing" :type "task" :status "open"))
          (result (task-conductor-project--format-task-entry task)))
-    (should (string-match-p "🔄" result))
+    (should (string-match-p "▶" result))
     (should (string-match-p "#42 Do thing" result))))
 
 (ert-deftest task-conductor-project-format-task-entry-session-text-property ()
@@ -418,7 +428,7 @@
          (task-conductor-dev-env--cached-sessions (list session))
          (task (list :id 10 :title "A task" :type "task" :status "open"))
          (result (task-conductor-project--format-task-entry task))
-         (icon-pos (string-match "⏸" result)))
+         (icon-pos (string-match "▷" result)))
     (should icon-pos)
     (should (equal 10 (get-text-property icon-pos 'task-conductor-task-id result)))))
 
@@ -921,7 +931,7 @@ The caller must ensure a dynamic binding for
          (task-conductor-dev-env--cached-sessions (list session))
          (task (list :id 42 :title "Do thing" :type "task" :status "in-progress"))
          (result (task-conductor-project--format-task-entry task)))
-    (should (string-match-p "🔄" result))
+    (should (string-match-p "▶" result))
     (should (string-match-p "⏹" result))
     (let ((stop-pos (string-match "⏹" result)))
       (should (equal 42 (get-text-property stop-pos 'task-conductor-task-id result)))
@@ -934,7 +944,7 @@ The caller must ensure a dynamic binding for
          (task-conductor-dev-env--cached-sessions (list session))
          (task (list :id 10 :title "A task" :type "task" :status "in-progress"))
          (result (task-conductor-project--format-task-entry task)))
-    (should (string-match-p "🔔" result))
+    (should (string-match-p "◆" result))
     (should (string-match-p "⏹" result))))
 
 (ert-deftest task-conductor-project-format-task-entry-idle-no-stop-icon ()
@@ -943,7 +953,7 @@ The caller must ensure a dynamic binding for
          (task-conductor-dev-env--cached-sessions (list session))
          (task (list :id 5 :title "Idle task" :type "task" :status "open"))
          (result (task-conductor-project--format-task-entry task)))
-    (should (string-match-p "⏸" result))
+    (should (string-match-p "▷" result))
     (should-not (string-match-p "⏹" result))))
 
 (ert-deftest task-conductor-project-format-task-entry-unknown-session-state ()
@@ -955,7 +965,7 @@ The caller must ensure a dynamic binding for
     (should (string-match-p "#9 My task" result))
     (should-not (string-match-p "▶" result))
     (should-not (string-match-p "⏹" result))
-    (should-not (string-match-p "⏸\\|🔄\\|🔔\\|🔀" result))))
+    (should-not (string-match-p "▷\\|✎\\|✔\\|◆\\|◇\\|‖\\|↺\\|✓\\|✘\\|□\\|↑" result))))
 
 (provide 'task-conductor-project-test)
 ;;; task-conductor-project-test.el ends here
