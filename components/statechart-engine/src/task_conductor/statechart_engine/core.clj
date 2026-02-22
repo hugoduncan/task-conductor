@@ -401,6 +401,7 @@
    :sub-state (derive-sub-state state-config)
    :task-id (:task-id data)
    :task-title (:task-title data)
+   :project-name (:project-name data)
    :project-dir (:project-dir data)
    :pr-num (:pr-num data)
    :branch (:branch data)
@@ -409,7 +410,8 @@
 (defn query-sessions
   "Query active sessions filtered by state.
   Returns vec of maps with :session-id, :state, :sub-state, :task-id,
-  :task-title, :project-dir, :entered-state-at, :pr-num, and :branch
+  :task-title, :project-name, :project-dir, :entered-state-at,
+  :pr-num, and :branch
   for sessions whose current state intersects the given state-filter set.
 
   :state is selected by priority (:escalated > :idle > :wait-pr-merge).
