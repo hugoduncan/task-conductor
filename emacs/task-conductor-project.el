@@ -626,7 +626,6 @@ Prompts for directory path and optional name."
   "k"   #'task-conductor-project-cancel
   "r"   #'task-conductor-project-rename
   "RET" #'task-conductor-project-open-dired
-  "t"   #'task-conductor-project-open-tasks
   "q"   #'task-conductor-project-quit)
 
 (define-derived-mode task-conductor-project-mode magit-section-mode

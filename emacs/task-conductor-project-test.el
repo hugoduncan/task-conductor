@@ -956,6 +956,24 @@ The caller must ensure a dynamic binding for
     (should (string-match-p "▷" result))
     (should-not (string-match-p "⏹" result))))
 
+(ert-deftest task-conductor-project-format-task-entry-session-idle-shows-stop-icon ()
+  ;; Session-idle shows stop icon (Emacs controlling the Claude session).
+  (let* ((session (list :session-id "s5" :task-id 20 :state :session-idle))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 20 :title "Dev task" :type "task" :status "in-progress"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "◆" result))
+    (should (string-match-p "⏹" result))))
+
+(ert-deftest task-conductor-project-format-task-entry-session-running-shows-stop-icon ()
+  ;; Session-running shows stop icon (Claude actively running in dev-env).
+  (let* ((session (list :session-id "s6" :task-id 21 :state :session-running))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 21 :title "Active task" :type "task" :status "in-progress"))
+         (result (task-conductor-project--format-task-entry task)))
+    (should (string-match-p "◇" result))
+    (should (string-match-p "⏹" result))))
+
 (ert-deftest task-conductor-project-format-task-entry-unknown-session-state ()
   ;; Unknown session state shows base text only: no status, play, or stop icon.
   (let* ((session (list :session-id "s4" :task-id 9 :state :some-new-state))
