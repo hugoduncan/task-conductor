@@ -102,15 +102,6 @@ or nil if STR is incomplete."
 
 ;;; Connection object
 
-(defun task-conductor-nrepl--make-conn (process session)
-  "Create a connection plist from PROCESS and SESSION id."
-  (list :process process
-        :session session
-        :buffer ""
-        :pending (make-hash-table :test 'equal)
-        :counter 0
-        :accumulator (make-hash-table :test 'equal)))
-
 (defun task-conductor-nrepl--next-id (conn)
   "Return the next message ID for CONN and increment counter."
   (let ((id (plist-get conn :counter)))
