@@ -289,10 +289,11 @@ Returns a list of (\"--settings\" json-string) or nil if HOOKS is nil."
   ;; instead of arrays.  plist-to-json-safe converts the tree so
   ;; plists become hash-tables and lists become vectors.
   (when hooks
-    (list "--settings"
-          (json-encode
-           (task-conductor-dev-env--plist-to-json-safe
-            `(:hooks ,hooks))))))
+    (let ((json (json-encode
+                 (task-conductor-dev-env--plist-to-json-safe
+                  `(:hooks ,hooks)))))
+      (message "task-conductor: hooks-to-settings-args: %s" json)
+      (list "--settings" json))))
 
 (cl-defun task-conductor-dev-env--handle-start-session (params)
   "Handle :start-session command with PARAMS.
@@ -325,6 +326,8 @@ they are passed to Claude CLI via --settings for event-based detection."
                               (list "--resume" claude-session-id)))
                (settings-args (task-conductor-dev-env--hooks-to-settings-args hooks))
                (all-args (append resume-args settings-args)))
+          (message "task-conductor: starting session %s with args: %s"
+                   session-id (prin1-to-string all-args))
           ;; Start claude-code with optional resume and CLI hooks
           (claude-code--start nil (when all-args all-args))
           ;; Find the buffer that was just created
