@@ -112,19 +112,21 @@ Shows project name prefix and PR info for :wait-pr-merge sessions."
         (entered (plist-get session :entered-state-at))
         (pr-num (plist-get session :pr-num))
         (branch (plist-get session :branch)))
-    (format "%s #%s %s%s  %s"
-            (task-conductor-sessions--state-icon state sub-state)
-            (if task-id (format "%s" task-id) "?")
-            (if (and project-name (not (string-empty-p project-name)))
-                (format "%s: %s" project-name task-title)
-              task-title)
-            (if (and (task-conductor-sessions--wait-pr-merge-p state)
-                     (or pr-num branch))
-                (format "  %s%s"
-                        (if pr-num (format "PR #%s" pr-num) "")
-                        (if branch (format " %s" branch) ""))
-              "")
-            (task-conductor-sessions--format-relative-time entered))))
+    (let ((title-str (if (and project-name (not (string-empty-p project-name)))
+                         (format "%s: %s" project-name task-title)
+                       task-title))
+          (pr-str (if (and (task-conductor-sessions--wait-pr-merge-p state)
+                           (or pr-num branch))
+                      (format "  %s%s"
+                              (if pr-num (format "PR #%s" pr-num) "")
+                              (if branch (format " %s" branch) ""))
+                    "")))
+      (format "%s #%s %s%s  %s"
+              (task-conductor-sessions--state-icon state sub-state)
+              (if task-id (format "%s" task-id) "?")
+              title-str
+              pr-str
+              (task-conductor-sessions--format-relative-time entered)))))
 
 (defun task-conductor-sessions--session-running-p (sub-state)
   "Return non-nil if SUB-STATE indicates the session is running."
