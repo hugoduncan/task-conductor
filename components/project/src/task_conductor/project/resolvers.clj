@@ -259,11 +259,12 @@
                            children-maps)
                           (execute/derive-task-state
                            (task->execute-map task project-dir)))
-              new-open-children (when (= :story task-type)
-                                  (execute/count-completed-children
-                                   children-maps))]
+              new-completed-children (when (= :story task-type)
+                                       (execute/count-completed-children
+                                        children-maps))]
           (if (no-progress? pre-skill-state new-state
-                            pre-skill-completed-children new-open-children)
+                            pre-skill-completed-children
+                            new-completed-children)
             (do
               (sc/update-data! session-id
                                #(assoc
@@ -333,7 +334,7 @@
         (throw e)))))
 
 (defn- store-pre-skill-state!
-  "Store current derived state and open children count before skill invocation.
+  "Store derived state and completed children count before skill invocation.
    Used by on-skill-complete to detect no-progress.
    Derives state from task data rather than sc/current-state because entry
    actions run before the sessions atom is updated."

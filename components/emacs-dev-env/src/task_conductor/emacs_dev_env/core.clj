@@ -94,10 +94,22 @@
   (register-hook [_ session-id hook-type callback]
     (let [{:keys [command-chan]} @state
           hook-id (UUID/randomUUID)]
-      ;; Store callback locally for when emacs sends hook events
-      (swap! state assoc-in [:hooks hook-id] {:type hook-type
-                                              :callback callback
-                                              :session-id session-id})
+      ;; Replace any existing hook for the same session-id + hook-type
+      ;; to prevent accumulation across repeated escalations.
+      (swap! state (fn [s]
+                     (let [hooks (:hooks s)
+                           cleared (into {}
+                                         (remove (fn [[_ h]]
+                                                   (and (= (:session-id h)
+                                                           session-id)
+                                                        (= (:type h)
+                                                           hook-type))))
+                                         hooks)]
+                       (assoc-in (assoc s :hooks cleared)
+                                 [:hooks hook-id]
+                                 {:type hook-type
+                                  :callback callback
+                                  :session-id session-id}))))
       ;; Send command to emacs to set up hook detection
       (send-command-and-wait state command-chan :register-hook
                              {:session-id session-id
@@ -269,24 +281,35 @@
 ;;; Hook invocation
 
 (defn invoke-hook
-  "Invoke all registered hooks of the given type with context.
+  "Invoke registered hooks matching the type and session-id, then remove them.
 
   Called by Emacs (via send-hook-event) when session events occur.
+  Filters by :session-id from context to avoid cross-session invocation.
+  Removes matched hooks after invocation (on-close is one-shot).
 
   Parameters:
     dev-env   - The EmacsDevEnv instance
     hook-type - :on-close
     context   - Map with :session-id, :timestamp, :reason"
   [dev-env hook-type context]
-  (let [hooks (get @(:state dev-env) :hooks)]
-    (doseq [[_hook-id {:keys [type callback]}] hooks
-            :when (= type hook-type)]
+  (let [session-id (:session-id context)
+        hooks (get @(:state dev-env) :hooks)
+        matched (filterv (fn [[_ h]]
+                           (and (= (:type h) hook-type)
+                                (= (:session-id h) session-id)))
+                         hooks)]
+    (doseq [[_ {:keys [callback]}] matched]
       (try
         (callback context)
         (catch Exception e
           (log/error e "Hook callback error"
                      {:hook-type hook-type
-                      :context context}))))))
+                      :context context}))))
+    ;; Remove fired hooks
+    (when (seq matched)
+      (let [matched-ids (into #{} (map first) matched)]
+        (swap! (:state dev-env) update :hooks
+               #(into {} (remove (fn [[id _]] (matched-ids id))) %))))))
 
 (defn send-hook-event
   "Called by Emacs to notify of session events.

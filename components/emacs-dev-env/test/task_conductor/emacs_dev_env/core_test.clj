@@ -166,6 +166,29 @@
             (let [hook (get-in @(:state dev-env) [:hooks hook-id])]
               (is (= :on-close (:type hook)))
               (is (= callback (:callback hook))))))
+        (core/shutdown dev-env)))
+    (testing "replaces existing hook for same session and type"
+      (let [dev-env (core/make-emacs-dev-env)
+            cb1 (fn [_] :first)
+            cb2 (fn [_] :second)]
+        (with-register-hook-responder dev-env
+          (let [id1 (protocol/register-hook dev-env "s1" :on-close cb1)
+                id2 (protocol/register-hook dev-env "s1" :on-close cb2)
+                hooks (:hooks @(:state dev-env))]
+            (is (not= id1 id2))
+            (is (= 1 (count hooks))
+                "only one hook for same session+type")
+            (is (nil? (get hooks id1))
+                "old hook removed")
+            (is (= cb2 (:callback (get hooks id2)))
+                "new hook has latest callback")))
+        (core/shutdown dev-env)))
+    (testing "allows different sessions to have hooks"
+      (let [dev-env (core/make-emacs-dev-env)]
+        (with-register-hook-responder dev-env
+          (protocol/register-hook dev-env "s1" :on-close (fn [_]))
+          (protocol/register-hook dev-env "s2" :on-close (fn [_]))
+          (is (= 2 (count (:hooks @(:state dev-env))))))
         (core/shutdown dev-env)))))
 
 (deftest send-hook-event-test
@@ -180,6 +203,33 @@
         (is (= "sess-1" (:session-id @received)))
         (is (= :user-exit (:reason @received)))
         (is (inst? (:timestamp @received)))
+        (core/shutdown dev-env)))
+    (testing "only invokes hooks for the matching session-id"
+      (let [dev-env (core/make-emacs-dev-env)
+            s1-called (atom false)
+            s2-called (atom false)]
+        (with-register-hook-responder dev-env
+          (protocol/register-hook dev-env "s1" :on-close
+                                  (fn [_] (reset! s1-called true)))
+          (protocol/register-hook dev-env "s2" :on-close
+                                  (fn [_] (reset! s2-called true))))
+        (core/send-hook-event dev-env :on-close "s1" :user-exit)
+        (is @s1-called "s1 hook should fire")
+        (is (not @s2-called) "s2 hook should not fire")
+        (core/shutdown dev-env)))
+    (testing "removes hooks after invocation"
+      (let [dev-env (core/make-emacs-dev-env)
+            call-count (atom 0)]
+        (with-register-hook-responder dev-env
+          (protocol/register-hook dev-env "s1" :on-close
+                                  (fn [_] (swap! call-count inc))))
+        (core/send-hook-event dev-env :on-close "s1" :user-exit)
+        (is (= 1 @call-count))
+        (is (empty? (:hooks @(:state dev-env)))
+            "hooks removed after invocation")
+        ;; Second send should be a no-op
+        (core/send-hook-event dev-env :on-close "s1" :user-exit)
+        (is (= 1 @call-count) "hook not called twice")
         (core/shutdown dev-env)))))
 
 (deftest close-session-test
@@ -471,25 +521,24 @@
   ;; Verify that errors in hook callbacks don't crash the system
   ;; and other hooks still execute.
   (testing "hook error handling"
-    (testing "continues invoking hooks after one throws"
-      (let [dev-env (core/make-emacs-dev-env)
-            hook1-called (atom false)
-            hook3-called (atom false)]
-        ;; Register hooks - second one will throw
+    (testing "throwing hook does not crash send-hook-event"
+      (let [dev-env (core/make-emacs-dev-env)]
         (with-register-hook-responder dev-env
           (protocol/register-hook dev-env "s1" :on-close
-                                  (fn [_] (reset! hook1-called true)))
+                                  (fn [_] (throw (ex-info "Hook error" {})))))
+        (is (true? (core/send-hook-event dev-env :on-close "s1" :user-exit)))
+        (core/shutdown dev-env)))
+    (testing "error in one session's hook does not affect another session"
+      (let [dev-env (core/make-emacs-dev-env)
+            s2-called (atom false)]
+        (with-register-hook-responder dev-env
           (protocol/register-hook dev-env "s1" :on-close
                                   (fn [_] (throw (ex-info "Hook error" {}))))
-          (protocol/register-hook dev-env "s1" :on-close
-                                  (fn [_] (reset! hook3-called true))))
-        ;; Send event - should not throw
+          (protocol/register-hook dev-env "s2" :on-close
+                                  (fn [_] (reset! s2-called true))))
         (is (true? (core/send-hook-event dev-env :on-close "s1" :user-exit)))
-        ;; All non-throwing hooks should have been called
-        ;; Note: hook execution order depends on map iteration order
-        ;; so we just verify the throwing hook didn't prevent others
-        (is (or @hook1-called @hook3-called)
-            "At least one non-throwing hook should execute")
+        (is (true? (core/send-hook-event dev-env :on-close "s2" :user-exit)))
+        (is @s2-called "s2 hook should fire despite s1 error")
         (core/shutdown dev-env)))))
 
 ;;; Registry Cleanup Tests
