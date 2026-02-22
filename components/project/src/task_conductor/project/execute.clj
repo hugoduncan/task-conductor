@@ -113,6 +113,9 @@
     (and (:pr-num story) (:pr-merged? story))
     :complete
 
+    (has-incomplete-children? children)
+    :has-tasks
+
     (:pr-num story)
     :wait-pr-merge
 
@@ -121,9 +124,6 @@
 
     (children-complete? children)
     :done
-
-    (has-incomplete-children? children)
-    :has-tasks
 
     (refined? story)
     :refined
