@@ -175,6 +175,9 @@ Uses `com.fulcrologic/statecharts` with custom EQL execution model.
 - `stop!(session-id)` - Stop session
 - `current-state(session-id)` - Get active states (set of keywords)
 - `history(session-id)` - Get transition history with timestamps
+- `get-data(session-id)` - Get session data map (pre-skill state, task-id, etc.)
+
+**Debugging**: `(sc/history session-id)` returns `[{:state #{...} :event :kw :timestamp Instant} ...]`. Rapid duplicate state entries (e.g., two `:has-tasks` 400ms apart) indicate duplicate event sources.
 
 **DSL**: `statechart`, `state`, `transition`, `on-entry`, `on-exit`, `action`
 

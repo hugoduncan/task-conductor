@@ -2,6 +2,18 @@
 
 Past discoveries and learnings.
 
+## 2026-02-22: Hook Accumulation Causes Duplicate Skill Invocations
+
+### Dev-env on-close hooks accumulate across escalations
+- Each `escalate-to-dev-env!` call registered a new `:on-close` hook
+- Hooks were never removed — `invoke-hook` fired ALL matching hooks
+- After N escalations, dev-env close sent N duplicate state events
+- Concurrent skills raced on the same child task → false no-progress → escalation cascade
+- Fix: `register-hook` replaces existing hook for same session-id + hook-type
+- Fix: `invoke-hook` filters by session-id and removes hooks after firing
+- Debugging: use `(sc/history session-id)` to see full transition history with timestamps
+- Pattern: rapid duplicate state entries (e.g., two `:has-tasks` 400ms apart) indicate duplicate event sources
+
 ## 2026-02-22: Statechart Dynamic Transitions
 
 ### `apply sc/state` for Dynamic Transition Lists
