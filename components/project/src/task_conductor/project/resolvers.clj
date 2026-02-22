@@ -164,9 +164,12 @@
           (let [is-story (story? task)
                 children (when is-story (fetch-children worktree-path id))
                 chart-id (if is-story :execute/story :execute/task)
-                project-name (or
-                              (:project/name (registry/get-by-path project-dir))
-                              (fs/file-name project-dir))
+                project-entry (registry/get-by-path project-dir)
+                _ (when-not project-entry
+                    (log/debug "project-dir not in registry, using fs/file-name"
+                               {:project-dir project-dir}))
+                project-name (or (:project/name project-entry)
+                                 (fs/file-name project-dir))
                 initial-data
                 (cond-> {:project-dir worktree-path
                          :root-project-dir project-dir
