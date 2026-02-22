@@ -225,6 +225,7 @@ Returns nil for unrecognized or nil states."
     (:terminated     "✘")
     (:done           "□")
     (:awaiting-pr    "↑")
+    (:has-tasks      "▶")
     (_               nil)))
 
 (defun task-conductor-project--task-type-icon (type)
