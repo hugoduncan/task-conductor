@@ -2,6 +2,33 @@
 
 Past discoveries and learnings.
 
+## 2026-02-22: Hook Accumulation Causes Duplicate Skill Invocations
+
+### Dev-env on-close hooks accumulate across escalations
+- Each `escalate-to-dev-env!` call registered a new `:on-close` hook
+- Hooks were never removed — `invoke-hook` fired ALL matching hooks
+- After N escalations, dev-env close sent N duplicate state events
+- Concurrent skills raced on the same child task → false no-progress → escalation cascade
+- Fix: `register-hook` replaces existing hook for same session-id + hook-type
+- Fix: `invoke-hook` filters by session-id and removes hooks after firing
+- Debugging: use `(sc/history session-id)` to see full transition history with timestamps
+- Pattern: rapid duplicate state entries (e.g., two `:has-tasks` 400ms apart) indicate duplicate event sources
+
+## 2026-02-22: Statechart Dynamic Transitions
+
+### `apply sc/state` for Dynamic Transition Lists
+- Use `(apply sc/state {:id :foo} fixed-transition1 fixed-transition2 (dynamic-transitions-vec))` to append a computed vector of transitions to a state definition
+- Self-transitions on states with on-entry actions re-trigger the entry action — avoid them
+
+## 2026-02-21: Emacs Dev-Env Setup Order
+
+### Don't Pre-Register on JVM Before CIDER Connects
+- `register-emacs-dev-env` on JVM before CIDER connect creates an orphan entry
+- CIDER connect triggers Emacs to auto-register its own dev-env ID
+- Result: JVM has one ID, Emacs has another — mismatch
+- Correct order: (1) CIDER connect, (2) `task-conductor-dev-env-connect` from Emacs
+- If orphans exist: disconnect Emacs, `unregister!` JVM entries, reconnect from Emacs
+
 ## 2026-02-20: Story Execution Debugging
 
 ### CLAUDECODE Env Var Blocks Subprocess

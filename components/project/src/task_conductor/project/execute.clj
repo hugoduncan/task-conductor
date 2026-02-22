@@ -62,11 +62,11 @@
   [children]
   (remove #(#{:deleted "deleted"} (:status %)) children))
 
-(defn count-open-children
-  "Count the number of open (non-closed, non-deleted) children.
-   Used for detecting no-progress in :has-tasks state."
+(defn count-completed-children
+  "Count children with closed/done status.
+   Monotonically increasing — used to detect progress in :has-tasks state."
   [children]
-  (count (filter #(not (#{:closed "closed" :done "done"} (:status %)))
+  (count (filter #(#{:closed "closed" :done "done"} (:status %))
                  (active-children children))))
 
 (defn- children-complete?
@@ -190,7 +190,8 @@
 (def ^:private create-story-tasks-action
   {:expr
    '(task-conductor.project.resolvers/invoke-skill!
-     {:skill "mcp-tasks:create-story-tasks (MCP)"})})
+     {:skill "mcp-tasks:create-story-tasks (MCP)"
+      :args "{task-id}"})})
 
 (def ^:private execute-story-child-action
   {:expr
@@ -223,6 +224,25 @@
      {})})
 
 ;;; Shared Statechart Elements
+
+(def ^:private all-derived-task-states
+  "All derived states for tasks (used as event keywords)."
+  [:unrefined :refined :done :awaiting-pr :wait-pr-merge :complete :terminated])
+
+(def ^:private all-derived-story-states
+  "All derived states for stories (used as event keywords)."
+  [:unrefined :refined :has-tasks :done
+   :awaiting-pr :wait-pr-merge :complete :terminated])
+
+(defn- re-derive-transitions
+  "Build transitions from a state to all other derived states.
+  Excludes the state's own keyword (no self-transition) and any
+  events already handled by the state. This allows on-dev-env-close
+  to transition from any non-terminal state after manual escalation."
+  [own-state handled-events all-states]
+  (let [exclude (conj (set handled-events) own-state)]
+    (mapv (fn [s] (sc/transition {:event s :target s}))
+          (remove exclude all-states))))
 
 (defn- escalated-state
   "Build the :escalated compound state with sub-states.
@@ -268,73 +288,94 @@
                            (sc/transition {:event :complete :target :complete}))
 
     ;; Unrefined - needs task refinement
-                 (sc/state {:id :unrefined}
-                           (sc/on-entry {}
-                                        (sc/action refine-task-action))
-                           (sc/transition {:event :refined :target :refined})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :unrefined}
+                        (sc/on-entry {}
+                                     (sc/action refine-task-action))
+                        (sc/transition {:event :refined :target :refined})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :unrefined [:refined :error :no-progress]
+                         all-derived-task-states))
 
     ;; Refined - ready for execution
-                 (sc/state {:id :refined}
-                           (sc/on-entry {}
-                                        (sc/action execute-task-action))
-                           (sc/transition {:event :done :target :done})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :refined}
+                        (sc/on-entry {}
+                                     (sc/action execute-task-action))
+                        (sc/transition {:event :done :target :done})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :refined [:done :error :no-progress]
+                         all-derived-task-states))
 
     ;; Done - executed, awaiting code review
-                 (sc/state {:id :done}
-                           (sc/on-entry {}
-                                        (sc/action review-task-action))
-                           (sc/transition
-                            {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :done}
+                        (sc/on-entry {}
+                                     (sc/action review-task-action))
+                        (sc/transition
+                         {:event :awaiting-pr :target :awaiting-pr})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :done [:awaiting-pr :error :no-progress]
+                         all-derived-task-states))
 
     ;; Awaiting PR - needs PR creation
-                 (sc/state {:id :awaiting-pr}
-                           (sc/on-entry {}
-                                        (sc/action create-task-pr-action))
-                           (sc/transition
-                            {:event :wait-pr-merge :target :wait-pr-merge})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :awaiting-pr}
+                        (sc/on-entry {}
+                                     (sc/action create-task-pr-action))
+                        (sc/transition
+                         {:event :wait-pr-merge :target :wait-pr-merge})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :awaiting-pr [:wait-pr-merge :error :no-progress]
+                         all-derived-task-states))
 
     ;; Wait for PR merge - awaiting merge notification
-                 (sc/state {:id :wait-pr-merge}
+                 (apply sc/state {:id :wait-pr-merge}
       ;; No entry action - waiting for external event
-                           (sc/transition
-                            {:event :merge-pr :target :merging-pr})
-                           (sc/transition {:event :complete :target :complete})
-                           (sc/transition {:event :error :target :escalated}))
+                        (sc/transition
+                         {:event :merge-pr :target :merging-pr})
+                        (sc/transition {:event :complete :target :complete})
+                        (sc/transition {:event :error :target :escalated})
+                        (re-derive-transitions
+                         :wait-pr-merge [:merge-pr :complete :error]
+                         all-derived-task-states))
 
     ;; Merging PR - squash-merges the PR on GitHub
-                 (sc/state {:id :merging-pr}
-                           (sc/on-entry {}
-                                        (sc/action merge-pr-action))
-                           (sc/transition {:event :complete :target :complete})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :merging-pr}
+                        (sc/on-entry {}
+                                     (sc/action merge-pr-action))
+                        (sc/transition {:event :complete :target :complete})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :merging-pr [:complete :error :no-progress]
+                         all-derived-task-states))
 
     ;; Complete - close task on mcp-tasks.
     ;; Re-derivation after /complete-story returns :complete when
     ;; the task is closed, so transition to :terminated on that.
-                 (sc/state {:id :complete}
-                           (sc/on-entry {}
-                                        (sc/action complete-story-action))
-                           (sc/transition
-                            {:event :complete :target :terminated})
-                           (sc/transition
-                            {:event :terminated :target :terminated})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :complete}
+                        (sc/on-entry {}
+                                     (sc/action complete-story-action))
+                        (sc/transition
+                         {:event :complete :target :terminated})
+                        (sc/transition
+                         {:event :terminated :target :terminated})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :complete [:complete :terminated :error :no-progress]
+                         all-derived-task-states))
 
                  (sc/final {:id :terminated})
 
@@ -369,101 +410,128 @@
                            (sc/transition {:event :complete :target :complete}))
 
     ;; Unrefined - needs story refinement
-                 (sc/state {:id :unrefined}
-                           (sc/on-entry {}
-                                        (sc/action refine-task-action))
-                           (sc/transition {:event :refined :target :refined})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :unrefined}
+                        (sc/on-entry {}
+                                     (sc/action refine-task-action))
+                        (sc/transition {:event :refined :target :refined})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :unrefined [:refined :error :no-progress]
+                         all-derived-story-states))
 
     ;; Refined - needs task creation
-                 (sc/state {:id :refined}
-                           (sc/on-entry {}
-                                        (sc/action create-story-tasks-action))
-                           (sc/transition
-                            {:event :has-tasks :target :has-tasks})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :refined}
+                        (sc/on-entry {}
+                                     (sc/action create-story-tasks-action))
+                        (sc/transition
+                         {:event :has-tasks :target :has-tasks})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :refined [:has-tasks :error :no-progress]
+                         all-derived-story-states))
 
     ;; Has tasks - execute next incomplete child
     ;; State re-derivation after child completion may skip intermediate
     ;; states, so allow direct transitions to any downstream state.
-                 (sc/state {:id :has-tasks}
-                           (sc/on-entry {}
-                                        (sc/action execute-story-child-action))
-                           (sc/transition
-                            {:event :has-tasks :target :has-tasks})
-                           (sc/transition {:event :done :target :done})
-                           (sc/transition
-                            {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition
-                            {:event :wait-pr-merge :target :wait-pr-merge})
-                           (sc/transition
-                            {:event :complete :target :complete})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :has-tasks}
+                        (sc/on-entry {}
+                                     (sc/action execute-story-child-action))
+                        (sc/transition
+                         {:event :has-tasks :target :has-tasks})
+                        (sc/transition {:event :done :target :done})
+                        (sc/transition
+                         {:event :awaiting-pr :target :awaiting-pr})
+                        (sc/transition
+                         {:event :wait-pr-merge :target :wait-pr-merge})
+                        (sc/transition
+                         {:event :complete :target :complete})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :has-tasks [:has-tasks :done :awaiting-pr
+                                     :wait-pr-merge :complete
+                                     :error :no-progress]
+                         all-derived-story-states))
 
     ;; Done - all children complete, review story.
     ;; Reviews *entire* story, not a single task.
-                 (sc/state {:id :done}
-                           (sc/on-entry {}
-                                        (sc/action review-story-action))
+                 (apply sc/state {:id :done}
+                        (sc/on-entry {}
+                                     (sc/action review-story-action))
       ;; Review may find issues requiring more work
-                           (sc/transition
-                            {:event :has-tasks :target :has-tasks})
-                           (sc/transition
-                            {:event :awaiting-pr :target :awaiting-pr})
-                           (sc/transition
-                            {:event :wait-pr-merge :target :wait-pr-merge})
-                           (sc/transition
-                            {:event :complete :target :complete})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                        (sc/transition
+                         {:event :has-tasks :target :has-tasks})
+                        (sc/transition
+                         {:event :awaiting-pr :target :awaiting-pr})
+                        (sc/transition
+                         {:event :wait-pr-merge :target :wait-pr-merge})
+                        (sc/transition
+                         {:event :complete :target :complete})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :done [:has-tasks :awaiting-pr :wait-pr-merge
+                                :complete :error :no-progress]
+                         all-derived-story-states))
 
     ;; Awaiting PR - reviewed, needs PR creation
-                 (sc/state {:id :awaiting-pr}
-                           (sc/on-entry {}
-                                        (sc/action create-story-pr-action))
-                           (sc/transition
-                            {:event :wait-pr-merge :target :wait-pr-merge})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :awaiting-pr}
+                        (sc/on-entry {}
+                                     (sc/action create-story-pr-action))
+                        (sc/transition
+                         {:event :wait-pr-merge :target :wait-pr-merge})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :awaiting-pr [:wait-pr-merge :error :no-progress]
+                         all-derived-story-states))
 
     ;; Wait for PR merge - awaiting merge notification
-                 (sc/state {:id :wait-pr-merge}
+                 (apply sc/state {:id :wait-pr-merge}
       ;; No entry action - waiting for external event
-                           (sc/transition
-                            {:event :merge-pr :target :merging-pr})
-                           (sc/transition {:event :complete :target :complete})
-                           (sc/transition {:event :error :target :escalated}))
+                        (sc/transition
+                         {:event :merge-pr :target :merging-pr})
+                        (sc/transition {:event :complete :target :complete})
+                        (sc/transition {:event :error :target :escalated})
+                        (re-derive-transitions
+                         :wait-pr-merge [:merge-pr :complete :error]
+                         all-derived-story-states))
 
     ;; Merging PR - squash-merges the PR on GitHub
-                 (sc/state {:id :merging-pr}
-                           (sc/on-entry {}
-                                        (sc/action merge-pr-action))
-                           (sc/transition {:event :complete :target :complete})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :merging-pr}
+                        (sc/on-entry {}
+                                     (sc/action merge-pr-action))
+                        (sc/transition {:event :complete :target :complete})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :merging-pr [:complete :error :no-progress]
+                         all-derived-story-states))
 
     ;; Complete - close story on mcp-tasks.
     ;; Re-derivation after /complete-story returns :complete when
     ;; the story is closed, so transition to :terminated on that.
-                 (sc/state {:id :complete}
-                           (sc/on-entry {}
-                                        (sc/action complete-story-action))
-                           (sc/transition
-                            {:event :complete :target :terminated})
-                           (sc/transition
-                            {:event :terminated :target :terminated})
-                           (sc/transition {:event :error :target :escalated})
-                           (sc/transition
-                            {:event :no-progress :target :escalated}))
+                 (apply sc/state {:id :complete}
+                        (sc/on-entry {}
+                                     (sc/action complete-story-action))
+                        (sc/transition
+                         {:event :complete :target :terminated})
+                        (sc/transition
+                         {:event :terminated :target :terminated})
+                        (sc/transition {:event :error :target :escalated})
+                        (sc/transition
+                         {:event :no-progress :target :escalated})
+                        (re-derive-transitions
+                         :complete [:complete :terminated :error :no-progress]
+                         all-derived-story-states))
 
                  (sc/final {:id :terminated})
 

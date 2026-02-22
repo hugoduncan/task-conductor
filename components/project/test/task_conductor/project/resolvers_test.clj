@@ -681,13 +681,13 @@
                   (is (some #{:wait-pr-merge} events)
                       "Should have received :wait-pr-merge event"))))))))
 
-    (testing "sends :no-progress for :has-tasks when open children unchanged"
+    (testing "sends :no-progress for :has-tasks when completed count unchanged"
       (with-execute-state
         (let [cli-nullable
               (claude-cli/make-nullable
                {:exit-code 0 :events []
                 :session-id "claude-def"})
-              ;; 2 open children before and after skill
+              ;; 0 completed children before and after skill
               story-resp
               (make-task-response
                {:type :story
@@ -721,11 +721,11 @@
                   "claude-def"
                   (:last-claude-session-id (sc/get-data session-id))))))))))
 
-    (testing "sends :has-tasks event when open children count decreases"
+    (testing "sends :has-tasks event when completed children count increases"
       (with-execute-state
         (let [cli-nullable (claude-cli/make-nullable
                             {:exit-code 0 :events []})
-              ;; 2 open before, 1 after skill
+              ;; 0 completed before, 1 completed after skill
               story-resp
               (make-task-response
                {:type :story
@@ -1322,3 +1322,155 @@
           (is (= :error (:pr-merge/status merge-result)))
           (is (= :session-not-found
                  (:error (:pr-merge/error merge-result)))))))))
+
+;;; Manual Escalation Tests
+
+(deftest manual-escalate-test
+  ;; Verify manual-escalate! opens a dev-env session without changing
+  ;; statechart state, and registers on-close for re-derivation.
+  (testing "manual-escalate!"
+    (testing "opens dev-env session without changing statechart state"
+      (with-execute-state
+        (let [dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses
+                             (task-responses {:meta {:refined "true"}
+                                              :pr-num 42})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 700})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    ;; Transition to :wait-pr-merge
+                    _ (sc/send! session-id :wait-pr-merge)
+                    _ (is (contains? (sc/current-state session-id)
+                                     :wait-pr-merge)
+                          "precondition: in :wait-pr-merge")
+                    ;; Manual escalate
+                    result (graph/query [`(resolvers/manual-escalate!
+                                           {:engine/session-id ~session-id})])
+                    escalate-result (get result `resolvers/manual-escalate!)]
+                ;; Statechart state unchanged
+                (is (contains? (sc/current-state session-id)
+                               :wait-pr-merge)
+                    "state unchanged after manual escalate")
+                (is (= :escalated (:manual-escalate/status escalate-result)))
+                (is (nil? (:manual-escalate/error escalate-result)))))))))
+
+    (testing "registers on-close hook with dev-env"
+      (with-execute-state
+        (let [dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 701})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    _ (sc/send! session-id :wait-pr-merge)
+                    _ (graph/query [`(resolvers/manual-escalate!
+                                      {:engine/session-id ~session-id})])
+                    calls @(:calls dev-env)
+                    on-close-calls (filter #(and (= :register-hook (:op %))
+                                                 (= :on-close (:hook-type %)))
+                                           calls)]
+                (is (= 1 (count on-close-calls)))
+                (is (= session-id (:session-id (first on-close-calls))))))))))
+
+    (testing "on-close transitions from :wait-pr-merge to :complete"
+      (with-execute-state
+        (let [dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)
+              mcp-nullable
+              (mcp-tasks/make-nullable
+               {:responses
+                {:work-on [(make-work-on-response)]
+                 :show [(make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        ;; on-dev-env-close re-derive: task now closed
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42
+                                             :status :closed})]
+                 :why-blocked [(make-blocking-response)]}})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 702})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    _ (sc/send! session-id :wait-pr-merge)
+                    _ (graph/query [`(resolvers/manual-escalate!
+                                      {:engine/session-id ~session-id})])
+                    ;; Fire on-close callback
+                    hooks @(:hooks dev-env)
+                    on-close-hook (first
+                                   (filter
+                                    #(= :on-close (:type (val %)))
+                                    hooks))
+                    callback (:callback (val on-close-hook))]
+                (callback {:session-id session-id
+                           :timestamp (java.time.Instant/now)
+                           :reason :user-exit})
+                ;; Re-derived state is :complete (task closed)
+                (is (= #{:complete} (sc/current-state session-id)))))))))
+
+    (testing "does not include activity tracking hooks"
+      (with-execute-state
+        (let [dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)
+              mcp-nullable (mcp-tasks/make-nullable
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 703
+                                                 :task/nrepl-port "7888"})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    _ (sc/send! session-id :wait-pr-merge)
+                    _ (graph/query [`(resolvers/manual-escalate!
+                                      {:engine/session-id ~session-id})])
+                    calls @(:calls dev-env)
+                    start-call (first
+                                (filter #(= :start-session (:op %))
+                                        calls))]
+                (is (nil? (get-in start-call [:opts :hooks]))
+                    "no activity hooks for manual escalation")))))))
+
+    (testing "returns error when no dev-env available"
+      (with-execute-state
+        (let [mcp-nullable (mcp-tasks/make-nullable
+                            {:responses
+                             (task-responses {:meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 704})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    result (graph/query [`(resolvers/manual-escalate!
+                                           {:engine/session-id ~session-id})])
+                    escalate-result (get result `resolvers/manual-escalate!)]
+                (is (= :error (:manual-escalate/status escalate-result)))
+                (is (= :no-dev-env
+                       (:error (:manual-escalate/error escalate-result))))))))))
+
+    (testing "returns error when session not found"
+      (with-execute-state
+        (let [result (graph/query [`(resolvers/manual-escalate!
+                                     {:engine/session-id "no-such-id"})])
+              escalate-result (get result `resolvers/manual-escalate!)]
+          (is (= :error (:manual-escalate/status escalate-result)))
+          (is (= :session-not-found
+                 (:error (:manual-escalate/error escalate-result)))))))))

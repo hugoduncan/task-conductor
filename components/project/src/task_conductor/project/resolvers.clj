@@ -205,15 +205,17 @@
 (defn- no-progress?
   "Check if skill made no progress.
    For most states: new-state == pre-skill-state
-   For :has-tasks: state unchanged AND open children count unchanged
+   For :has-tasks: state unchanged AND completed children count unchanged.
+   Tracks completed count (monotonically increasing) rather than open count,
+   because new tasks can be created during execution, masking progress.
    :complete is never no-progress — it means the story is closed."
-  [pre-skill-state new-state pre-open-children new-open-children]
+  [pre-skill-state new-state pre-completed-children new-completed-children]
   (if (= :complete new-state)
     false
     (let [was-has-tasks (= :has-tasks pre-skill-state)
           is-has-tasks (= :has-tasks new-state)]
       (if (and was-has-tasks is-has-tasks)
-        (= pre-open-children new-open-children)
+        (= pre-completed-children new-completed-children)
         (= pre-skill-state new-state)))))
 
 (defn- skill-failed?
@@ -234,7 +236,7 @@
   (try
     (let [data (sc/get-data session-id)
           {:keys [project-dir task-id task-type
-                  pre-skill-state pre-skill-open-children
+                  pre-skill-state pre-skill-completed-children
                   on-complete]} data]
       (cond
         (skill-failed? result)
@@ -258,11 +260,12 @@
                            children-maps)
                           (execute/derive-task-state
                            (task->execute-map task project-dir)))
-              new-open-children (when (= :story task-type)
-                                  (execute/count-open-children
-                                   children-maps))]
+              new-completed-children (when (= :story task-type)
+                                       (execute/count-completed-children
+                                        children-maps))]
           (if (no-progress? pre-skill-state new-state
-                            pre-skill-open-children new-open-children)
+                            pre-skill-completed-children
+                            new-completed-children)
             (do
               (sc/update-data! session-id
                                #(assoc
@@ -332,7 +335,7 @@
         (throw e)))))
 
 (defn- store-pre-skill-state!
-  "Store current derived state and open children count before skill invocation.
+  "Store derived state and completed children count before skill invocation.
    Used by on-skill-complete to detect no-progress.
    Derives state from task data rather than sc/current-state because entry
    actions run before the sessions atom is updated."
@@ -352,15 +355,16 @@
                                  children-maps)
                                 (execute/derive-task-state
                                  (task->execute-map task project-dir)))
-        open-children-count (when (= :story task-type)
-                              (execute/count-open-children children-maps))]
+        completed-children-count
+        (when (= :story task-type)
+          (execute/count-completed-children children-maps))]
     (sc/update-data! session-id
                      (fn [d]
                        (cond-> (assoc d :pre-skill-state current-derived-state)
-                         (some? open-children-count)
+                         (some? completed-children-count)
                          (assoc
-                          :pre-skill-open-children
-                          open-children-count))))))
+                          :pre-skill-completed-children
+                          completed-children-count))))))
 
 (graph/defmutation invoke-skill!
   "Invoke a skill via claude-cli based on current statechart state.
@@ -374,13 +378,17 @@
                           instead of re-deriving state
 
    Returns immediately with invocation status."
-  [{:keys [skill on-complete] :engine/keys [session-id]}]
+  [{:keys [skill args on-complete] :engine/keys [session-id]}]
   {::pco/output [:invoke-skill/status :invoke-skill/error]}
   (let [_ (sc/update-data! session-id #(assoc % :on-complete on-complete))
         _ (store-pre-skill-state! session-id)
         data (sc/get-data session-id)
-        {:keys [project-dir]} data
-        prompt (str "/" skill)
+        {:keys [project-dir task-id]} data
+        resolved-args (when args
+                        (str/replace
+                         args "{task-id}" (str task-id)))
+        prompt (cond-> (str "/" skill)
+                 resolved-args (str " " resolved-args))
         handle (claude-cli/invoke {:prompt prompt :dir project-dir})
         ;; Use bound-fn to convey dynamic bindings to virtual thread
         ;; (needed for nullable testing infrastructure)
@@ -452,6 +460,52 @@
        :escalate/error {:error :no-dev-env
                         :message "No dev-env available for escalation"}})))
 
+;;; Manual Escalation
+
+(graph/defmutation manual-escalate!
+  "Open a dev-env session for manual intervention without changing
+  statechart state. On session close, re-derives state and sends
+  the derived event to the statechart.
+
+  Input:
+    :engine/session-id - statechart session ID
+
+  Returns:
+    :manual-escalate/status   - :escalated or :error
+    :manual-escalate/error    - error map if failed"
+  [{:engine/keys [session-id]}]
+  {::pco/output [:manual-escalate/status :manual-escalate/error]}
+  (try
+    (let [data (sc/get-data session-id)
+          {:keys [project-dir task-id last-claude-session-id]} data
+          selected (graph/query [:dev-env/selected])
+          dev-env-id (:dev-env/id (:dev-env/selected selected))]
+      (if dev-env-id
+        (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)
+              opts (cond-> {:dir project-dir
+                            :task-id task-id}
+                     last-claude-session-id
+                     (assoc :claude-session-id last-claude-session-id))]
+          (graph/query
+           [`(task-conductor.dev-env.resolvers/dev-env-start-session!
+              {:dev-env/id ~dev-env-id
+               :dev-env/session-id ~session-id
+               :dev-env/opts ~opts})])
+          (when dev-env-instance
+            (dev-env/register-hook dev-env-instance session-id :on-close
+                                   (partial on-dev-env-close session-id)))
+          {:manual-escalate/status :escalated
+           :manual-escalate/error nil})
+        {:manual-escalate/status :error
+         :manual-escalate/error {:error :no-dev-env
+                                 :message "No dev-env available"}}))
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :session-not-found (:error (ex-data e)))
+        {:manual-escalate/status :error
+         :manual-escalate/error {:error :session-not-found
+                                 :message "Session not found"}}
+        (throw e)))))
+
 ;;; PR Merge Mutation
 
 (graph/defmutation pr-merge!
@@ -500,6 +554,7 @@
    execute!
    invoke-skill!
    escalate-to-dev-env!
+   manual-escalate!
    pr-merge!])
 
 (defn register-resolvers!
