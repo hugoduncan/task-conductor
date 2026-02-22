@@ -145,6 +145,54 @@
             (is (= :start (:event (second history))))
             (is (= #{:running} (:state (second history))))))))))
 
+;;; Sub-state Tests
+
+(defn sub-state-chart
+  "Statechart for testing sub-state detection:
+  idle → session-running → session-idle."
+  []
+  (sc/statechart {}
+                 (sc/initial {}
+                             (sc/transition {:target :idle}))
+                 (sc/state {:id :idle}
+                           (sc/transition
+                            {:event :activate :target :session-running}))
+                 (sc/state {:id :session-running}
+                           (sc/transition
+                            {:event :quieten :target :session-idle}))
+                 (sc/state {:id :session-idle})))
+
+(deftest engine-session-sub-state-resolver-test
+  ;; Verifies :engine/session-sub-state derives
+  ;; :session-running, :session-idle, or nil.
+  (testing "engine-session-sub-state resolver"
+    (testing "returns :session-running when state contains :session-running"
+      (with-clean-state
+        (sc/register! ::sub-state-chart (sub-state-chart))
+        (let [sid (sc/start! ::sub-state-chart)]
+          (sc/send! sid :activate)
+          (let [result (graph/query {:engine/session-id sid}
+                                    [:engine/session-sub-state])]
+            (is (= :session-running (:engine/session-sub-state result)))))))
+
+    (testing "returns :session-idle when state contains :session-idle"
+      (with-clean-state
+        (sc/register! ::sub-state-chart2 (sub-state-chart))
+        (let [sid (sc/start! ::sub-state-chart2)]
+          (sc/send! sid :activate)
+          (sc/send! sid :quieten)
+          (let [result (graph/query {:engine/session-id sid}
+                                    [:engine/session-sub-state])]
+            (is (= :session-idle (:engine/session-sub-state result)))))))
+
+    (testing "returns nil when state contains neither"
+      (with-clean-state
+        (sc/register! ::sub-state-chart3 (sub-state-chart))
+        (let [sid (sc/start! ::sub-state-chart3)
+              result (graph/query {:engine/session-id sid}
+                                  [:engine/session-sub-state])]
+          (is (nil? (:engine/session-sub-state result))))))))
+
 ;;; Mutation Tests
 
 (deftest engine-start-mutation-test
