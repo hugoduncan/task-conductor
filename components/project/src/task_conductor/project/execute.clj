@@ -190,7 +190,8 @@
 (def ^:private create-story-tasks-action
   {:expr
    '(task-conductor.project.resolvers/invoke-skill!
-     {:skill "mcp-tasks:create-story-tasks (MCP)"})})
+     {:skill "mcp-tasks:create-story-tasks (MCP)"
+      :args "{task-id}"})})
 
 (def ^:private execute-story-child-action
   {:expr

@@ -373,13 +373,17 @@
                           instead of re-deriving state
 
    Returns immediately with invocation status."
-  [{:keys [skill on-complete] :engine/keys [session-id]}]
+  [{:keys [skill args on-complete] :engine/keys [session-id]}]
   {::pco/output [:invoke-skill/status :invoke-skill/error]}
   (let [_ (sc/update-data! session-id #(assoc % :on-complete on-complete))
         _ (store-pre-skill-state! session-id)
         data (sc/get-data session-id)
-        {:keys [project-dir]} data
-        prompt (str "/" skill)
+        {:keys [project-dir task-id]} data
+        resolved-args (when args
+                        (str/replace
+                         args "{task-id}" (str task-id)))
+        prompt (cond-> (str "/" skill)
+                 resolved-args (str " " resolved-args))
         handle (claude-cli/invoke {:prompt prompt :dir project-dir})
         ;; Use bound-fn to convey dynamic bindings to virtual thread
         ;; (needed for nullable testing infrastructure)
