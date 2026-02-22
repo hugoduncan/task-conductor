@@ -421,7 +421,8 @@
             ;; fall back to .nrepl-port file in worktree, then in original
             ;; project root (worktree may lack the file if it differs from root)
             nrepl-port (or nrepl-port
-                           (read-nrepl-port project-dir)
+                           (when project-dir
+                             (read-nrepl-port project-dir))
                            (when root-project-dir
                              (read-nrepl-port root-project-dir)))
             _ (when-not nrepl-port
