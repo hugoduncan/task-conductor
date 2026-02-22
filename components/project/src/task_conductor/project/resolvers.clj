@@ -348,10 +348,11 @@
                      (fetch-children project-dir task-id))
           new-state (if (= :story task-type)
                       (execute/derive-story-state
-                       (task->execute-map task)
-                       (mapv task->execute-map children))
+                       (task->execute-map task project-dir)
+                       (mapv #(task->execute-map % project-dir)
+                             children))
                       (execute/derive-task-state
-                       (task->execute-map task)))]
+                       (task->execute-map task project-dir)))]
       (sc/send! session-id new-state))
     (catch clojure.lang.ExceptionInfo e
       (when-not (= :session-not-found (:error (ex-data e)))
