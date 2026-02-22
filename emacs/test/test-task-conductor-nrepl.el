@@ -10,11 +10,18 @@
 ;;; Bencode encode tests
 
 (ert-deftest task-conductor-nrepl-encode-string ()
-  ;; Verifies string encoding with byte-length prefix.
+  ;; Verifies string encoding with byte-length prefix,
+  ;; including multi-byte UTF-8 characters.
   (should (equal "5:hello"
                  (task-conductor-nrepl--bencode-encode "hello")))
   (should (equal "0:"
-                 (task-conductor-nrepl--bencode-encode ""))))
+                 (task-conductor-nrepl--bencode-encode "")))
+  ;; Multi-byte: "日本" is 6 UTF-8 bytes, 2 characters
+  (should (equal (format "6:%s" "日本")
+                 (task-conductor-nrepl--bencode-encode "日本")))
+  ;; Mixed ASCII + multi-byte: "hi" = 2 bytes, "日本" = 6 bytes = 8
+  (should (equal (format "8:%s" "hi日本")
+                 (task-conductor-nrepl--bencode-encode "hi日本"))))
 
 (ert-deftest task-conductor-nrepl-encode-integer ()
   ;; Verifies integer encoding in i<n>e format.
@@ -41,11 +48,24 @@
 ;;; Bencode decode tests
 
 (ert-deftest task-conductor-nrepl-decode-string ()
-  ;; Verifies string decoding and incomplete-input handling.
+  ;; Verifies string decoding and incomplete-input handling,
+  ;; including multi-byte UTF-8 on a binary (unibyte) buffer.
   (let ((result (task-conductor-nrepl--bencode-decode "5:hellorest")))
     (should (equal "hello" (car result)))
     (should (equal "rest" (cdr result))))
-  (should-not (task-conductor-nrepl--bencode-decode "5:hel")))
+  (should-not (task-conductor-nrepl--bencode-decode "5:hel"))
+  ;; Multi-byte: "日本" = 6 UTF-8 bytes. Simulate binary buffer input.
+  (let* ((raw (encode-coding-string (format "6:%s" "日本") 'utf-8))
+         (result (task-conductor-nrepl--bencode-decode raw)))
+    (should result)
+    (should (equal "日本" (car result)))
+    (should (equal "" (cdr result))))
+  ;; Mixed ASCII + multi-byte with trailing data
+  (let* ((raw (encode-coding-string (format "8:%sxyz" "hi日本") 'utf-8))
+         (result (task-conductor-nrepl--bencode-decode raw)))
+    (should result)
+    (should (equal "hi日本" (car result)))
+    (should (equal "xyz" (cdr result)))))
 
 (ert-deftest task-conductor-nrepl-decode-integer ()
   ;; Verifies integer decoding and incomplete-input handling.

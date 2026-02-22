@@ -70,7 +70,8 @@ or nil if STR is incomplete."
                    (start (1+ colon))
                    (needed (+ start len)))
               (when (>= (length str) needed)
-                (cons (substring str start needed)
+                (cons (decode-coding-string (substring str start needed)
+                                            'utf-8)
                       (substring str needed)))))))
        ;; List: l...e
        ((= ch ?l)
@@ -112,7 +113,10 @@ or nil if STR is incomplete."
   "Send bencode-encoded MSG alist over CONN."
   (let ((process (plist-get conn :process)))
     (when (and process (process-live-p process))
-      (process-send-string process (task-conductor-nrepl--bencode-encode msg)))))
+      (process-send-string
+       process
+       (encode-coding-string (task-conductor-nrepl--bencode-encode msg)
+                             'utf-8)))))
 
 ;;; Response accumulation
 
@@ -185,7 +189,7 @@ Returns a connection object or signals an error."
                    :name "task-conductor-nrepl"
                    :host host
                    :service port
-                   :coding 'utf-8
+                   :coding 'binary
                    :filter (lambda (_proc data)
                              (task-conductor-nrepl--filter conn data))
                    :sentinel (lambda (_proc event)
