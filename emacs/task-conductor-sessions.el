@@ -103,9 +103,10 @@ When STATE is escalated, SUB-STATE distinguishes idle from running."
 
 (defun task-conductor-sessions--format-session-heading (session)
   "Format heading string for SESSION plist.
-Shows PR number and branch for :wait-pr-merge sessions."
+Shows project name prefix and PR info for :wait-pr-merge sessions."
   (let ((task-id (plist-get session :task-id))
         (task-title (or (plist-get session :task-title) "untitled"))
+        (project-name (plist-get session :project-name))
         (state (plist-get session :state))
         (sub-state (plist-get session :sub-state))
         (entered (plist-get session :entered-state-at))
@@ -114,7 +115,9 @@ Shows PR number and branch for :wait-pr-merge sessions."
     (format "%s #%s %s%s  %s"
             (task-conductor-sessions--state-icon state sub-state)
             (if task-id (format "%s" task-id) "?")
-            task-title
+            (if (and project-name (not (string-empty-p project-name)))
+                (format "%s: %s" project-name task-title)
+              task-title)
             (if (and (task-conductor-sessions--wait-pr-merge-p state)
                      (or pr-num branch))
                 (format "  %s%s"
