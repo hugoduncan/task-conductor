@@ -179,6 +179,15 @@
     (should (= 0 (length (plist-get result :running))))
     (should (= 1 (length (plist-get result :needs-attention))))))
 
+(ert-deftest task-conductor-sessions-partition-no-sub-state ()
+  ;; Escalated session without :sub-state key routes to :needs-attention (backward compat).
+  (let* ((session (list :session-id "s1" :state :escalated
+                        :task-id 101 :task-title "Fix auth"
+                        :entered-state-at nil))
+         (result (task-conductor-sessions--partition-by-state (list session))))
+    (should (= 0 (length (plist-get result :running))))
+    (should (= 1 (length (plist-get result :needs-attention))))))
+
 (ert-deftest task-conductor-sessions-partition-mixed-sub-states ()
   ;; Escalated running and idle sessions coexist in correct partitions.
   (let ((result (task-conductor-sessions--partition-by-state test-sessions-with-running)))
