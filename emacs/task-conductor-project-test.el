@@ -783,10 +783,16 @@ Returns the project buffer, leaving point on the task section."
       (task-conductor-project-execute))))
 
 (ert-deftest task-conductor-project-e-key-bound ()
-  ;; e is bound to task-conductor-project-execute in the mode map.
+  ;; e is bound to task-conductor-project-escalate in the mode map.
+  (with-project-buffer
+    (should (eq #'task-conductor-project-escalate
+                (lookup-key task-conductor-project-mode-map (kbd "e"))))))
+
+(ert-deftest task-conductor-project-x-key-bound ()
+  ;; x is bound to task-conductor-project-execute in the mode map.
   (with-project-buffer
     (should (eq #'task-conductor-project-execute
-                (lookup-key task-conductor-project-mode-map (kbd "e"))))))
+                (lookup-key task-conductor-project-mode-map (kbd "x"))))))
 
 ;;; Cancel command tests
 
