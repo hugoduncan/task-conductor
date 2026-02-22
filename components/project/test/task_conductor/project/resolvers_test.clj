@@ -421,6 +421,25 @@
                   (is (= "my-story" (:task-title data)))
                   (is (= "myproj" (:project-name data))))))))))
 
+    (testing "stores nil task-title when task response has no title"
+      (with-execute-state
+        (let [nullable (mcp-tasks/make-nullable
+                        {:responses (task-responses
+                                     {:title nil
+                                      :meta {:refined "true"}})})]
+          (mcp-tasks/with-nullable-mcp-tasks nullable
+            (claude-cli/with-nullable-claude-cli (claude-cli/make-nullable)
+              (let [result (graph/query [`(resolvers/execute!
+                                           {:task/project-dir "/test"
+                                            :task/id 558})])
+                    execute-result (get result `resolvers/execute!)
+                    session-id (:execute/session-id execute-result)
+                    data (sc/get-data session-id)]
+                (is (contains? data :task-title)
+                    ":task-title key should be present even when nil")
+                (is (nil? (:task-title data))
+                    ":task-title should be nil when task has no title")))))))
+
     (testing "falls back to dir basename for project-name when not registered"
       (with-execute-state
         (fs/with-temp-dir
