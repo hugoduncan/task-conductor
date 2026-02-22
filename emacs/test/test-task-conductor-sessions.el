@@ -142,23 +142,20 @@
   (let ((result (task-conductor-sessions--partition-by-state nil)))
     (should (null (plist-get result :needs-attention)))
     (should (null (plist-get result :running)))
-    (should (null (plist-get result :idle)))
     (should (null (plist-get result :wait-pr-merge)))))
 
 (ert-deftest task-conductor-sessions-partition-mixed ()
-  ;; Escalated sessions without sub-state go to :needs-attention.
+  ;; Escalated sessions without sub-state go to :needs-attention; idle sessions excluded.
   (let ((result (task-conductor-sessions--partition-by-state test-sessions-sample)))
     (should (= 2 (length (plist-get result :needs-attention))))
     (should (= 0 (length (plist-get result :running))))
-    (should (= 1 (length (plist-get result :idle))))
     (should (= 0 (length (plist-get result :wait-pr-merge))))))
 
 (ert-deftest task-conductor-sessions-partition-with-pr-waiting ()
-  ;; :wait-pr-merge sessions are partitioned into their own group.
+  ;; :wait-pr-merge sessions are partitioned into their own group; idle sessions excluded.
   (let ((result (task-conductor-sessions--partition-by-state test-sessions-with-pr)))
     (should (= 1 (length (plist-get result :needs-attention))))
     (should (= 0 (length (plist-get result :running))))
-    (should (= 1 (length (plist-get result :idle))))
     (should (= 1 (length (plist-get result :wait-pr-merge))))))
 
 (ert-deftest task-conductor-sessions-partition-running-sub-state ()
@@ -189,39 +186,38 @@
     (should (= 1 (length (plist-get result :needs-attention))))))
 
 (ert-deftest task-conductor-sessions-partition-mixed-sub-states ()
-  ;; Escalated running and idle sessions coexist in correct partitions.
+  ;; Escalated running and idle sessions coexist in correct partitions; non-escalated idle excluded.
   (let ((result (task-conductor-sessions--partition-by-state test-sessions-with-running)))
     (should (= 1 (length (plist-get result :needs-attention))))
     (should (= 1 (length (plist-get result :running))))
-    (should (= 1 (length (plist-get result :idle))))
     (should (= 0 (length (plist-get result :wait-pr-merge))))))
 
 ;;; Section Rendering
 
 (ert-deftest task-conductor-sessions-render-empty ()
-  ;; Rendering empty list produces buffer with group headings.
+  ;; Rendering empty list produces buffer with three group headings (no Idle group).
   (with-sessions-buffer
     (task-conductor-sessions--render nil)
     (should (string-match-p "Needs Attention (0)" (buffer-string)))
     (should (string-match-p "Running (0)" (buffer-string)))
-    (should (string-match-p "Idle (0)" (buffer-string)))
     (should (string-match-p "PR Waiting (0)" (buffer-string)))
+    (should-not (string-match-p "Idle" (buffer-string)))
     (should (string-match-p "(none)" (buffer-string)))))
 
 (ert-deftest task-conductor-sessions-render-with-sessions ()
-  ;; Rendering sessions shows them in correct groups.
+  ;; Rendering sessions shows escalated sessions; idle sessions excluded.
   (with-sessions-buffer
     (task-conductor-sessions--render test-sessions-sample)
     (let ((content (buffer-string)))
       (should (string-match-p "Needs Attention (2)" content))
       (should (string-match-p "Running (0)" content))
-      (should (string-match-p "Idle (1)" content))
       (should (string-match-p "PR Waiting (0)" content))
+      (should-not (string-match-p "Idle" content))
       (should (string-match-p "Fix auth" content))
-      (should (string-match-p "Add tests" content))
+      (should-not (string-match-p "Add tests" content))
       (should (string-match-p "Refactor DB" content))
       (should (string-match-p "🔔" content))
-      (should (string-match-p "⏸" content)))))
+      (should-not (string-match-p "⏸" content)))))
 
 (ert-deftest task-conductor-sessions-render-with-pr-waiting ()
   ;; Rendering :wait-pr-merge sessions shows PR Waiting group.
@@ -263,7 +259,7 @@
         (dolist (entry (oref group children))
           (when (eq (oref entry type) 'task-conductor-sessions-entry)
             (push (oref entry value) found))))
-      (should (>= (length found) 3)))))
+      (should (>= (length found) 2)))))
 
 ;;; Keybindings
 
