@@ -582,18 +582,21 @@ Stops the command subscription loop before unregistering."
     (user-error "Not connected to task-conductor"))
   (task-conductor-dev-env--stop-poll-loop)
   (let ((dev-env-id task-conductor-dev-env--dev-env-id))
-    (task-conductor-dev-env--eval-sync
-     (format "(task-conductor.emacs-dev-env.interface/unregister-emacs-dev-env %S)"
-             dev-env-id))
-    (setq task-conductor-dev-env--dev-env-id nil)
-    (setq task-conductor-dev-env--project-dir nil)
-    (setq task-conductor-dev-env--cached-sessions nil)
-    (setq task-conductor-dev-env--cached-projects nil)
-    (task-conductor-nrepl-close task-conductor-dev-env--nrepl-conn)
-    (setq task-conductor-dev-env--nrepl-conn nil)
-    (clrhash task-conductor-dev-env--sessions)
-    (clrhash task-conductor-dev-env--session-hooks)
-    (message "Disconnected from task-conductor")))
+    (unwind-protect
+        (condition-case err
+            (task-conductor-dev-env--eval-sync
+             (format "(task-conductor.emacs-dev-env.interface/unregister-emacs-dev-env %S)"
+                     dev-env-id))
+          (error (message "Warning: failed to unregister dev-env: %s" (error-message-string err))))
+      (setq task-conductor-dev-env--dev-env-id nil)
+      (setq task-conductor-dev-env--project-dir nil)
+      (setq task-conductor-dev-env--cached-sessions nil)
+      (setq task-conductor-dev-env--cached-projects nil)
+      (task-conductor-nrepl-close task-conductor-dev-env--nrepl-conn)
+      (setq task-conductor-dev-env--nrepl-conn nil)
+      (clrhash task-conductor-dev-env--sessions)
+      (clrhash task-conductor-dev-env--session-hooks)
+      (message "Disconnected from task-conductor"))))
 
 (provide 'task-conductor-dev-env)
 ;;; task-conductor-dev-env.el ends here
