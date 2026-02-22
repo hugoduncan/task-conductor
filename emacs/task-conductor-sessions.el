@@ -26,6 +26,7 @@
 ;;
 ;; Key bindings:
 ;;   RET - Switch to session's *claude:* buffer
+;;   e   - Escalate (manual dev-env session) for session at point
 ;;   m   - Trigger PR merge for :wait-pr-merge session at point
 ;;   g   - Refresh session list from JVM
 ;;   q   - Quit session viewer
@@ -236,6 +237,26 @@ SESSIONS is a list of plists with :session-id, :state, :task-id,
             (message "PR merge failed: %s"
                      (plist-get (plist-get result :pr-merge/error) :message))))))))
 
+(defun task-conductor-sessions-escalate ()
+  "Open a manual dev-env session for the session at point.
+Does not change statechart state.  On session close, re-derives
+state and sends the event to the statechart."
+  (interactive)
+  (when-let ((section (magit-current-section)))
+    (when-let ((session (and (eq (oref section type)
+                                 'task-conductor-sessions-entry)
+                             (oref section value))))
+      (let ((session-id (plist-get session :session-id)))
+        (unless session-id
+          (user-error "Session has no session-id"))
+        (let ((result (task-conductor-dev-env--eval-sync
+                       (format "(let [r (task-conductor.pathom-graph.interface/query [`(task-conductor.project.resolvers/manual-escalate! {:engine/session-id %S})])] (get r 'task-conductor.project.resolvers/manual-escalate!))"
+                               session-id))))
+          (if (eq :escalated (plist-get result :manual-escalate/status))
+              (message "Escalated session %s" session-id)
+            (message "Escalation failed: %s"
+                     (plist-get (plist-get result :manual-escalate/error) :message))))))))
+
 (defun task-conductor-sessions-quit ()
   "Quit the sessions buffer."
   (interactive)
@@ -300,6 +321,7 @@ Called by the :notify-sessions-changed handler."
   :doc "Keymap for `task-conductor-sessions-mode'."
   :parent magit-section-mode-map
   "RET" #'task-conductor-sessions-goto-session
+  "e"   #'task-conductor-sessions-escalate
   "g"   #'task-conductor-sessions-refresh
   "m"   #'task-conductor-sessions-merge-pr
   "q"   #'task-conductor-sessions-quit)

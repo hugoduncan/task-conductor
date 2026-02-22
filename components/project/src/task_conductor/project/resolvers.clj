@@ -451,6 +451,52 @@
        :escalate/error {:error :no-dev-env
                         :message "No dev-env available for escalation"}})))
 
+;;; Manual Escalation
+
+(graph/defmutation manual-escalate!
+  "Open a dev-env session for manual intervention without changing
+  statechart state. On session close, re-derives state and sends
+  the derived event to the statechart.
+
+  Input:
+    :engine/session-id - statechart session ID
+
+  Returns:
+    :manual-escalate/status   - :escalated or :error
+    :manual-escalate/error    - error map if failed"
+  [{:engine/keys [session-id]}]
+  {::pco/output [:manual-escalate/status :manual-escalate/error]}
+  (try
+    (let [data (sc/get-data session-id)
+          {:keys [project-dir task-id last-claude-session-id]} data
+          selected (graph/query [:dev-env/selected])
+          dev-env-id (:dev-env/id (:dev-env/selected selected))]
+      (if dev-env-id
+        (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)
+              opts (cond-> {:dir project-dir
+                            :task-id task-id}
+                     last-claude-session-id
+                     (assoc :claude-session-id last-claude-session-id))]
+          (graph/query
+           [`(task-conductor.dev-env.resolvers/dev-env-start-session!
+              {:dev-env/id ~dev-env-id
+               :dev-env/session-id ~session-id
+               :dev-env/opts ~opts})])
+          (when dev-env-instance
+            (dev-env/register-hook dev-env-instance session-id :on-close
+                                   (partial on-dev-env-close session-id)))
+          {:manual-escalate/status :escalated
+           :manual-escalate/error nil})
+        {:manual-escalate/status :error
+         :manual-escalate/error {:error :no-dev-env
+                                 :message "No dev-env available"}}))
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :session-not-found (:error (ex-data e)))
+        {:manual-escalate/status :error
+         :manual-escalate/error {:error :session-not-found
+                                 :message "Session not found"}}
+        (throw e)))))
+
 ;;; PR Merge Mutation
 
 (graph/defmutation pr-merge!
@@ -499,6 +545,7 @@
    execute!
    invoke-skill!
    escalate-to-dev-env!
+   manual-escalate!
    pr-merge!])
 
 (defn register-resolvers!

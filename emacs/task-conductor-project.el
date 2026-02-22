@@ -26,7 +26,8 @@
 ;;   g   - Refresh project list from JVM
 ;;   c   - Create a new project
 ;;   d   - Delete project at point
-;;   e   - Execute task or story at point
+;;   e   - Escalate (manual dev-env session) for running task at point
+;;   x   - Execute task or story at point
 ;;   k   - Cancel execution at point
 ;;   r   - Rename project at point
 ;;   RET - Open project directory in dired
@@ -470,6 +471,30 @@ when not connected to task-conductor."
                    (or (plist-get result :message) "unknown"))
         (message "Started execution of task %d" task-id)))))
 
+(defun task-conductor-project-escalate ()
+  "Open a manual dev-env session for the running task at point.
+Does not change statechart state.  On session close, re-derives
+state and sends the event to the statechart.
+Signals `user-error' when not on a task, no active session exists,
+or nREPL is not connected."
+  (interactive)
+  (let ((ctx (task-conductor-project--task-context-at-point)))
+    (unless ctx
+      (user-error "No task at point"))
+    (let* ((task-id (plist-get ctx :task-id))
+           (project-dir (plist-get ctx :project-dir))
+           (session (task-conductor-project--find-session task-id project-dir)))
+      (unless session
+        (user-error "No active session for task %d" task-id))
+      (let* ((session-id (plist-get session :session-id))
+             (result (task-conductor-dev-env--eval-sync
+                      (format "(let [r (task-conductor.pathom-graph.interface/query [`(task-conductor.project.resolvers/manual-escalate! {:engine/session-id %S})])] (get r 'task-conductor.project.resolvers/manual-escalate!))"
+                              session-id))))
+        (if (eq :escalated (plist-get result :manual-escalate/status))
+            (message "Escalated task %d" task-id)
+          (message "Escalation failed: %s"
+                   (plist-get (plist-get result :manual-escalate/error) :message)))))))
+
 (defun task-conductor-project-cancel ()
   "Cancel execution for the task at point.
 Extracts the session-id from the matching cached session and calls
@@ -604,7 +629,8 @@ Prompts for directory path and optional name."
   "g"   #'task-conductor-project-refresh
   "c"   #'task-conductor-project-create
   "d"   #'task-conductor-project-delete
-  "e"   #'task-conductor-project-execute
+  "e"   #'task-conductor-project-escalate
+  "x"   #'task-conductor-project-execute
   "k"   #'task-conductor-project-cancel
   "r"   #'task-conductor-project-rename
   "RET" #'task-conductor-project-open-dired

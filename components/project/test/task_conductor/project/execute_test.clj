@@ -325,16 +325,40 @@
             (sc/send! sid :merge-pr)
             (is (contains? (sc/current-state sid) :merging-pr))))))
 
-    (testing "guards against :unrefined → :done transition"
-      ;; Tasks must be refined before completion. Sending :done event
-      ;; while in :unrefined state has no effect.
-      (with-clean-test-env
-        (sc/register! ::task-guard execute/task-statechart)
-        (let [sid (sc/start! ::task-guard)]
-          (sc/send! sid :unrefined)
-          (sc/send! sid :done)
-          (is (contains? (sc/current-state sid) :unrefined)
-              ":done event should be ignored in :unrefined state"))))
+    (testing "re-derive transitions allow cross-state transitions"
+      ;; Re-derive transitions enable on-dev-env-close to move from any
+      ;; non-terminal state to any other derived state after manual escalation.
+      (testing "unrefined → done"
+        (with-clean-test-env
+          (sc/register! ::task-rederive1 execute/task-statechart)
+          (let [sid (sc/start! ::task-rederive1)]
+            (sc/send! sid :unrefined)
+            (sc/send! sid :done)
+            (is (contains? (sc/current-state sid) :done)))))
+
+      (testing "unrefined → complete"
+        (with-clean-test-env
+          (sc/register! ::task-rederive2 execute/task-statechart)
+          (let [sid (sc/start! ::task-rederive2)]
+            (sc/send! sid :unrefined)
+            (sc/send! sid :complete)
+            (is (= #{:complete} (sc/current-state sid))))))
+
+      (testing "wait-pr-merge → done"
+        (with-clean-test-env
+          (sc/register! ::task-rederive3 execute/task-statechart)
+          (let [sid (sc/start! ::task-rederive3)]
+            (sc/send! sid :wait-pr-merge)
+            (sc/send! sid :done)
+            (is (contains? (sc/current-state sid) :done)))))
+
+      (testing "wait-pr-merge → refined"
+        (with-clean-test-env
+          (sc/register! ::task-rederive4 execute/task-statechart)
+          (let [sid (sc/start! ::task-rederive4)]
+            (sc/send! sid :wait-pr-merge)
+            (sc/send! sid :refined)
+            (is (contains? (sc/current-state sid) :refined))))))
 
     (testing "transitions to :escalated on :error"
       (testing "enters :escalated with :idle sub-state"
