@@ -548,28 +548,35 @@
     task-id     - Task or story ID (integer)"
   [dev-env-id project-dir task-id]
   (with-dev-env _dev-env dev-env-id
-    (let [mutation-sym 'task-conductor.project.resolvers/execute!
-          query-result (graph/query
-                        [(list mutation-sym
-                               {:task/project-dir project-dir
-                                :task/id task-id})])
-          result (get query-result mutation-sym)]
-      (cond
-        (nil? result)
-        {:status :error :message "Mutation returned no result"}
+    (if-let [existing (some (fn [sid]
+                              (when (= (:task-id (sc/get-data sid)) task-id)
+                                sid))
+                            (sc/list-sessions))]
+      {:status :error
+       :message (format "Session already running for task %d" task-id)
+       :session-id existing}
+      (let [mutation-sym 'task-conductor.project.resolvers/execute!
+            query-result (graph/query
+                          [(list mutation-sym
+                                 {:task/project-dir project-dir
+                                  :task/id task-id})])
+            result (get query-result mutation-sym)]
+        (cond
+          (nil? result)
+          {:status :error :message "Mutation returned no result"}
 
-        (:execute/error result)
-        {:status :error
-         :message (or (:message (:execute/error result)) "Execution failed")
-         :error (:execute/error result)}
+          (:execute/error result)
+          {:status :error
+           :message (or (:message (:execute/error result)) "Execution failed")
+           :error (:execute/error result)}
 
-        :else
-        (let [session-id (:execute/session-id result)
-              initial-state (:execute/initial-state result)]
-          (sc/send! session-id initial-state)
-          {:status :ok
-           :session-id session-id
-           :initial-state initial-state})))))
+          :else
+          (let [session-id (:execute/session-id result)
+                initial-state (:execute/initial-state result)]
+            (sc/send! session-id initial-state)
+            {:status :ok
+             :session-id session-id
+             :initial-state initial-state}))))))
 
 ;;; Health Check
 

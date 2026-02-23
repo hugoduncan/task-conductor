@@ -213,7 +213,6 @@
    {:task (merge {:title "Test task"
                   :type :task
                   :status :open
-                  :title "test-task"
                   :meta nil
                   :pr-num nil
                   :code-reviewed nil}
