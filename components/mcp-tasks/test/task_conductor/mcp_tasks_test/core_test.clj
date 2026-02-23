@@ -57,6 +57,13 @@
         (let [tmp (str (fs/create-temp-dir))
               config-path (str (fs/path tmp ".mcp-tasks.edn"))]
           (spit config-path "{:other-key \"value\"}")
+          (is (nil? (#'core/read-tasks-dir tmp))))))
+
+    (testing "with malformed .mcp-tasks.edn"
+      (testing "returns nil"
+        (let [tmp (str (fs/create-temp-dir))
+              config-path (str (fs/path tmp ".mcp-tasks.edn"))]
+          (spit config-path "{broken edn")
           (is (nil? (#'core/read-tasks-dir tmp))))))))
 
 ;;; find-main-git-checkout tests
