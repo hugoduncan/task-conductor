@@ -257,6 +257,18 @@
   []
   (core/remove-project-registry-watch!))
 
+(defn install-session-notify-watch!
+  "Install a statechart transition listener that pushes session notifications
+  to all connected dev-envs when session state changes.
+  Idempotent — called automatically by register-emacs-dev-env."
+  []
+  (core/install-session-notify-watch!))
+
+(defn remove-session-notify-watch!
+  "Remove the statechart transition listener for session notifications."
+  []
+  (core/remove-session-notify-watch!))
+
 ;;; Health Check
 
 (defn ping

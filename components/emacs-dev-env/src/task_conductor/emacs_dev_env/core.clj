@@ -14,7 +14,7 @@
   (:import
    [java.util UUID]))
 
-(declare install-project-registry-watch!)
+(declare install-project-registry-watch! install-session-notify-watch!)
 
 (def default-await-timeout-ms
   "Default timeout for await-command in milliseconds."
@@ -193,6 +193,7 @@
     (dev-env) - Mark existing dev-env as connected (for internal use)"
   ([]
    (install-project-registry-watch!)
+   (install-session-notify-watch!)
    (let [dev-env (make-emacs-dev-env)
          dev-env-id (generic-registry/register! dev-env :emacs {})]
      (swap! (:state dev-env) assoc :connected? true)
@@ -702,3 +703,23 @@
   "Remove the project registry watch."
   []
   (project-registry/unwatch! ::project-notify))
+
+(defn install-session-notify-watch!
+  "Install a statechart transition listener that pushes session notifications
+  to all connected dev-envs when session state changes.
+  Idempotent — re-registering the same key replaces the previous listener."
+  []
+  (sc/add-transition-listener!
+   ::session-notify
+   (fn [_session-id from-state to-state _event]
+     (when (not= from-state to-state)
+       (try
+         (notify-all-sessions-changed!)
+         (catch Exception e
+           (log/warn "Failed to notify sessions changed"
+                     {:error (.getMessage e)})))))))
+
+(defn remove-session-notify-watch!
+  "Remove the statechart transition listener for session notifications."
+  []
+  (sc/remove-transition-listener! ::session-notify))
