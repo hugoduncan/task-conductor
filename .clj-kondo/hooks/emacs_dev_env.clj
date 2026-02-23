@@ -13,3 +13,13 @@
                    (api/vector-node [binding-node dev-env-id-node])
                    body))]
     {:node new-node}))
+
+(defn with-session-notify-watch-cleanup
+  "Transform (with-session-notify-watch-cleanup body...)
+   into (do body...)
+   so clj-kondo can resolve vars in the body."
+  [{:keys [node]}]
+  (let [body (rest (:children node))
+        new-node (api/list-node
+                  (list* (api/token-node 'do) body))]
+    {:node new-node}))

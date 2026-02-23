@@ -721,65 +721,70 @@
 (def ^:private session-notify-key
   :task-conductor.emacs-dev-env.core/session-notify)
 
+(defmacro ^:private with-session-notify-watch-cleanup
+  "Execute body with a clean session-notify transition listener state.
+  Removes any existing listener before and after body execution."
+  [& body]
+  `(do
+     (sc/remove-transition-listener! session-notify-key)
+     (try
+       ~@body
+       (finally
+         (sc/remove-transition-listener! session-notify-key)))))
+
 (deftest session-notify-watch-test
   ;; Verify install/remove-session-notify-watch! manage
   ;; the statechart transition listener correctly.
   (testing "session notify watch"
     (testing "registers the transition listener"
-      (sc/remove-transition-listener! session-notify-key)
-      (core/install-session-notify-watch!)
-      (is (some? (get @engine/transition-listeners
-                      session-notify-key)))
-      (sc/remove-transition-listener! session-notify-key))
+      (with-session-notify-watch-cleanup
+        (core/install-session-notify-watch!)
+        (is (some? (get @engine/transition-listeners
+                        session-notify-key)))))
 
     (testing "removes the transition listener"
-      (core/install-session-notify-watch!)
-      (core/remove-session-notify-watch!)
-      (is (nil? (get @engine/transition-listeners
-                     session-notify-key))))
+      (with-session-notify-watch-cleanup
+        (core/install-session-notify-watch!)
+        (core/remove-session-notify-watch!)
+        (is (nil? (get @engine/transition-listeners
+                       session-notify-key)))))
 
     (testing "is idempotent"
-      (sc/remove-transition-listener! session-notify-key)
-      (let [notified (atom 0)]
-        (with-redefs
-         [core/notify-all-sessions-changed!
-          (fn [] (swap! notified inc))]
-          (core/install-session-notify-watch!)
-          (core/install-session-notify-watch!)
-          (let [listener (get @engine/transition-listeners
-                              session-notify-key)]
-            (listener "s1" #{:idle} #{:running} :start)
-            (is (= 1 @notified))))
-        (sc/remove-transition-listener!
-         session-notify-key)))
+      (with-session-notify-watch-cleanup
+        (let [notified (atom 0)]
+          (with-redefs
+           [core/notify-all-sessions-changed!
+            (fn [] (swap! notified inc))]
+            (core/install-session-notify-watch!)
+            (core/install-session-notify-watch!)
+            (let [listener (get @engine/transition-listeners
+                                session-notify-key)]
+              (listener "s1" #{:idle} #{:running} :start)
+              (is (= 1 @notified)))))))
 
     (testing "fires on state change"
-      (sc/remove-transition-listener! session-notify-key)
-      (let [notified (atom 0)]
-        (with-redefs
-         [core/notify-all-sessions-changed!
-          (fn [] (swap! notified inc))]
-          (core/install-session-notify-watch!)
-          (let [listener (get @engine/transition-listeners
-                              session-notify-key)]
-            (listener "s1" #{:idle} #{:running} :start)
-            (is (= 1 @notified))))
-        (sc/remove-transition-listener!
-         session-notify-key)))
+      (with-session-notify-watch-cleanup
+        (let [notified (atom 0)]
+          (with-redefs
+           [core/notify-all-sessions-changed!
+            (fn [] (swap! notified inc))]
+            (core/install-session-notify-watch!)
+            (let [listener (get @engine/transition-listeners
+                                session-notify-key)]
+              (listener "s1" #{:idle} #{:running} :start)
+              (is (= 1 @notified)))))))
 
     (testing "does not fire when states are equal"
-      (sc/remove-transition-listener! session-notify-key)
-      (let [notified (atom 0)]
-        (with-redefs
-         [core/notify-all-sessions-changed!
-          (fn [] (swap! notified inc))]
-          (core/install-session-notify-watch!)
-          (let [listener (get @engine/transition-listeners
-                              session-notify-key)]
-            (listener "s1" #{:idle} #{:idle} :no-op)
-            (is (zero? @notified))))
-        (sc/remove-transition-listener!
-         session-notify-key)))))
+      (with-session-notify-watch-cleanup
+        (let [notified (atom 0)]
+          (with-redefs
+           [core/notify-all-sessions-changed!
+            (fn [] (swap! notified inc))]
+            (core/install-session-notify-watch!)
+            (let [listener (get @engine/transition-listeners
+                                session-notify-key)]
+              (listener "s1" #{:idle} #{:idle} :no-op)
+              (is (zero? @notified)))))))))
 
 ;;; Project Query Tests
 
