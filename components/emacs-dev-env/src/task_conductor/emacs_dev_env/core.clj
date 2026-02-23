@@ -420,7 +420,11 @@
           :when (= :emacs type)
           :let [dev-env (generic-registry/get-dev-env id)]
           :when (connected? dev-env)]
-    (notify-sessions-changed! dev-env)))
+    (try
+      (notify-sessions-changed! dev-env)
+      (catch Exception e
+        (log/warn "Dropped session notification"
+                  {:dev-env-id id :error (.getMessage e)})))))
 
 ;;; Project Query
 
