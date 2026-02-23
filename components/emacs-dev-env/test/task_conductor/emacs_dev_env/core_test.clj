@@ -735,6 +735,29 @@
           (let [project (first (:projects result))]
             (is (= "test-proj" (:project/name project)))
             (is (string? (:project/path project))))
+          (core/unregister-emacs-dev-env dev-env-id))))
+
+    (testing "returns projects sorted alphabetically by :project/path"
+      (with-clean-project-registry
+        (let [dev-env-id (core/register-emacs-dev-env)
+              base (java.io.File.
+                    (System/getProperty "java.io.tmpdir")
+                    "tc-sort-test")
+              zoo-dir (java.io.File. base "zoo")
+              bar-dir (java.io.File. base "bar")
+              alpha-dir (java.io.File. base "alpha")
+              _ (run! #(.mkdirs %) [zoo-dir bar-dir alpha-dir])
+              zoo-path (.getCanonicalPath zoo-dir)
+              bar-path (.getCanonicalPath bar-dir)
+              alpha-path (.getCanonicalPath alpha-dir)
+              _ (project-registry/register! zoo-path {:project/name "zoo"})
+              _ (project-registry/register! bar-path {:project/name "bar"})
+              _ (project-registry/register! alpha-path {:project/name "alpha"})
+              result (core/query-projects-by-id dev-env-id)
+              paths (mapv :project/path (:projects result))]
+          (is (= :ok (:status result)))
+          (is (= [alpha-path bar-path zoo-path] paths)
+              (str "expected sorted paths, got: " paths))
           (core/unregister-emacs-dev-env dev-env-id))))))
 
 (deftest create-project-by-id-test
