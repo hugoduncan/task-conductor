@@ -77,14 +77,37 @@
     project-dir
     root-project-dir))
 
+(defn- prefix-task-keys
+  "Add :task/ namespace prefix to map keys."
+  [m]
+  (into {} (map (fn [[k v]] [(keyword "task" (name k)) v])) m))
+
+(defn- fetch-closed-task
+  "Fetch a closed/archived task via list-tasks CLI fallback.
+   show-task only searches tasks.ednl; closed tasks are archived to
+   complete.ednl and only discoverable via list with status filter."
+  [project-dir task-id]
+  (let [result (mcp-tasks/list-tasks {:project-dir project-dir
+                                      :task-id task-id
+                                      :status :closed})]
+    (when-let [task (first (:tasks result))]
+      (merge {:task/pr-num nil :task/code-reviewed nil :task/error nil}
+             (prefix-task-keys task)))))
+
 (defn- fetch-task
   "Fetch task data via EQL query.
    Returns task map with :task/type, :task/status, :task/title, etc.
-   On error, the result contains :task/error from the resolver."
+   On error, the result contains :task/error from the resolver.
+   Falls back to searching closed/archived tasks when show-task
+   can't find the task (e.g. after completion and worktree removal)."
   [project-dir task-id]
-  (graph/query {:task/id task-id :task/project-dir project-dir}
-               [:task/type :task/status :task/meta :task/pr-num
-                :task/code-reviewed :task/error :task/title]))
+  (let [result (graph/query {:task/id task-id :task/project-dir project-dir}
+                            [:task/type :task/status :task/meta :task/pr-num
+                             :task/code-reviewed :task/error :task/title])]
+    (if (:task/error result)
+      (or (fetch-closed-task project-dir task-id)
+          result)
+      result)))
 
 (defn- fetch-children
   "Fetch children for a story via EQL query.

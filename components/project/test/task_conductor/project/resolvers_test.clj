@@ -1527,3 +1527,74 @@
           (is (= :error (:manual-escalate/status escalate-result)))
           (is (= :session-not-found
                  (:error (:manual-escalate/error escalate-result)))))))))
+
+;;; Closed Task Fallback Tests
+
+(deftest fetch-task-closed-fallback-test
+  ;; When a task is archived (show returns error), fetch-task falls back
+  ;; to list-tasks with status:closed. This prevents re-derivation from
+  ;; returning :unrefined after worktree removal.
+  (testing "fetch-task"
+    (testing "falls back to list when show returns not-found for closed task"
+      (with-execute-state
+        (let [cli-nullable (claude-cli/make-nullable {:exit-code 0 :events []})
+              mcp-nullable
+              (mcp-tasks/make-nullable
+               {:responses
+                {:work-on [(make-work-on-response)]
+                 :show [;; 1: execute! fetch-task (task is open, refined)
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        ;; 2: store-pre-skill-state! for merge
+                        (make-task-response {:meta {:refined "true"}
+                                             :pr-num 42})
+                        ;; 3: on-skill-complete after merge — task now archived
+                        {:error "No task found"
+                         :metadata {:task-id 800}}
+                        ;; 4: store-pre-skill-state! for complete-story
+                        {:error "No task found"
+                         :metadata {:task-id 800}}
+                        ;; 5: on-skill-complete after complete-story — archived
+                        {:error "No task found"
+                         :metadata {:task-id 800}}]
+                 :list [;; 3a: fetch-closed-task fallback after merge
+                        {:tasks [{:title "Test task"
+                                  :type :task
+                                  :status :closed
+                                  :meta {:refined "true"}
+                                  :pr-num 42}]
+                         :metadata {:total 1}}
+                        ;; 4a: store-pre-skill-state! fallback
+                        {:tasks [{:title "Test task"
+                                  :type :task
+                                  :status :closed
+                                  :meta {:refined "true"}
+                                  :pr-num 42}]
+                         :metadata {:total 1}}
+                        ;; 5a: fetch-closed-task fallback after complete-story
+                        {:tasks [{:title "Test task"
+                                  :type :task
+                                  :status :closed
+                                  :meta {:refined "true"}
+                                  :pr-num 42}]
+                         :metadata {:total 1}}]
+                 :why-blocked [(make-blocking-response)]}})
+              dev-env (dev-env-protocol/make-noop-dev-env)
+              _ (dev-env-registry/register! dev-env :test)]
+          (mcp-tasks/with-nullable-mcp-tasks mcp-nullable
+            (claude-cli/with-nullable-claude-cli cli-nullable
+              (let [work-result (graph/query [`(resolvers/execute!
+                                                {:task/project-dir "/test"
+                                                 :task/id 800})])
+                    session-id (:execute/session-id
+                                (get work-result `resolvers/execute!))
+                    _ (sc/send! session-id :wait-pr-merge)
+                    _ (is (contains? (sc/current-state session-id)
+                                     :wait-pr-merge)
+                          "precondition: in :wait-pr-merge")
+                    _ (graph/query [`(resolvers/pr-merge!
+                                      {:engine/session-id ~session-id})])]
+                (resolvers/await-skill-threads!)
+                (is (= #{} (sc/current-state session-id))
+                    "terminates when show-task
+                     returns not-found")))))))))
