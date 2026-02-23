@@ -59,6 +59,58 @@
           (spit config-path "{:other-key \"value\"}")
           (is (nil? (#'core/read-tasks-dir tmp))))))))
 
+;;; find-main-git-checkout tests
+;;
+;; Tests that find-main-git-checkout excludes the tasks-dir from the
+;; subdirectory scan and correctly finds the real git checkout.
+;; Contracts: tasks-dir excluded; absent .mcp-tasks.edn returns nil;
+;; both relative and absolute :tasks-dir values are excluded.
+
+(deftest find-main-git-checkout-test
+  (testing "find-main-git-checkout"
+    (testing "with relative tasks-dir that has .git"
+      (testing "excludes tasks-dir and returns real git checkout"
+        (let [tmp (str (fs/create-temp-dir))
+              tasks-sub (str (fs/path tmp "tasks"))
+              project-sub (str (fs/path tmp "project"))]
+          (fs/create-dirs (fs/path tasks-sub ".git"))
+          (fs/create-dirs (fs/path project-sub ".git"))
+          (spit (str (fs/path tmp ".mcp-tasks.edn"))
+                "{:tasks-dir \"tasks\"}")
+          (let [result (#'core/find-main-git-checkout tmp)]
+            (is (= project-sub result))))))
+
+    (testing "with absolute tasks-dir that has .git"
+      (testing "excludes tasks-dir and returns real git checkout"
+        (let [tmp (str (fs/create-temp-dir))
+              tasks-sub (str (fs/path tmp "tasks"))
+              project-sub (str (fs/path tmp "project"))]
+          (fs/create-dirs (fs/path tasks-sub ".git"))
+          (fs/create-dirs (fs/path project-sub ".git"))
+          (spit (str (fs/path tmp ".mcp-tasks.edn"))
+                (str "{:tasks-dir \"" tasks-sub "\"}"))
+          (let [result (#'core/find-main-git-checkout tmp)]
+            (is (= project-sub result))))))
+
+    (testing "with tasks-dir that has no .git"
+      (testing "tasks-dir exclusion still works, real checkout found"
+        (let [tmp (str (fs/create-temp-dir))
+              tasks-sub (str (fs/path tmp "tasks"))
+              project-sub (str (fs/path tmp "project"))]
+          (fs/create-dirs tasks-sub)
+          (fs/create-dirs (fs/path project-sub ".git"))
+          (spit (str (fs/path tmp ".mcp-tasks.edn"))
+                "{:tasks-dir \"tasks\"}")
+          (let [result (#'core/find-main-git-checkout tmp)]
+            (is (= project-sub result))))))
+
+    (testing "without .mcp-tasks.edn"
+      (testing "returns nil"
+        (let [tmp (str (fs/create-temp-dir))
+              project-sub (str (fs/path tmp "project"))]
+          (fs/create-dirs (fs/path project-sub ".git"))
+          (is (nil? (#'core/find-main-git-checkout tmp))))))))
+
 ;;; build-list-args tests
 ;;
 ;; Tests that build-list-args correctly translates options

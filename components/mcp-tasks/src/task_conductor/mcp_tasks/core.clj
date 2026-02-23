@@ -18,7 +18,6 @@
 
 ;;; Project Directory Resolution
 
-#_{:clj-kondo/ignore [:unused-private-var]}
 (defn- read-tasks-dir
   "Read :tasks-dir from .mcp-tasks.edn in project-dir.
   Returns the absolute path of :tasks-dir, or nil if the file is absent,
@@ -38,17 +37,22 @@
   "When project-dir has .mcp-tasks.edn but no .git, scan immediate
   subdirectories for the main git checkout (where .git is a directory,
   not a worktree link file). Returns the path of the main checkout,
-  or nil if none found."
+  or nil if none found.
+
+  Excludes the tasks-dir configured in .mcp-tasks.edn from the scan
+  to avoid mistakenly returning a task storage directory as the project."
   [project-dir]
   (when (and (fs/directory? project-dir)
              (fs/exists? (fs/path project-dir ".mcp-tasks.edn"))
              (not (fs/exists? (fs/path project-dir ".git"))))
-    (some (fn [child]
-            (when (fs/directory? child)
-              (let [git (fs/path child ".git")]
-                (when (fs/directory? git)
-                  (str child)))))
-          (fs/list-dir project-dir))))
+    (let [tasks-dir (read-tasks-dir project-dir)]
+      (some (fn [child]
+              (when (and (fs/directory? child)
+                         (not= (str (fs/absolutize child)) tasks-dir))
+                (let [git (fs/path child ".git")]
+                  (when (fs/directory? git)
+                    (str child)))))
+            (fs/list-dir project-dir)))))
 
 (defn resolve-project-dir
   "Resolve the effective project directory for CLI operations.
