@@ -755,10 +755,13 @@
               _ (project-registry/register! alpha-path {:project/name "alpha"})
               result (core/query-projects-by-id dev-env-id)
               paths (mapv :project/path (:projects result))]
-          (is (= :ok (:status result)))
-          (is (= [alpha-path bar-path zoo-path] paths)
-              (str "expected sorted paths, got: " paths))
-          (core/unregister-emacs-dev-env dev-env-id))))))
+          (try
+            (is (= :ok (:status result)))
+            (is (= [alpha-path bar-path zoo-path] paths)
+                (str "expected sorted paths, got: " paths))
+            (finally
+              (run! #(.delete %) [zoo-dir bar-dir alpha-dir base])
+              (core/unregister-emacs-dev-env dev-env-id))))))))
 
 (deftest create-project-by-id-test
   ;; Verify create-project-by-id validates dev-env, creates project
