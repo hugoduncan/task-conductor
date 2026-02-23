@@ -737,6 +737,7 @@
             (is (string? (:project/path project))))
           (core/unregister-emacs-dev-env dev-env-id))))
 
+    ;; Sort order is case-sensitive (lexicographic byte order) by design.
     (testing "returns projects sorted alphabetically by :project/path"
       (with-clean-project-registry
         (let [dev-env-id (core/register-emacs-dev-env)
