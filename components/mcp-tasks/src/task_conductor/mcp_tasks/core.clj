@@ -4,25 +4,56 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]
+            [clojure.edn :as edn]
             [clojure.string :as str]))
 
+(defn- safe-read-string
+  "Read a string as Clojure data with *read-eval* disabled.
+  Uses clojure.core/read-string to support ::keyword syntax which
+  clojure.edn/read-string does not handle.
+  Repairs :::keyword tokens (triple-colon) from mcp-tasks CLI meta keys
+  by reducing them to :keyword before reading."
+  [s]
+  (binding [*read-eval* false]
+    (read-string (str/replace s #":::(\w)" ":$1"))))
+
 ;;; Project Directory Resolution
+
+(defn- read-tasks-dir
+  "Read :tasks-dir from .mcp-tasks.edn in project-dir.
+  Returns the absolute path of :tasks-dir, or nil if the file is absent,
+  unparseable, or does not contain :tasks-dir."
+  [project-dir]
+  (let [config-path (fs/path project-dir ".mcp-tasks.edn")]
+    (when (fs/exists? config-path)
+      (try
+        (let [config (edn/read-string (slurp (str config-path)))
+              tasks-dir (:tasks-dir config)]
+          (when tasks-dir
+            (str (fs/absolutize (fs/path project-dir tasks-dir)))))
+        (catch Exception _
+          nil)))))
 
 (defn- find-main-git-checkout
   "When project-dir has .mcp-tasks.edn but no .git, scan immediate
   subdirectories for the main git checkout (where .git is a directory,
   not a worktree link file). Returns the path of the main checkout,
-  or nil if none found."
+  or nil if none found.
+
+  Excludes the tasks-dir configured in .mcp-tasks.edn from the scan
+  to avoid mistakenly returning a task storage directory as the project."
   [project-dir]
   (when (and (fs/directory? project-dir)
              (fs/exists? (fs/path project-dir ".mcp-tasks.edn"))
              (not (fs/exists? (fs/path project-dir ".git"))))
-    (some (fn [child]
-            (when (fs/directory? child)
-              (let [git (fs/path child ".git")]
-                (when (fs/directory? git)
-                  (str child)))))
-          (fs/list-dir project-dir))))
+    (let [tasks-dir (read-tasks-dir project-dir)]
+      (some (fn [child]
+              (when (and (fs/directory? child)
+                         (not= (str (fs/absolutize child)) tasks-dir))
+                (let [git (fs/path child ".git")]
+                  (when (fs/directory? git)
+                    (str child)))))
+            (fs/list-dir project-dir)))))
 
 (defn resolve-project-dir
   "Resolve the effective project directory for CLI operations.
@@ -104,16 +135,6 @@
      conj
      {:opts opts :timestamp (java.time.Instant/now) :response response})
     response))
-
-(defn- safe-read-string
-  "Read a string as Clojure data with *read-eval* disabled.
-  Uses clojure.core/read-string to support ::keyword syntax which
-  clojure.edn/read-string does not handle.
-  Repairs :::keyword tokens (triple-colon) from mcp-tasks CLI meta keys
-  by reducing them to :keyword before reading."
-  [s]
-  (binding [*read-eval* false]
-    (read-string (str/replace s #":::(\w)" ":$1"))))
 
 (defn run-cli
   "Execute mcp-tasks CLI with args in the given project directory.
