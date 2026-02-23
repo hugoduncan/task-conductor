@@ -1,6 +1,7 @@
 #kaocha/v1
  {:plugins [:hooks]
   :kaocha.hooks/pre-load [kaocha.hooks/pre-load]
+  :kaocha.hooks/post-summary [kaocha.hooks/post-summary]
   ;; Unit tests only (fast, no external deps): clj -M:test unit
   ;; Integration tests only (requires Claude CLI): clj -M:test integration
   ;; All tests: clj -M:test (or: clj -M:test unit integration)

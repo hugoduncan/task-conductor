@@ -60,15 +60,20 @@
 
 (defn- send-notification
   "Send a one-way notification to Emacs (no response expected).
-  Returns true if put on channel, false if channel is nil."
+  Uses a non-blocking put to avoid blocking the calling thread
+  when the channel buffer is full. Returns true if accepted,
+  false if channel is nil or full."
   [command-chan command-kw params]
   (if command-chan
-    (do
-      (async/>!! command-chan {:command-id (UUID/randomUUID)
-                               :command command-kw
-                               :params params
-                               :notification true})
-      true)
+    (let [accepted (async/offer! command-chan
+                                 {:command-id (UUID/randomUUID)
+                                  :command command-kw
+                                  :params params
+                                  :notification true})]
+      (when-not accepted
+        (log/debug "Notification dropped, channel full"
+                   {:command command-kw}))
+      (boolean accepted))
     (do
       (log/debug "Notification dropped, no command channel"
                  {:command command-kw})
