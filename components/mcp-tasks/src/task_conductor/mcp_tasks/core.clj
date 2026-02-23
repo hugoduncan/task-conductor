@@ -4,6 +4,7 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]
+            [clojure.edn :as edn]
             [clojure.string :as str]))
 
 (defn- safe-read-string
@@ -26,7 +27,7 @@
   (let [config-path (fs/path project-dir ".mcp-tasks.edn")]
     (when (fs/exists? config-path)
       (try
-        (let [config (safe-read-string (slurp (str config-path)))
+        (let [config (edn/read-string (slurp (str config-path)))
               tasks-dir (:tasks-dir config)]
           (when tasks-dir
             (str (fs/absolutize (fs/path project-dir tasks-dir)))))
