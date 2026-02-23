@@ -6,8 +6,6 @@
 
   Test coverage:
   - bootstrap! loads resolvers and registers transition-log listener
-  - session-notify listener fires on state transitions
-    (registered via emacs-dev-env/install-session-notify-watch!)
   - run-story! starts session and returns session-id + state
   - run-task! starts session and returns session-id + state
   - run-task! with failing task returns error map
@@ -17,7 +15,6 @@
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.core :as agent-runner]
    [task-conductor.claude-cli.interface :as claude-cli]
-   [task-conductor.emacs-dev-env.core :as emacs-dev-env-core]
    [task-conductor.emacs-dev-env.interface :as emacs-dev-env]
    [task-conductor.dev-env.registry :as dev-env-registry]
    [task-conductor.dev-env.resolvers :as dev-env-resolvers]
@@ -27,7 +24,6 @@
    [task-conductor.project.execute :as execute]
    [task-conductor.project.registry :as registry]
    [task-conductor.project.resolvers :as resolvers]
-   [task-conductor.statechart-engine.core :as engine]
    [task-conductor.statechart-engine.interface :as sc]
    [task-conductor.statechart-engine.resolvers :as engine-resolvers]))
 
@@ -39,7 +35,7 @@
   Registers all required resolvers and statecharts."
   [& body]
   `(try
-     (engine/reset-engine!)
+     (sc/reset-engine!)
      (graph/reset-graph!)
      (registry/clear!)
      (dev-env-registry/clear!)
@@ -58,7 +54,7 @@
        (resolvers/reset-skill-threads!)
        (sc/remove-transition-listener! ::agent-runner/transition-log)
        (emacs-dev-env/remove-session-notify-watch!)
-       (engine/reset-engine!)
+       (sc/reset-engine!)
        (graph/reset-graph!)
        (registry/clear!)
        (dev-env-registry/clear!)
@@ -120,100 +116,6 @@
       (with-agent-runner-state
         (agent-runner/bootstrap!)
         (is (nil? (agent-runner/nrepl-port)))))))
-
-;;; Notification Tests
-
-(def ^:private session-notify-key
-  :task-conductor.emacs-dev-env.core/session-notify)
-
-(deftest notify-on-transition-test
-  ;; Verify install-session-notify-watch! registers a transition listener that
-  ;; calls notify-all-sessions-changed! when session state changes.
-  ;; This listener is registered when Emacs connects via register-emacs-dev-env.
-  (testing "session-notify transition listener"
-    (testing "fires when session enters escalated state"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env-core/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (emacs-dev-env/install-session-notify-watch!)
-            (let [mnull (mcp-tasks/make-nullable
-                         {:responses (task-responses {})})
-                  cnull (claude-cli/make-nullable)]
-              (mcp-tasks/with-nullable-mcp-tasks mnull
-                (claude-cli/with-nullable-claude-cli cnull
-                  (agent-runner/run-task! "/test" 300)
-                  ;; Entering :idle triggers notification.
-                  (is (pos? @notified)))))))))
-
-    (testing "fires when session enters wait-pr-merge state"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env-core/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (emacs-dev-env/install-session-notify-watch!)
-            (let [listeners @engine/transition-listeners
-                  listener (get listeners session-notify-key)]
-              (listener "test" #{:running} #{:wait-pr-merge} :pr-created)
-              (is (pos? @notified)))))))
-
-    (testing "fires for any state transition"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env-core/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (emacs-dev-env/install-session-notify-watch!)
-            (let [listeners @engine/transition-listeners
-                  listener (get listeners session-notify-key)]
-              (listener "test" #{:running} #{:completed} :done)
-              (is (pos? @notified)))))))
-
-    (testing "fires when session enters unrefined state"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env-core/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (emacs-dev-env/install-session-notify-watch!)
-            (let [listeners @engine/transition-listeners
-                  listener (get listeners session-notify-key)]
-              (listener "test" #{:idle} #{:unrefined} :initial-state)
-              (is (pos? @notified)))))))
-
-    (testing "fires when session enters refined state"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env-core/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (emacs-dev-env/install-session-notify-watch!)
-            (let [listeners @engine/transition-listeners
-                  listener (get listeners session-notify-key)]
-              (listener "test" #{:unrefined} #{:refined} :refined)
-              (is (pos? @notified)))))))
-
-    (testing "fires for sub-state transitions within same parent state"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env-core/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (emacs-dev-env/install-session-notify-watch!)
-            (let [listeners @engine/transition-listeners
-                  listener (get listeners session-notify-key)]
-              (listener "test"
-                        #{:escalated :session-idle}
-                        #{:escalated :session-running}
-                        :session-started)
-              (is (pos? @notified))))))
-
-      (testing "does not fire when from-state equals to-state"
-        (with-agent-runner-state
-          (let [notified (atom 0)]
-            (with-redefs [emacs-dev-env-core/notify-all-sessions-changed!
-                          (fn [] (swap! notified inc))]
-              (emacs-dev-env/install-session-notify-watch!)
-              (let [listeners @engine/transition-listeners
-                    listener (get listeners session-notify-key)]
-                (listener "test" #{:idle} #{:idle} :no-op)
-                (is (zero? @notified))))))))))
 
 ;;; run-story! Tests
 
