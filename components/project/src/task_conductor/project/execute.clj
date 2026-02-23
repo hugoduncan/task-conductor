@@ -224,7 +224,8 @@
 
 (def ^:private complete-story-action
   {:expr '(task-conductor.project.resolvers/invoke-skill!
-           {:skill "complete-story"})})
+           {:skill "complete-story"
+            :on-complete :terminated})})
 
 (def ^:private escalate-action
   {:expr
