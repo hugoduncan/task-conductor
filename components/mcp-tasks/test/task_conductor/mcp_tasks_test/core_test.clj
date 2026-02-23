@@ -31,39 +31,36 @@
   (testing "read-tasks-dir"
     (testing "with .mcp-tasks.edn containing relative :tasks-dir"
       (testing "returns resolved absolute path"
-        (let [tmp (str (fs/create-temp-dir))
-              config-path (str (fs/path tmp ".mcp-tasks.edn"))]
-          (spit config-path "{:tasks-dir \"tasks\"}")
+        (fs/with-temp-dir [tmp]
+          (spit (str (fs/path tmp ".mcp-tasks.edn")) "{:tasks-dir \"tasks\"}")
           (let [result (#'core/read-tasks-dir tmp)]
             (is (string? result))
             (is (= (str (fs/absolutize (fs/path tmp "tasks"))) result))))))
 
     (testing "with .mcp-tasks.edn containing absolute :tasks-dir"
       (testing "returns that absolute path"
-        (let [tmp (str (fs/create-temp-dir))
-              abs-tasks (str (fs/create-temp-dir))
-              config-path (str (fs/path tmp ".mcp-tasks.edn"))]
-          (spit config-path (str "{:tasks-dir \"" abs-tasks "\"}"))
-          (let [result (#'core/read-tasks-dir tmp)]
-            (is (= abs-tasks result))))))
+        (fs/with-temp-dir [tmp]
+          (fs/with-temp-dir [abs-tasks]
+            (spit (str (fs/path tmp ".mcp-tasks.edn"))
+                  (str "{:tasks-dir \"" abs-tasks "\"}"))
+            (let [result (#'core/read-tasks-dir tmp)]
+              (is (= (str abs-tasks) result)))))))
 
     (testing "without .mcp-tasks.edn"
       (testing "returns nil"
-        (let [tmp (str (fs/create-temp-dir))]
+        (fs/with-temp-dir [tmp]
           (is (nil? (#'core/read-tasks-dir tmp))))))
 
     (testing "with .mcp-tasks.edn missing :tasks-dir key"
       (testing "returns nil"
-        (let [tmp (str (fs/create-temp-dir))
-              config-path (str (fs/path tmp ".mcp-tasks.edn"))]
-          (spit config-path "{:other-key \"value\"}")
+        (fs/with-temp-dir [tmp]
+          (spit (str (fs/path tmp ".mcp-tasks.edn")) "{:other-key \"value\"}")
           (is (nil? (#'core/read-tasks-dir tmp))))))
 
     (testing "with malformed .mcp-tasks.edn"
       (testing "returns nil"
-        (let [tmp (str (fs/create-temp-dir))
-              config-path (str (fs/path tmp ".mcp-tasks.edn"))]
-          (spit config-path "{broken edn")
+        (fs/with-temp-dir [tmp]
+          (spit (str (fs/path tmp ".mcp-tasks.edn")) "{broken edn")
           (is (nil? (#'core/read-tasks-dir tmp))))))))
 
 ;;; find-main-git-checkout tests
@@ -77,45 +74,41 @@
   (testing "find-main-git-checkout"
     (testing "with relative tasks-dir that has .git"
       (testing "excludes tasks-dir and returns real git checkout"
-        (let [tmp (str (fs/create-temp-dir))
-              tasks-sub (str (fs/path tmp "tasks"))
-              project-sub (str (fs/path tmp "project"))]
-          (fs/create-dirs (fs/path tasks-sub ".git"))
-          (fs/create-dirs (fs/path project-sub ".git"))
-          (spit (str (fs/path tmp ".mcp-tasks.edn"))
-                "{:tasks-dir \"tasks\"}")
-          (let [result (#'core/find-main-git-checkout tmp)]
-            (is (= project-sub result))))))
+        (fs/with-temp-dir [tmp]
+          (let [tasks-sub (str (fs/path tmp "tasks"))
+                project-sub (str (fs/path tmp "project"))]
+            (fs/create-dirs (fs/path tasks-sub ".git"))
+            (fs/create-dirs (fs/path project-sub ".git"))
+            (spit (str (fs/path tmp ".mcp-tasks.edn"))
+                  "{:tasks-dir \"tasks\"}")
+            (is (= project-sub (#'core/find-main-git-checkout tmp)))))))
 
     (testing "with absolute tasks-dir that has .git"
       (testing "excludes tasks-dir and returns real git checkout"
-        (let [tmp (str (fs/create-temp-dir))
-              tasks-sub (str (fs/path tmp "tasks"))
-              project-sub (str (fs/path tmp "project"))]
-          (fs/create-dirs (fs/path tasks-sub ".git"))
-          (fs/create-dirs (fs/path project-sub ".git"))
-          (spit (str (fs/path tmp ".mcp-tasks.edn"))
-                (str "{:tasks-dir \"" tasks-sub "\"}"))
-          (let [result (#'core/find-main-git-checkout tmp)]
-            (is (= project-sub result))))))
+        (fs/with-temp-dir [tmp]
+          (let [tasks-sub (str (fs/path tmp "tasks"))
+                project-sub (str (fs/path tmp "project"))]
+            (fs/create-dirs (fs/path tasks-sub ".git"))
+            (fs/create-dirs (fs/path project-sub ".git"))
+            (spit (str (fs/path tmp ".mcp-tasks.edn"))
+                  (str "{:tasks-dir \"" tasks-sub "\"}"))
+            (is (= project-sub (#'core/find-main-git-checkout tmp)))))))
 
     (testing "with tasks-dir that has no .git"
       (testing "tasks-dir exclusion still works, real checkout found"
-        (let [tmp (str (fs/create-temp-dir))
-              tasks-sub (str (fs/path tmp "tasks"))
-              project-sub (str (fs/path tmp "project"))]
-          (fs/create-dirs tasks-sub)
-          (fs/create-dirs (fs/path project-sub ".git"))
-          (spit (str (fs/path tmp ".mcp-tasks.edn"))
-                "{:tasks-dir \"tasks\"}")
-          (let [result (#'core/find-main-git-checkout tmp)]
-            (is (= project-sub result))))))
+        (fs/with-temp-dir [tmp]
+          (let [tasks-sub (str (fs/path tmp "tasks"))
+                project-sub (str (fs/path tmp "project"))]
+            (fs/create-dirs tasks-sub)
+            (fs/create-dirs (fs/path project-sub ".git"))
+            (spit (str (fs/path tmp ".mcp-tasks.edn"))
+                  "{:tasks-dir \"tasks\"}")
+            (is (= project-sub (#'core/find-main-git-checkout tmp)))))))
 
     (testing "without .mcp-tasks.edn"
       (testing "returns nil"
-        (let [tmp (str (fs/create-temp-dir))
-              project-sub (str (fs/path tmp "project"))]
-          (fs/create-dirs (fs/path project-sub ".git"))
+        (fs/with-temp-dir [tmp]
+          (fs/create-dirs (fs/path tmp "project" ".git"))
           (is (nil? (#'core/find-main-git-checkout tmp))))))))
 
 ;;; build-list-args tests
