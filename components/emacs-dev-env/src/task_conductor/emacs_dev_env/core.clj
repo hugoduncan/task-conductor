@@ -184,8 +184,9 @@
   "Called by Emacs to register itself as a dev-env.
 
   Creates a new EmacsDevEnv, stores it in the generic dev-env registry,
-  then marks it connected. Also installs the project registry watch
-  (idempotent) so notifications are only active when a dev-env is connected.
+  then marks it connected. Also installs the project registry watch and
+  session notify watch (both idempotent) so notifications are only active
+  when a dev-env is connected.
   Returns the dev-env-id for use in subsequent calls.
 
   Arity:
