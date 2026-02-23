@@ -452,7 +452,7 @@
   (let [projects (:project/all (graph/query [:project/all]))
         all-sessions (sc/all-session-summaries)]
     (vec (sort-by :project/path
-                  (mapv #(enrich-project % all-sessions) projects)))))
+                  (map #(enrich-project % all-sessions) projects)))))
 
 (defn notify-projects-changed!
   "Push pre-computed project data to a specific dev-env via notification."
