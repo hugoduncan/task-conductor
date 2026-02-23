@@ -569,5 +569,15 @@
          (list :sessions nil))
         (should project-rerender-called)))))
 
+(ert-deftest task-conductor-dev-env-handle-notify-sessions-changed-rerenders-sessions ()
+  ;; Calls task-conductor-sessions-rerender-if-live when defined.
+  (with-task-conductor-test-state
+    (let ((sessions-rerender-called nil))
+      (cl-letf (((symbol-function 'task-conductor-sessions-rerender-if-live)
+                 (lambda () (setq sessions-rerender-called t))))
+        (task-conductor-dev-env--handle-notify-sessions-changed
+         (list :sessions nil))
+        (should sessions-rerender-called)))))
+
 (provide 'test-task-conductor-dev-env)
 ;;; test-task-conductor-dev-env.el ends here

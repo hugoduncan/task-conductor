@@ -5,7 +5,7 @@
   status functions without real CLI processes or mcp-tasks subprocess.
 
   Test coverage:
-  - bootstrap! loads resolvers and registers transition listener
+  - bootstrap! loads resolvers and registers transition-log listener
   - run-story! starts session and returns session-id + state
   - run-task! starts session and returns session-id + state
   - run-task! with failing task returns error map
@@ -15,8 +15,7 @@
    [clojure.test :refer [deftest is testing]]
    [task-conductor.agent-runner.core :as agent-runner]
    [task-conductor.claude-cli.interface :as claude-cli]
-   [task-conductor.emacs-dev-env.interface
-    :as emacs-dev-env]
+   [task-conductor.emacs-dev-env.interface :as emacs-dev-env]
    [task-conductor.dev-env.registry :as dev-env-registry]
    [task-conductor.dev-env.resolvers :as dev-env-resolvers]
    [task-conductor.mcp-tasks.interface :as mcp-tasks]
@@ -25,7 +24,6 @@
    [task-conductor.project.execute :as execute]
    [task-conductor.project.registry :as registry]
    [task-conductor.project.resolvers :as resolvers]
-   [task-conductor.statechart-engine.core :as engine]
    [task-conductor.statechart-engine.interface :as sc]
    [task-conductor.statechart-engine.resolvers :as engine-resolvers]))
 
@@ -37,14 +35,14 @@
   Registers all required resolvers and statecharts."
   [& body]
   `(try
-     (engine/reset-engine!)
+     (sc/reset-engine!)
      (graph/reset-graph!)
      (registry/clear!)
      (dev-env-registry/clear!)
      (engine-resolvers/reset-dev-env-hooks!)
      (resolvers/reset-skill-threads!)
      (sc/remove-transition-listener! ::agent-runner/transition-log)
-     (sc/remove-transition-listener! ::agent-runner/session-notify)
+     (emacs-dev-env/remove-session-notify-watch!)
      (execute/register-statecharts!)
      (engine-resolvers/register-resolvers!)
      (dev-env-resolvers/register-resolvers!)
@@ -55,8 +53,8 @@
        (resolvers/await-skill-threads!)
        (resolvers/reset-skill-threads!)
        (sc/remove-transition-listener! ::agent-runner/transition-log)
-       (sc/remove-transition-listener! ::agent-runner/session-notify)
-       (engine/reset-engine!)
+       (emacs-dev-env/remove-session-notify-watch!)
+       (sc/reset-engine!)
        (graph/reset-graph!)
        (registry/clear!)
        (dev-env-registry/clear!)
@@ -101,16 +99,13 @@
           (is (true? (:graph-operational? result)))
           (is (seq (:namespaces result))))))
 
-    (testing "registers transition listeners"
+    (testing "registers transition log listener"
       (with-agent-runner-state
         (agent-runner/bootstrap!)
-        ;; Verify listeners were registered by checking they can be removed
+        ;; Verify the transition-log listener was registered
         (let [log-removed (sc/remove-transition-listener!
-                           ::agent-runner/transition-log)
-              notify-removed (sc/remove-transition-listener!
-                              ::agent-runner/session-notify)]
-          (is (= ::agent-runner/transition-log log-removed))
-          (is (= ::agent-runner/session-notify notify-removed)))))
+                           ::agent-runner/transition-log)]
+          (is (= ::agent-runner/transition-log log-removed)))))
 
     (testing "stores nrepl-port when provided"
       (with-agent-runner-state
@@ -121,103 +116,6 @@
       (with-agent-runner-state
         (agent-runner/bootstrap!)
         (is (nil? (agent-runner/nrepl-port)))))))
-
-;;; Notification Tests
-
-(deftest notify-on-transition-test
-  ;; Verify bootstrap! registers a transition listener that calls
-  ;; notify-all-sessions-changed! when sessions enter/leave
-  ;; escalated, idle, or wait-pr-merge states.
-  (testing "notify-on-session-state-change"
-    (testing "fires when session enters escalated state"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (agent-runner/bootstrap!)
-            (let [mnull (mcp-tasks/make-nullable
-                         {:responses (task-responses {})})
-                  cnull (claude-cli/make-nullable)]
-              (mcp-tasks/with-nullable-mcp-tasks mnull
-                (claude-cli/with-nullable-claude-cli cnull
-                  (agent-runner/run-task! "/test" 300)
-                  ;; Entering :idle triggers notification.
-                  (is (pos? @notified)))))))))
-
-    (testing "fires when session enters wait-pr-merge state"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (agent-runner/bootstrap!)
-            (let [listeners @engine/transition-listeners
-                  listener (get listeners
-                                ::agent-runner/session-notify)]
-              (listener "test" #{:running} #{:wait-pr-merge} :pr-created)
-              (is (pos? @notified)))))))
-
-    (testing "fires for any state transition"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (agent-runner/bootstrap!)
-            (let [listeners @engine/transition-listeners
-                  listener (get listeners
-                                ::agent-runner/session-notify)]
-              (listener "test" #{:running} #{:completed} :done)
-              (is (pos? @notified)))))))
-
-    (testing "fires when session enters unrefined state"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (agent-runner/bootstrap!)
-            (let [listeners @engine/transition-listeners
-                  listener (get listeners
-                                ::agent-runner/session-notify)]
-              (listener "test" #{:idle} #{:unrefined} :initial-state)
-              (is (pos? @notified)))))))
-
-    (testing "fires when session enters refined state"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (agent-runner/bootstrap!)
-            (let [listeners @engine/transition-listeners
-                  listener (get listeners
-                                ::agent-runner/session-notify)]
-              (listener "test" #{:unrefined} #{:refined} :refined)
-              (is (pos? @notified)))))))
-
-    (testing "fires for sub-state transitions within same parent state"
-      (with-agent-runner-state
-        (let [notified (atom 0)]
-          (with-redefs [emacs-dev-env/notify-all-sessions-changed!
-                        (fn [] (swap! notified inc))]
-            (agent-runner/bootstrap!)
-            (let [listeners @engine/transition-listeners
-                  listener (get listeners
-                                ::agent-runner/session-notify)]
-              (listener "test"
-                        #{:escalated :session-idle}
-                        #{:escalated :session-running}
-                        :session-started)
-              (is (pos? @notified))))))
-
-      (testing "does not fire when from-state equals to-state"
-        (with-agent-runner-state
-          (let [notified (atom 0)]
-            (with-redefs [emacs-dev-env/notify-all-sessions-changed!
-                          (fn [] (swap! notified inc))]
-              (agent-runner/bootstrap!)
-              (let [listeners @engine/transition-listeners
-                    listener (get listeners
-                                  ::agent-runner/session-notify)]
-                (listener "test" #{:idle} #{:idle} :no-op)
-                (is (zero? @notified))))))))))
 
 ;;; run-story! Tests
 

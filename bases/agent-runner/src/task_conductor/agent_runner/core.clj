@@ -6,7 +6,6 @@
    [clojure.string :as str]
    [task-conductor.claude-cli.resolvers]
    [task-conductor.dev-env.resolvers]
-   [task-conductor.emacs-dev-env.interface :as emacs-dev-env]
    [task-conductor.mcp-tasks.resolvers]
    [task-conductor.pathom-graph.interface :as graph]
    [task-conductor.project.execute]
@@ -34,12 +33,6 @@
             :to to-state
             :event event}))
 
-(defn- notify-on-session-state-change
-  "Push session data to all dev-envs on every state transition."
-  [_session-id from-state to-state _event]
-  (when (not= from-state to-state)
-    (emacs-dev-env/notify-all-sessions-changed!)))
-
 (def ^:private bootstrap-config
   "Configuration stored at bootstrap time.
    Contains :nrepl-port when provided."
@@ -59,7 +52,6 @@
   ([opts]
    (reset! bootstrap-config (select-keys opts [:nrepl-port]))
    (sc/add-transition-listener! ::transition-log log-transition)
-   (sc/add-transition-listener! ::session-notify notify-on-session-state-change)
    (let [operational? (try
                         (some? (graph/env))
                         (catch Exception _ false))

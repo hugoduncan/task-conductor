@@ -8,6 +8,8 @@
    [task-conductor.emacs-dev-env.core :as core]
    [task-conductor.project.registry :as project-registry]
    [task-conductor.project.resolvers :as project-resolvers]
+   [task-conductor.statechart-engine.core :as engine]
+   [task-conductor.statechart-engine.interface :as sc]
    [task-conductor.statechart-engine.resolvers :as resolvers]))
 
 (defmacro with-register-hook-responder
@@ -694,7 +696,95 @@
           (is (= :notify-sessions-changed (get-in r1 [:command :command])))
           (is (= :notify-sessions-changed (get-in r2 [:command :command]))))
         (core/unregister-emacs-dev-env id1)
+        (core/unregister-emacs-dev-env id2)))
+
+    (testing "continues notifying after per-dev-env error"
+      ;; Regression: try/catch per dev-env prevents one
+      ;; failure from blocking others.
+      (resolvers/register-resolvers!)
+      (let [id1 (core/register-emacs-dev-env)
+            id2 (core/register-emacs-dev-env)
+            calls (atom 0)]
+        (with-redefs
+         [core/notify-sessions-changed!
+          (fn [_dev-env]
+            (let [n (swap! calls inc)]
+              (when (= 1 n)
+                (throw (Exception. "sim")))))]
+          (core/notify-all-sessions-changed!)
+          (is (= 2 @calls)))
+        (core/unregister-emacs-dev-env id1)
         (core/unregister-emacs-dev-env id2)))))
+
+;;; Session Notify Watch Tests
+
+(def ^:private session-notify-key
+  :task-conductor.emacs-dev-env.core/session-notify)
+
+(defmacro ^:private with-session-notify-watch-cleanup
+  "Execute body with a clean session-notify transition listener state.
+  Removes any existing listener before and after body execution."
+  [& body]
+  `(do
+     (sc/remove-transition-listener! session-notify-key)
+     (try
+       ~@body
+       (finally
+         (sc/remove-transition-listener! session-notify-key)))))
+
+(deftest session-notify-watch-test
+  ;; Verify install/remove-session-notify-watch! manage
+  ;; the statechart transition listener correctly.
+  (testing "session notify watch"
+    (testing "registers the transition listener"
+      (with-session-notify-watch-cleanup
+        (core/install-session-notify-watch!)
+        (is (some? (get @engine/transition-listeners
+                        session-notify-key)))))
+
+    (testing "removes the transition listener"
+      (with-session-notify-watch-cleanup
+        (core/install-session-notify-watch!)
+        (core/remove-session-notify-watch!)
+        (is (nil? (get @engine/transition-listeners
+                       session-notify-key)))))
+
+    (testing "is idempotent"
+      (with-session-notify-watch-cleanup
+        (let [notified (atom 0)]
+          (with-redefs
+           [core/notify-all-sessions-changed!
+            (fn [] (swap! notified inc))]
+            (core/install-session-notify-watch!)
+            (core/install-session-notify-watch!)
+            (let [listener (get @engine/transition-listeners
+                                session-notify-key)]
+              (listener "s1" #{:idle} #{:running} :start)
+              (is (= 1 @notified)))))))
+
+    (testing "fires on state change"
+      (with-session-notify-watch-cleanup
+        (let [notified (atom 0)]
+          (with-redefs
+           [core/notify-all-sessions-changed!
+            (fn [] (swap! notified inc))]
+            (core/install-session-notify-watch!)
+            (let [listener (get @engine/transition-listeners
+                                session-notify-key)]
+              (listener "s1" #{:idle} #{:running} :start)
+              (is (= 1 @notified)))))))
+
+    (testing "does not fire when states are equal"
+      (with-session-notify-watch-cleanup
+        (let [notified (atom 0)]
+          (with-redefs
+           [core/notify-all-sessions-changed!
+            (fn [] (swap! notified inc))]
+            (core/install-session-notify-watch!)
+            (let [listener (get @engine/transition-listeners
+                                session-notify-key)]
+              (listener "s1" #{:idle} #{:idle} :no-op)
+              (is (zero? @notified)))))))))
 
 ;;; Project Query Tests
 

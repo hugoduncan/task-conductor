@@ -14,7 +14,7 @@
   (:import
    [java.util UUID]))
 
-(declare install-project-registry-watch!)
+(declare install-project-registry-watch! install-session-notify-watch!)
 
 (def default-await-timeout-ms
   "Default timeout for await-command in milliseconds."
@@ -60,15 +60,20 @@
 
 (defn- send-notification
   "Send a one-way notification to Emacs (no response expected).
-  Returns true if put on channel, false if channel is nil."
+  Uses a non-blocking put to avoid blocking the calling thread
+  when the channel buffer is full. Returns true if accepted,
+  false if channel is nil or full."
   [command-chan command-kw params]
   (if command-chan
-    (do
-      (async/>!! command-chan {:command-id (UUID/randomUUID)
-                               :command command-kw
-                               :params params
-                               :notification true})
-      true)
+    (let [accepted (async/offer! command-chan
+                                 {:command-id (UUID/randomUUID)
+                                  :command command-kw
+                                  :params params
+                                  :notification true})]
+      (when-not accepted
+        (log/debug "Notification dropped, channel full"
+                   {:command command-kw}))
+      (boolean accepted))
     (do
       (log/debug "Notification dropped, no command channel"
                  {:command command-kw})
@@ -184,8 +189,9 @@
   "Called by Emacs to register itself as a dev-env.
 
   Creates a new EmacsDevEnv, stores it in the generic dev-env registry,
-  then marks it connected. Also installs the project registry watch
-  (idempotent) so notifications are only active when a dev-env is connected.
+  then marks it connected. Also installs the project registry watch and
+  session notify watch (both idempotent) so notifications are only active
+  when a dev-env is connected.
   Returns the dev-env-id for use in subsequent calls.
 
   Arity:
@@ -193,6 +199,7 @@
     (dev-env) - Mark existing dev-env as connected (for internal use)"
   ([]
    (install-project-registry-watch!)
+   (install-session-notify-watch!)
    (let [dev-env (make-emacs-dev-env)
          dev-env-id (generic-registry/register! dev-env :emacs {})]
      (swap! (:state dev-env) assoc :connected? true)
@@ -419,7 +426,11 @@
           :when (= :emacs type)
           :let [dev-env (generic-registry/get-dev-env id)]
           :when (connected? dev-env)]
-    (notify-sessions-changed! dev-env)))
+    (try
+      (notify-sessions-changed! dev-env)
+      (catch Exception e
+        (log/warn "Dropped session notification"
+                  {:dev-env-id id :error (.getMessage e)})))))
 
 ;;; Project Query
 
@@ -703,3 +714,19 @@
   "Remove the project registry watch."
   []
   (project-registry/unwatch! ::project-notify))
+
+(defn install-session-notify-watch!
+  "Install a statechart transition listener that pushes session notifications
+  to all connected dev-envs when session state changes.
+  Idempotent — re-registering the same key replaces the previous listener."
+  []
+  (sc/add-transition-listener!
+   ::session-notify
+   (fn [_session-id from-state to-state _event]
+     (when (not= from-state to-state)
+       (notify-all-sessions-changed!)))))
+
+(defn remove-session-notify-watch!
+  "Remove the statechart transition listener for session notifications."
+  []
+  (sc/remove-transition-listener! ::session-notify))

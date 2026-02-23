@@ -132,16 +132,16 @@ Query + History + Knowledge = AI can remember and recover across sessions
 # (task-conductor.agent-runner.core/bootstrap!)
 
 # Run all tests
-clj -M:test
+clojure -M:test
 
 # Run specific test namespace
-clj -M:test --focus task-conductor.agent-runner.foo-test
+clojure -M:test --focus task-conductor.agent-runner.foo-test
 
 # Start REPL with dev namespace
-clj -M:dev:nrepl
+clojure -M:dev:nrepl
 
 # Format code
-clj -M:dev -m cljfmt.main fix
+clojure -M:dev -m cljfmt.main fix
 
 # Run Emacs tests (stubs dir required for claude-code mock)
 emacs --batch -L emacs/ -L emacs/test/ -L emacs/test/stubs/ -l ert -l test-task-conductor-dev-env -f ert-run-tests-batch-and-exit
@@ -151,7 +151,7 @@ bb kondo-config
 ```
 
 ## Test Output
-- Kaocha summary is on the last line with ANSI codes: `clj -M:test 2>&1 | tail -1`
+- Kaocha summary is on the last line with ANSI codes: `clojure -M:test 2>&1 | tail -1`
 - Debug log lines are prefixed with `│` — don't try to grep through them
 
 ## Architecture
@@ -262,7 +262,7 @@ Return error maps rather than throwing exceptions. Errors are data that statecha
 Start nREPL and load the graph:
 
 ```bash
-clj -M:dev:nrepl -m nrepl.cmdline --port 7888
+clojure -M:dev:nrepl -m nrepl.cmdline --port 7888
 ```
 
 ```clojure

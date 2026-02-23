@@ -5,3 +5,7 @@
 (defn pre-load [config]
   (timbre/set-min-level! :warn)
   config)
+
+(defn post-summary [result]
+  (shutdown-agents)
+  result)
