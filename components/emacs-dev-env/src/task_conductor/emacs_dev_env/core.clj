@@ -718,11 +718,7 @@
    ::session-notify
    (fn [_session-id from-state to-state _event]
      (when (not= from-state to-state)
-       (try
-         (notify-all-sessions-changed!)
-         (catch Exception e
-           (log/warn "Failed to notify sessions changed"
-                     {:error (.getMessage e)})))))))
+       (notify-all-sessions-changed!)))))
 
 (defn remove-session-notify-watch!
   "Remove the statechart transition listener for session notifications."
