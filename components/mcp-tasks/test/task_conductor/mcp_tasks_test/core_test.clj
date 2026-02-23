@@ -1,6 +1,7 @@
 (ns task-conductor.mcp-tasks-test.core-test
   "Tests for mcp-tasks core CLI wrapper functionality."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [babashka.fs :as fs]
+            [clojure.test :refer [deftest is testing]]
             [task-conductor.mcp-tasks.core :as core]))
 
 ;;; safe-read-string tests
@@ -18,6 +19,45 @@
         (is (= {:meta {:refined "true" :pr-merged "true"}}
                (#'core/safe-read-string
                 "{:meta {:::refined \"true\", :::pr-merged \"true\"}}")))))))
+
+;;; read-tasks-dir tests
+;;
+;; Tests that read-tasks-dir reads :tasks-dir from .mcp-tasks.edn
+;; and resolves it to an absolute path.
+;; Contracts: returns absolute path for relative/absolute tasks-dir,
+;; nil for missing file or missing key.
+
+(deftest read-tasks-dir-test
+  (testing "read-tasks-dir"
+    (testing "with .mcp-tasks.edn containing relative :tasks-dir"
+      (testing "returns resolved absolute path"
+        (let [tmp (str (fs/create-temp-dir))
+              config-path (str (fs/path tmp ".mcp-tasks.edn"))]
+          (spit config-path "{:tasks-dir \"tasks\"}")
+          (let [result (#'core/read-tasks-dir tmp)]
+            (is (string? result))
+            (is (= (str (fs/absolutize (fs/path tmp "tasks"))) result))))))
+
+    (testing "with .mcp-tasks.edn containing absolute :tasks-dir"
+      (testing "returns that absolute path"
+        (let [tmp (str (fs/create-temp-dir))
+              abs-tasks (str (fs/create-temp-dir))
+              config-path (str (fs/path tmp ".mcp-tasks.edn"))]
+          (spit config-path (str "{:tasks-dir \"" abs-tasks "\"}"))
+          (let [result (#'core/read-tasks-dir tmp)]
+            (is (= abs-tasks result))))))
+
+    (testing "without .mcp-tasks.edn"
+      (testing "returns nil"
+        (let [tmp (str (fs/create-temp-dir))]
+          (is (nil? (#'core/read-tasks-dir tmp))))))
+
+    (testing "with .mcp-tasks.edn missing :tasks-dir key"
+      (testing "returns nil"
+        (let [tmp (str (fs/create-temp-dir))
+              config-path (str (fs/path tmp ".mcp-tasks.edn"))]
+          (spit config-path "{:other-key \"value\"}")
+          (is (nil? (#'core/read-tasks-dir tmp))))))))
 
 ;;; build-list-args tests
 ;;

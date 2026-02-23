@@ -6,7 +6,33 @@
             [cheshire.core :as json]
             [clojure.string :as str]))
 
+(defn- safe-read-string
+  "Read a string as Clojure data with *read-eval* disabled.
+  Uses clojure.core/read-string to support ::keyword syntax which
+  clojure.edn/read-string does not handle.
+  Repairs :::keyword tokens (triple-colon) from mcp-tasks CLI meta keys
+  by reducing them to :keyword before reading."
+  [s]
+  (binding [*read-eval* false]
+    (read-string (str/replace s #":::(\w)" ":$1"))))
+
 ;;; Project Directory Resolution
+
+#_{:clj-kondo/ignore [:unused-private-var]}
+(defn- read-tasks-dir
+  "Read :tasks-dir from .mcp-tasks.edn in project-dir.
+  Returns the absolute path of :tasks-dir, or nil if the file is absent,
+  unparseable, or does not contain :tasks-dir."
+  [project-dir]
+  (let [config-path (fs/path project-dir ".mcp-tasks.edn")]
+    (when (fs/exists? config-path)
+      (try
+        (let [config (safe-read-string (slurp (str config-path)))
+              tasks-dir (:tasks-dir config)]
+          (when tasks-dir
+            (str (fs/absolutize (fs/path project-dir tasks-dir)))))
+        (catch Exception _
+          nil)))))
 
 (defn- find-main-git-checkout
   "When project-dir has .mcp-tasks.edn but no .git, scan immediate
@@ -104,16 +130,6 @@
      conj
      {:opts opts :timestamp (java.time.Instant/now) :response response})
     response))
-
-(defn- safe-read-string
-  "Read a string as Clojure data with *read-eval* disabled.
-  Uses clojure.core/read-string to support ::keyword syntax which
-  clojure.edn/read-string does not handle.
-  Repairs :::keyword tokens (triple-colon) from mcp-tasks CLI meta keys
-  by reducing them to :keyword before reading."
-  [s]
-  (binding [*read-eval* false]
-    (read-string (str/replace s #":::(\w)" ":$1"))))
 
 (defn run-cli
   "Execute mcp-tasks CLI with args in the given project directory.
