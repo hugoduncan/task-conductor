@@ -122,7 +122,7 @@ or nil if STR is incomplete."
 
 (defun task-conductor-nrepl--accumulate (conn id response)
   "Accumulate RESPONSE chunk for message ID on CONN.
-Concatenates `out' and `err' values, keeps latest `value'.
+Concatenates `out' and `err' values, keeps latest for other keys.
 Returns the accumulated response when status contains `done',
 otherwise returns nil."
   (let* ((acc-table (plist-get conn :accumulator))
@@ -130,9 +130,8 @@ otherwise returns nil."
                   (puthash id '() acc-table)))
          (out (task-conductor-nrepl-dict-get response "out"))
          (err (task-conductor-nrepl-dict-get response "err"))
-         (value (task-conductor-nrepl-dict-get response "value"))
-         (ex (task-conductor-nrepl-dict-get response "ex"))
          (status (task-conductor-nrepl-dict-get response "status")))
+    ;; Concatenate streaming keys
     (when out
       (let ((prev (or (task-conductor-nrepl-dict-get acc "out") "")))
         (setq acc (cons (cons "out" (concat prev out))
@@ -141,12 +140,12 @@ otherwise returns nil."
       (let ((prev (or (task-conductor-nrepl-dict-get acc "err") "")))
         (setq acc (cons (cons "err" (concat prev err))
                         (cl-remove-if (lambda (p) (equal (car p) "err")) acc)))))
-    (when value
-      (setq acc (cons (cons "value" value)
-                      (cl-remove-if (lambda (p) (equal (car p) "value")) acc))))
-    (when ex
-      (setq acc (cons (cons "ex" ex)
-                      (cl-remove-if (lambda (p) (equal (car p) "ex")) acc))))
+    ;; Preserve all other keys (value, ex, new-session, etc.)
+    (dolist (pair response)
+      (let ((key (car pair)))
+        (unless (member key '("out" "err" "status" "id"))
+          (setq acc (cons pair
+                          (cl-remove-if (lambda (p) (equal (car p) key)) acc))))))
     (puthash id acc acc-table)
     (when (and status (member "done" status))
       (remhash id acc-table)
