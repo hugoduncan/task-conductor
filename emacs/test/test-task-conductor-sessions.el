@@ -109,6 +109,16 @@
   (should (string= "🔀" (task-conductor-sessions--state-icon :wait-pr-merge)))
   (should (string= "🔀" (task-conductor-sessions--state-icon "wait-pr-merge"))))
 
+(ert-deftest task-conductor-sessions-state-icon-autonomous ()
+  ;; Autonomous working states show appropriate icons.
+  (should (string= "⚙" (task-conductor-sessions--state-icon :has-tasks)))
+  (should (string= "⚙" (task-conductor-sessions--state-icon "has-tasks")))
+  (should (string= "📋" (task-conductor-sessions--state-icon :unrefined)))
+  (should (string= "📋" (task-conductor-sessions--state-icon :refined)))
+  (should (string= "✅" (task-conductor-sessions--state-icon :done)))
+  (should (string= "✅" (task-conductor-sessions--state-icon :awaiting-pr)))
+  (should (string= "🔀" (task-conductor-sessions--state-icon :merging-pr))))
+
 (ert-deftest task-conductor-sessions-state-icon-unknown ()
   ;; Unknown state shows question mark.
   (should (string= "?" (task-conductor-sessions--state-icon :other))))
@@ -179,6 +189,7 @@
   (let ((result (task-conductor-sessions--partition-by-state nil)))
     (should (null (plist-get result :needs-attention)))
     (should (null (plist-get result :running)))
+    (should (null (plist-get result :working)))
     (should (null (plist-get result :wait-pr-merge)))))
 
 (ert-deftest task-conductor-sessions-partition-mixed ()
@@ -229,14 +240,58 @@
     (should (= 1 (length (plist-get result :running))))
     (should (= 0 (length (plist-get result :wait-pr-merge))))))
 
+(ert-deftest task-conductor-sessions-partition-autonomous-states ()
+  ;; Autonomous states go to :working group.
+  (let* ((sessions (list
+                    (list :session-id "s1" :state :has-tasks
+                          :task-id 201 :task-title "Task A"
+                          :entered-state-at nil)
+                    (list :session-id "s2" :state :unrefined
+                          :task-id 202 :task-title "Task B"
+                          :entered-state-at nil)
+                    (list :session-id "s3" :state :done
+                          :task-id 203 :task-title "Task C"
+                          :entered-state-at nil)))
+         (result (task-conductor-sessions--partition-by-state sessions)))
+    (should (= 3 (length (plist-get result :working))))
+    (should (= 0 (length (plist-get result :needs-attention))))))
+
+(ert-deftest task-conductor-sessions-partition-finished-excluded ()
+  ;; :complete and :terminated sessions are excluded from all groups.
+  (let* ((sessions (list
+                    (list :session-id "s1" :state :complete
+                          :task-id 301 :task-title "Done"
+                          :entered-state-at nil)
+                    (list :session-id "s2" :state :terminated
+                          :task-id 302 :task-title "Stopped"
+                          :entered-state-at nil)))
+         (result (task-conductor-sessions--partition-by-state sessions)))
+    (should (= 0 (length (plist-get result :needs-attention))))
+    (should (= 0 (length (plist-get result :running))))
+    (should (= 0 (length (plist-get result :working))))
+    (should (= 0 (length (plist-get result :wait-pr-merge))))))
+
+(ert-deftest task-conductor-sessions-partition-nil-state-excluded ()
+  ;; Sessions with nil state (removed from engine) are excluded from all groups.
+  (let* ((sessions (list
+                    (list :session-id "s1" :state nil
+                          :task-id 401 :task-title "Gone"
+                          :entered-state-at nil)))
+         (result (task-conductor-sessions--partition-by-state sessions)))
+    (should (= 0 (length (plist-get result :needs-attention))))
+    (should (= 0 (length (plist-get result :running))))
+    (should (= 0 (length (plist-get result :working))))
+    (should (= 0 (length (plist-get result :wait-pr-merge))))))
+
 ;;; Section Rendering
 
 (ert-deftest task-conductor-sessions-render-empty ()
-  ;; Rendering empty list produces buffer with three group headings (no Idle group).
+  ;; Rendering empty list produces buffer with four group headings (no Idle group).
   (with-sessions-buffer
     (task-conductor-sessions--render nil)
     (should (string-match-p "Needs Attention (0)" (buffer-string)))
     (should (string-match-p "Running (0)" (buffer-string)))
+    (should (string-match-p "Working (0)" (buffer-string)))
     (should (string-match-p "PR Waiting (0)" (buffer-string)))
     (should-not (string-match-p "Idle" (buffer-string)))
     (should (string-match-p "(none)" (buffer-string)))))
@@ -276,6 +331,19 @@
       (should (string-match-p "Running (1)" content))
       (should (string-match-p "🔄" content))
       (should (string-match-p "Add tests" content)))))
+
+(ert-deftest task-conductor-sessions-render-working ()
+  ;; Autonomous state sessions appear in Working group.
+  (with-sessions-buffer
+    (let ((sessions (list
+                     (list :session-id "s1" :state :has-tasks
+                           :task-id 201 :task-title "Run tasks"
+                           :entered-state-at nil))))
+      (task-conductor-sessions--render sessions)
+      (let ((content (buffer-string)))
+        (should (string-match-p "Working (1)" content))
+        (should (string-match-p "Run tasks" content))
+        (should (string-match-p "⚙" content))))))
 
 (ert-deftest task-conductor-sessions-render-root-section-exists ()
   ;; After render, magit-root-section is set.

@@ -68,14 +68,46 @@
 
 ;;; Execute Mutation
 
+(defn- effective-project-dir
+  "Return project-dir if it exists, otherwise fall back to root-project-dir.
+   Worktrees may be removed after PR merge, so task queries need a
+   directory that still exists."
+  [project-dir root-project-dir]
+  (if (and project-dir (fs/exists? project-dir))
+    project-dir
+    root-project-dir))
+
+(defn- prefix-task-keys
+  "Add :task/ namespace prefix to map keys."
+  [m]
+  (into {} (map (fn [[k v]] [(keyword "task" (name k)) v])) m))
+
+(defn- fetch-closed-task
+  "Fetch a closed/archived task via list-tasks CLI fallback.
+   show-task only searches tasks.ednl; closed tasks are archived to
+   complete.ednl and only discoverable via list with status filter."
+  [project-dir task-id]
+  (let [result (mcp-tasks/list-tasks {:project-dir project-dir
+                                      :task-id task-id
+                                      :status :closed})]
+    (when-let [task (first (:tasks result))]
+      (merge {:task/pr-num nil :task/code-reviewed nil :task/error nil}
+             (prefix-task-keys task)))))
+
 (defn- fetch-task
   "Fetch task data via EQL query.
    Returns task map with :task/type, :task/status, :task/title, etc.
-   On error, the result contains :task/error from the resolver."
+   On error, the result contains :task/error from the resolver.
+   Falls back to searching closed/archived tasks when show-task
+   can't find the task (e.g. after completion and worktree removal)."
   [project-dir task-id]
-  (graph/query {:task/id task-id :task/project-dir project-dir}
-               [:task/type :task/status :task/meta :task/pr-num
-                :task/code-reviewed :task/error :task/title]))
+  (let [result (graph/query {:task/id task-id :task/project-dir project-dir}
+                            [:task/type :task/status :task/meta :task/pr-num
+                             :task/code-reviewed :task/error :task/title])]
+    (if (:task/error result)
+      (or (fetch-closed-task project-dir task-id)
+          result)
+      result)))
 
 (defn- fetch-children
   "Fetch children for a story via EQL query.
@@ -216,16 +248,13 @@
    For most states: new-state == pre-skill-state
    For :has-tasks: state unchanged AND completed children count unchanged.
    Tracks completed count (monotonically increasing) rather than open count,
-   because new tasks can be created during execution, masking progress.
-   :complete is never no-progress — it means the story is closed."
+   because new tasks can be created during execution, masking progress."
   [pre-skill-state new-state pre-completed-children new-completed-children]
-  (if (= :complete new-state)
-    false
-    (let [was-has-tasks (= :has-tasks pre-skill-state)
-          is-has-tasks (= :has-tasks new-state)]
-      (if (and was-has-tasks is-has-tasks)
-        (= pre-completed-children new-completed-children)
-        (= pre-skill-state new-state)))))
+  (let [was-has-tasks (= :has-tasks pre-skill-state)
+        is-has-tasks (= :has-tasks new-state)]
+    (if (and was-has-tasks is-has-tasks)
+      (= pre-completed-children new-completed-children)
+      (= pre-skill-state new-state))))
 
 (defn- skill-failed?
   "Return true when the CLI result indicates the skill did not succeed.
@@ -244,9 +273,10 @@
   [session-id result]
   (try
     (let [data (sc/get-data session-id)
-          {:keys [project-dir task-id task-type
+          {:keys [project-dir root-project-dir task-id task-type
                   pre-skill-state pre-skill-completed-children
-                  on-complete]} data]
+                  on-complete]} data
+          dir (effective-project-dir project-dir root-project-dir)]
       (cond
         (skill-failed? result)
         (sc/send! session-id :error)
@@ -258,17 +288,17 @@
         (sc/send! session-id on-complete)
 
         :else
-        (let [task (fetch-task project-dir task-id)
+        (let [task (fetch-task dir task-id)
               children (when (= :story task-type)
-                         (fetch-children project-dir task-id))
-              children-maps (mapv #(task->execute-map % project-dir)
+                         (fetch-children dir task-id))
+              children-maps (mapv #(task->execute-map % dir)
                                   children)
               new-state (if (= :story task-type)
                           (execute/derive-story-state
-                           (task->execute-map task project-dir)
+                           (task->execute-map task dir)
                            children-maps)
                           (execute/derive-task-state
-                           (task->execute-map task project-dir)))
+                           (task->execute-map task dir)))
               new-completed-children (when (= :story task-type)
                                        (execute/count-completed-children
                                         children-maps))]
@@ -342,16 +372,18 @@
   [session-id _context]
   (try
     (let [data (sc/get-data session-id)
-          {:keys [project-dir task-id task-type]} data
-          task (fetch-task project-dir task-id)
+          {:keys [project-dir root-project-dir task-id task-type]} data
+          dir (effective-project-dir project-dir root-project-dir)
+          task (fetch-task dir task-id)
           children (when (= :story task-type)
-                     (fetch-children project-dir task-id))
+                     (fetch-children dir task-id))
           new-state (if (= :story task-type)
                       (execute/derive-story-state
-                       (task->execute-map task)
-                       (mapv task->execute-map children))
+                       (task->execute-map task dir)
+                       (mapv #(task->execute-map % dir)
+                             children))
                       (execute/derive-task-state
-                       (task->execute-map task)))]
+                       (task->execute-map task dir)))]
       (sc/send! session-id new-state))
     (catch clojure.lang.ExceptionInfo e
       (when-not (= :session-not-found (:error (ex-data e)))
@@ -364,20 +396,21 @@
    actions run before the sessions atom is updated."
   [session-id]
   (let [data (sc/get-data session-id)
-        {:keys [project-dir task-id task-type]} data
-        task (fetch-task project-dir task-id)
+        {:keys [project-dir root-project-dir task-id task-type]} data
+        dir (effective-project-dir project-dir root-project-dir)
+        task (fetch-task dir task-id)
         children (when (= :story task-type)
-                   (fetch-children project-dir task-id))
-        children-maps (mapv #(task->execute-map % project-dir)
+                   (fetch-children dir task-id))
+        children-maps (mapv #(task->execute-map % dir)
                             children)
         ;; Derive current state from task data
         ;; (matches how on-skill-complete works)
         current-derived-state (if (= :story task-type)
                                 (execute/derive-story-state
-                                 (task->execute-map task project-dir)
+                                 (task->execute-map task dir)
                                  children-maps)
                                 (execute/derive-task-state
-                                 (task->execute-map task project-dir)))
+                                 (task->execute-map task dir)))
         completed-children-count
         (when (= :story task-type)
           (execute/count-completed-children children-maps))]
@@ -406,13 +439,14 @@
   (let [_ (sc/update-data! session-id #(assoc % :on-complete on-complete))
         _ (store-pre-skill-state! session-id)
         data (sc/get-data session-id)
-        {:keys [project-dir task-id]} data
+        {:keys [project-dir root-project-dir task-id]} data
+        dir (effective-project-dir project-dir root-project-dir)
         resolved-args (when args
                         (str/replace
                          args "{task-id}" (str task-id)))
         prompt (cond-> (str "/" skill)
                  resolved-args (str " " resolved-args))
-        handle (claude-cli/invoke {:prompt prompt :dir project-dir})
+        handle (claude-cli/invoke {:prompt prompt :dir dir})
         ;; Use bound-fn to convey dynamic bindings to virtual thread
         ;; (needed for nullable testing infrastructure)
         completion-fn (bound-fn []
@@ -473,7 +507,8 @@
                          :dev-env-id dev-env-id
                          :has-hooks (boolean cli-hooks)
                          :has-claude-session (boolean last-claude-session-id)})
-            opts (cond-> {:dir project-dir
+            dir (effective-project-dir project-dir root-project-dir)
+            opts (cond-> {:dir dir
                           :task-id task-id}
                    last-claude-session-id
                    (assoc :claude-session-id last-claude-session-id)
@@ -510,12 +545,14 @@
   {::pco/output [:manual-escalate/status :manual-escalate/error]}
   (try
     (let [data (sc/get-data session-id)
-          {:keys [project-dir task-id last-claude-session-id]} data
+          {:keys [project-dir root-project-dir task-id
+                  last-claude-session-id]} data
           selected (graph/query [:dev-env/selected])
           dev-env-id (:dev-env/id (:dev-env/selected selected))]
       (if dev-env-id
         (let [dev-env-instance (dev-env-registry/get-dev-env dev-env-id)
-              opts (cond-> {:dir project-dir
+              dir (effective-project-dir project-dir root-project-dir)
+              opts (cond-> {:dir dir
                             :task-id task-id}
                      last-claude-session-id
                      (assoc :claude-session-id last-claude-session-id))]

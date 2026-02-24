@@ -82,9 +82,9 @@
   Returns {:task {...} :metadata {...}} matching CLI output format."
   ([] (make-task-response {}))
   ([overrides]
-   {:task (merge {:type :task
+   {:task (merge {:title "Test task"
+                  :type :task
                   :status :open
-                  :title "test-task"
                   :meta nil
                   :pr-num nil
                   :code-reviewed nil}
@@ -692,6 +692,8 @@
                       inv (first invs)
                       inv-opts (:opts inv)]
                   (is (= 1 (count invs)))
-                  (is (= "/test" (:dir inv-opts)))
+                  ;; Falls back to root-project-dir when worktree
+                  ;; path doesn't exist on disk
+                  (is (= "/my/project" (:dir inv-opts)))
                   (is (= "/mcp-tasks:refine-task (MCP) 600" (:prompt inv-opts)))
                   (is (instance? java.time.Instant (:timestamp inv))))))))))))

@@ -324,6 +324,22 @@ clojure -M:dev:nrepl -m nrepl.cmdline --port 7888
 (sc/history sid)
 ```
 
+#### Debugging Running Sessions
+
+```clojure
+;; Find session for a specific story/task
+(filter #(= TASK-ID (:task-id %)) (sc/all-session-summaries))
+
+;; Check active skill threads (are skills actually running?)
+(let [v @(ns-resolve 'task-conductor.project.resolvers 'active-skill-threads)]
+  (mapv #(hash-map :alive (.isAlive %)) (vec @v)))
+```
+
+Check OS-level claude processes: `ps aux | grep "claude.*TASK-ID"`
+
+A skill thread alive for 15+ hours is likely stuck — kill the claude
+process and the statechart will transition to `:escalated` via `:error`.
+
 ## Git Hooks
 
 Pre-commit hook runs cljfmt and clj-kondo on staged files. Configure with:

@@ -24,7 +24,8 @@
    - :done        - executed, awaiting code review
    - :awaiting-pr - reviewed, needs PR creation
    - :wait-pr-merge - PR created, awaiting merge
-   - :complete    - task closed
+   - :complete    - PR merged, ready to close
+   - :terminated  - task closed on mcp-tasks
 
    Task map should contain:
    - :status        - :open, :closed, :in-progress, :blocked, :done
@@ -35,7 +36,7 @@
   [task]
   (cond
     (= :closed (:status task))
-    :complete
+    :terminated
 
     (and (:pr-num task) (:pr-merged? task))
     :complete
@@ -94,7 +95,8 @@
    - :done          - all children complete, awaiting code review
    - :awaiting-pr   - reviewed, needs PR creation
    - :wait-pr-merge - PR created, awaiting merge
-   - :complete      - story closed
+   - :complete      - PR merged, ready to close
+   - :terminated    - story closed on mcp-tasks
 
    Story map should contain:
    - :status        - :open, :closed, :in-progress, :blocked
@@ -108,7 +110,7 @@
   [story children]
   (cond
     (= :closed (:status story))
-    :complete
+    :terminated
 
     (and (:pr-num story) (:pr-merged? story))
     :complete
@@ -369,20 +371,18 @@
                          all-derived-task-states))
 
     ;; Complete - close task on mcp-tasks.
-    ;; Re-derivation after /complete-story returns :complete when
-    ;; the task is closed, so transition to :terminated on that.
+    ;; Re-derivation returns :terminated when task is closed,
+    ;; :complete when still open (no-progress → escalate).
                  (apply sc/state {:id :complete}
                         (sc/on-entry {}
                                      (sc/action complete-story-action))
-                        (sc/transition
-                         {:event :complete :target :terminated})
                         (sc/transition
                          {:event :terminated :target :terminated})
                         (sc/transition {:event :error :target :escalated})
                         (sc/transition
                          {:event :no-progress :target :escalated})
                         (re-derive-transitions
-                         :complete [:complete :terminated :error :no-progress]
+                         :complete [:terminated :error :no-progress]
                          all-derived-task-states))
 
                  (sc/final {:id :terminated})
@@ -525,20 +525,18 @@
                          all-derived-story-states))
 
     ;; Complete - close story on mcp-tasks.
-    ;; Re-derivation after /complete-story returns :complete when
-    ;; the story is closed, so transition to :terminated on that.
+    ;; Re-derivation returns :terminated when story is closed,
+    ;; :complete when still open (no-progress → escalate).
                  (apply sc/state {:id :complete}
                         (sc/on-entry {}
                                      (sc/action complete-story-action))
-                        (sc/transition
-                         {:event :complete :target :terminated})
                         (sc/transition
                          {:event :terminated :target :terminated})
                         (sc/transition {:event :error :target :escalated})
                         (sc/transition
                          {:event :no-progress :target :escalated})
                         (re-derive-transitions
-                         :complete [:complete :terminated :error :no-progress]
+                         :complete [:terminated :error :no-progress]
                          all-derived-story-states))
 
                  (sc/final {:id :terminated})

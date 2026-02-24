@@ -89,6 +89,19 @@ Returns a string like \"3m ago\", \"1h ago\", \"2d ago\"."
   "Return non-nil if STATE represents the :wait-pr-merge session state."
   (or (eq state :wait-pr-merge) (equal state "wait-pr-merge")))
 
+(defun task-conductor-sessions--autonomous-state-p (state)
+  "Return non-nil if STATE is an autonomous working state."
+  (member state '(:unrefined "unrefined"
+                  :refined "refined"
+                  :has-tasks "has-tasks"
+                  :done "done"
+                  :awaiting-pr "awaiting-pr"
+                  :merging-pr "merging-pr")))
+
+(defun task-conductor-sessions--finished-state-p (state)
+  "Return non-nil if STATE is a finished state that should be excluded."
+  (member state '(:complete "complete" :terminated "terminated")))
+
 (defun task-conductor-sessions--state-icon (state &optional sub-state)
   "Return icon string for session STATE keyword.
 When STATE is escalated, SUB-STATE distinguishes idle from running."
@@ -99,6 +112,10 @@ When STATE is escalated, SUB-STATE distinguishes idle from running."
        (_ "🔔")))
     ((or :idle "idle") "⏸")
     ((or :wait-pr-merge "wait-pr-merge") "🔀")
+    ((or :has-tasks "has-tasks") "⚙")
+    ((or :unrefined "unrefined" :refined "refined") "📋")
+    ((or :done "done" :awaiting-pr "awaiting-pr") "✅")
+    ((or :merging-pr "merging-pr") "🔀")
     (_ "?")))
 
 (defun task-conductor-sessions--format-session-heading (session)
@@ -134,11 +151,12 @@ Shows project name prefix and PR info for :wait-pr-merge sessions."
 
 (defun task-conductor-sessions--partition-by-state (sessions)
   "Partition SESSIONS into groups by state.
-Returns a plist with keys :needs-attention :running :wait-pr-merge.
-Non-escalated :idle sessions are excluded from all groups.
+Returns a plist with keys :needs-attention :running :working :wait-pr-merge.
+Non-escalated :idle sessions and finished sessions are excluded.
 Escalated sessions are split by :sub-state — :session-running goes to
-:running, everything else (including nil) to :needs-attention."
-  (let (needs-attention running wait-pr-merge)
+:running, everything else (including nil) to :needs-attention.
+Autonomous states (:has-tasks, :unrefined, etc.) go to :working."
+  (let (needs-attention running working wait-pr-merge)
     (dolist (s sessions)
       (let ((state (plist-get s :state)))
         (cond
@@ -149,13 +167,19 @@ Escalated sessions are split by :sub-state — :session-running goes to
             (push s needs-attention)))
          ((or (eq state :idle) (equal state "idle"))
           nil)
+         ((or (null state)
+              (task-conductor-sessions--finished-state-p state))
+          nil)
          ((task-conductor-sessions--wait-pr-merge-p state)
           (push s wait-pr-merge))
+         ((task-conductor-sessions--autonomous-state-p state)
+          (push s working))
          (t
           (message "task-conductor-sessions: unknown state %S in session %S"
                    state (plist-get s :session-id))))))
     (list :needs-attention (nreverse needs-attention)
           :running (nreverse running)
+          :working (nreverse working)
           :wait-pr-merge (nreverse wait-pr-merge))))
 
 (defun task-conductor-sessions--insert-session-entry (session)
@@ -176,16 +200,23 @@ Escalated sessions are split by :sub-state — :session-running goes to
 (defun task-conductor-sessions--render (sessions)
   "Render SESSIONS into the current buffer.
 SESSIONS is a list of plists with :session-id, :state, :task-id,
-:task-title, :entered-state-at, :pr-num, :branch."
+:task-title, :entered-state-at, :pr-num, :branch.
+Preserves point position by restoring to the same magit section."
   (let ((inhibit-read-only t)
+        (saved-section-ident (when-let ((s (magit-current-section)))
+                               (magit-section-ident s)))
         (parts (task-conductor-sessions--partition-by-state sessions)))
     (erase-buffer)
     (magit-insert-section (task-conductor-sessions-root)
       (magit-insert-heading "Claude Sessions\n")
       (task-conductor-sessions--insert-group "Needs Attention" (plist-get parts :needs-attention))
       (task-conductor-sessions--insert-group "Running" (plist-get parts :running))
-      (task-conductor-sessions--insert-group "PR Waiting" (plist-get parts :wait-pr-merge))))
-  (goto-char (point-min)))
+      (task-conductor-sessions--insert-group "Working" (plist-get parts :working))
+      (task-conductor-sessions--insert-group "PR Waiting" (plist-get parts :wait-pr-merge)))
+    (if saved-section-ident
+        (when-let ((s (magit-get-section saved-section-ident)))
+          (goto-char (oref s start)))
+      (goto-char (point-min)))))
 
 ;;; Actions
 
