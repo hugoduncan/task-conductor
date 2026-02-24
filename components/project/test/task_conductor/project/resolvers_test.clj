@@ -1471,8 +1471,8 @@
                 (callback {:session-id session-id
                            :timestamp (java.time.Instant/now)
                            :reason :user-exit})
-                ;; Re-derived state is :complete (task closed)
-                (is (= #{:complete} (sc/current-state session-id)))))))))
+                ;; Re-derived state is :terminated (task closed)
+                (is (= #{} (sc/current-state session-id)))))))))
 
     (testing "does not include activity tracking hooks"
       (with-execute-state

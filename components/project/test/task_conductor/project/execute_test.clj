@@ -13,16 +13,15 @@
 
 (deftest derive-task-state-test
   (testing "derive-task-state"
-    (testing "returns :complete"
-      (testing "when status is :closed"
-        (is (= :complete
-               (execute/derive-task-state {:status :closed}))))
+    (testing "returns :terminated when status is :closed"
+      (is (= :terminated
+             (execute/derive-task-state {:status :closed}))))
 
-      (testing "when PR is merged"
-        (is (= :complete
-               (execute/derive-task-state {:status :open
-                                           :pr-num 123
-                                           :pr-merged? true})))))
+    (testing "returns :complete when PR is merged"
+      (is (= :complete
+             (execute/derive-task-state {:status :open
+                                         :pr-num 123
+                                         :pr-merged? true}))))
 
     (testing "returns :wait-pr-merge"
       (testing "when PR exists but not merged"
@@ -80,17 +79,16 @@
 
 (deftest derive-story-state-test
   (testing "derive-story-state"
-    (testing "returns :complete"
-      (testing "when status is :closed"
-        (is (= :complete
-               (execute/derive-story-state {:status :closed} []))))
+    (testing "returns :terminated when status is :closed"
+      (is (= :terminated
+             (execute/derive-story-state {:status :closed} []))))
 
-      (testing "when PR is merged"
-        (is (= :complete
-               (execute/derive-story-state {:status :open
-                                            :pr-num 456
-                                            :pr-merged? true}
-                                           [{:status :closed}])))))
+    (testing "returns :complete when PR is merged"
+      (is (= :complete
+             (execute/derive-story-state {:status :open
+                                          :pr-num 456
+                                          :pr-merged? true}
+                                         [{:status :closed}]))))
 
     (testing "returns :wait-pr-merge"
       (testing "when PR exists but not merged"

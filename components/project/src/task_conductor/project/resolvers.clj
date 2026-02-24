@@ -248,16 +248,13 @@
    For most states: new-state == pre-skill-state
    For :has-tasks: state unchanged AND completed children count unchanged.
    Tracks completed count (monotonically increasing) rather than open count,
-   because new tasks can be created during execution, masking progress.
-   :complete is never no-progress — it means the story is closed."
+   because new tasks can be created during execution, masking progress."
   [pre-skill-state new-state pre-completed-children new-completed-children]
-  (if (= :complete new-state)
-    false
-    (let [was-has-tasks (= :has-tasks pre-skill-state)
-          is-has-tasks (= :has-tasks new-state)]
-      (if (and was-has-tasks is-has-tasks)
-        (= pre-completed-children new-completed-children)
-        (= pre-skill-state new-state)))))
+  (let [was-has-tasks (= :has-tasks pre-skill-state)
+        is-has-tasks (= :has-tasks new-state)]
+    (if (and was-has-tasks is-has-tasks)
+      (= pre-completed-children new-completed-children)
+      (= pre-skill-state new-state))))
 
 (defn- skill-failed?
   "Return true when the CLI result indicates the skill did not succeed.
