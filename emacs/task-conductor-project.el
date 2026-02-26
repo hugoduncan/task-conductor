@@ -251,10 +251,10 @@ Returns nil for unrecognized or nil states."
 
 (defun task-conductor-project--format-task-entry (task &optional project-path)
   "Format TASK plist as a single display line.
-Returns a string like `    ▶ [T][ ] #42 Some title'.
+Returns a string like `    ⏹ ▶ [T][ ] #42 Some title' for running sessions.
 Icons appear at the start of the line after the indent.
 When a session matches TASK's id, prepends an execution status icon.
-For running, escalated, session-idle, or session-running sessions, also prepends a clickable ⏹ stop icon.
+For running, escalated, session-idle, or session-running sessions, also prepends a clickable ⏹ stop icon before the execution state icon.
 When no session is active, prepends a clickable ▶ play icon instead."
   (let* ((task-id (plist-get task :id))
          (indent "    ")
@@ -271,12 +271,12 @@ When no session is active, prepends a clickable ▶ play icon instead."
      ((and state-icon (memq state '(:running :escalated :session-idle :session-running
                                     :unrefined :refined :has-tasks :merging-pr)))
       (concat indent
-              (propertize state-icon 'task-conductor-task-id task-id)
-              " "
               (propertize "⏹"
                           'task-conductor-task-id task-id
                           'mouse-face 'highlight
                           'keymap task-conductor-project--stop-icon-map)
+              " "
+              (propertize state-icon 'task-conductor-task-id task-id)
               " " base))
      (state-icon
       (concat indent (propertize state-icon 'task-conductor-task-id task-id) " " base))
