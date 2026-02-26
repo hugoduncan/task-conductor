@@ -420,6 +420,18 @@
       (should (get-text-property icon-pos 'mouse-face result))
       (should (get-text-property icon-pos 'keymap result)))))
 
+(ert-deftest task-conductor-project-format-task-entry-stop-before-state-icon ()
+  ;; Stop icon appears before execution state icon for a running session.
+  (let* ((session (list :session-id "s1" :task-id 42 :state :running))
+         (task-conductor-dev-env--cached-sessions (list session))
+         (task (list :id 42 :title "Do thing" :type "task" :status "open"))
+         (result (task-conductor-project--format-task-entry task))
+         (stop-pos (string-match "⏹" result))
+         (state-pos (string-match "▶" result)))
+    (should stop-pos)
+    (should state-pos)
+    (should (< stop-pos state-pos))))
+
 ;;; insert-task-children tests (cache-only)
 
 (ert-deftest task-conductor-project-insert-task-children-cache-hit ()
